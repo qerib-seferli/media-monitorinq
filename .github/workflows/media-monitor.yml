@@ -1,0 +1,23 @@
+name: Media Monitorinq Worker
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run monitor worker
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          test -n "$MONITOR_SECRET" || (echo "MONITOR_SECRET GitHub Secret əlavə edilməyib" && exit 1)
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-monitor-secret: $MONITOR_SECRET" \
+            -d '{"mode":"scheduled"}' \
+            "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"

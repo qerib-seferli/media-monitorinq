@@ -1,1 +1,31 @@
+name: Deploy Supabase Functions
 
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Configure function secrets
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          supabase secrets set --project-ref xsmahlsqdszxqordgcvt MONITOR_SECRET="$MONITOR_SECRET"
+          if [ -n "$YOUTUBE_API_KEY" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt YOUTUBE_API_KEY="$YOUTUBE_API_KEY"; fi
+          if [ -n "$GEMINI_API_KEY" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt GEMINI_API_KEY="$GEMINI_API_KEY"; fi
+      - name: Deploy functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy admin-users --project-ref xsmahlsqdszxqordgcvt
+          supabase functions deploy ingest-mention --project-ref xsmahlsqdszxqordgcvt --no-verify-jwt
+          supabase functions deploy monitor-worker --project-ref xsmahlsqdszxqordgcvt
