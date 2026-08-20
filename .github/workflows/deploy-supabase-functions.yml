@@ -2,6 +2,13 @@ name: Deploy Supabase Functions
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'supabase/functions/**'
+      - '.github/workflows/deploy-supabase-functions.yml'
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
@@ -9,23 +16,37 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Check deploy token
+        id: preflight
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Supabase deploy token hələ təyin edilməyib; workflow uğursuz sayılmadan dayandırılır."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: supabase/setup-cli@v1
+        if: steps.preflight.outputs.ready == 'true'
         with:
           version: latest
       - name: Configure function secrets
+        if: steps.preflight.outputs.ready == 'true'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          supabase secrets set --project-ref xsmahlsqdszxqordgcvt MONITOR_SECRET="$MONITOR_SECRET"
+          if [ -n "$MONITOR_SECRET" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt MONITOR_SECRET="$MONITOR_SECRET"; fi
           if [ -n "$YOUTUBE_API_KEY" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt YOUTUBE_API_KEY="$YOUTUBE_API_KEY"; fi
           if [ -n "$GEMINI_API_KEY" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt GEMINI_API_KEY="$GEMINI_API_KEY"; fi
       - name: Deploy functions
+        if: steps.preflight.outputs.ready == 'true'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase functions deploy admin-users --project-ref xsmahlsqdszxqordgcvt
           supabase functions deploy ingest-mention --project-ref xsmahlsqdszxqordgcvt --no-verify-jwt
-          supabase functions deploy monitor-worker --project-ref xsmahlsqdszxqordgcvt
+          supabase functions deploy monitor-worker --project-ref xsmahlsqdszxqordgcvt --no-verify-jwt
