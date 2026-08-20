@@ -115,14 +115,14 @@ function renderOrgs() {
       <td>${statusBadge(o.service_status)}</td>
       <td>${money(o.monthly_price)}</td>
       <td>${o.next_payment_at ? fmtDate(o.next_payment_at) : '—'}</td>
-      <td><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Aktivləşdir' : 'Dayandır'}</button></td>
+      <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Aktivləşdir' : 'Dayandır'}</button></div></td>
     </tr>`).join('') || '<tr><td colspan="6" class="empty">Təşkilat yoxdur.</td></tr>';
 
   mobile.innerHTML = orgs.map(o => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
       <div class="record-grid"><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div><div><span>Aylıq</span><b>${money(o.monthly_price)}</b></div><div><span>Növbəti ödəniş</span><b>${o.next_payment_at ? fmtDate(o.next_payment_at) : '—'}</b></div></div>
-      <div class="record-actions"><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></div>
+      <div class="record-actions two"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></div>
     </article>`).join('') || '<div class="empty">Təşkilat yoxdur.</div>';
 }
 
@@ -186,7 +186,7 @@ function renderBilling() {
   const el = document.querySelector('#billing-list');
   if (!el) return;
   el.innerHTML = orgs.map(o => `
-    <article class="billing-card"><div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div><div class="billing-amount">${money(o.monthly_price)}</div><div class="record-grid"><div><span>Növbəti ödəniş</span><b>${o.next_payment_at ? fmtDate(o.next_payment_at) : 'Təyin edilməyib'}</b></div><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div></div><button class="btn ${o.service_status === 'suspended' ? '' : 'secondary'}" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></article>`).join('') || '<div class="empty">Abunə qeydi yoxdur.</div>';
+    <article class="billing-card"><div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div><div class="billing-amount">${money(o.monthly_price)}</div><div class="record-grid"><div><span>Növbəti ödəniş</span><b>${o.next_payment_at ? fmtDate(o.next_payment_at) : 'Təyin edilməyib'}</b></div><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div></div><div class="record-actions two"><button class="btn ghost" data-org-edit="${o.id}">Məlumatları redaktə et</button><button class="btn ${o.service_status === 'suspended' ? '' : 'secondary'}" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></div></article>`).join('') || '<div class="empty">Abunə qeydi yoxdur.</div>';
 }
 
 function renderAudit() {
@@ -197,6 +197,7 @@ function renderAudit() {
 
 function bindDynamicActions() {
   document.querySelectorAll('[data-org-toggle]').forEach(b => b.onclick = () => toggleOrg(b.dataset.orgToggle));
+  document.querySelectorAll('[data-org-edit]').forEach(b => b.onclick = () => modal('org', { organization_id:b.dataset.orgEdit }));
   document.querySelectorAll('[data-user-toggle]').forEach(b => b.onclick = () => toggleUser(b.dataset.userToggle, b.dataset.active === 'true'));
   document.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => resetPassword(b.dataset.reset));
   document.querySelectorAll('[data-modal]').forEach(b => b.onclick = () => modal(b.dataset.modal));
@@ -225,11 +226,22 @@ async function toggleUser(id, active) {
   if (!error) await refresh();
 }
 
+async function invokeBackend(name, body) {
+  const { data, error } = await supabase.functions.invoke(name, { body });
+  if (error) {
+    const raw = `${error.message || ''} ${error.context?.status || ''}`.toLowerCase();
+    if (raw.includes('404') || raw.includes('not found') || raw.includes('failed to send')) {
+      return { data:null, error:new Error(`Sistem backend modulu (${name}) hələ Supabase-də aktiv deyil. Edge Functions deploy olunmalıdır.`) };
+    }
+  }
+  return { data, error };
+}
+
 async function resetPassword(authUserId) {
   const p = prompt('Yeni müvəqqəti şifrə (ən az 8 simvol):');
   if (!p) return;
   if (p.length < 8) return toast('Şifrə ən az 8 simvol olmalıdır', 'error');
-  const { data, error } = await supabase.functions.invoke('admin-users', { body: { action:'reset_password', auth_user_id:authUserId, password:p } });
+  const { data, error } = await invokeBackend('admin-users', { action:'reset_password', auth_user_id:authUserId, password:p });
   toast(error ? error.message : (data?.message || 'Şifrə yeniləndi'), error ? 'error' : 'success');
 }
 
@@ -241,8 +253,12 @@ function positionOptionsForOrg(orgId, selected='') {
 
 function modal(type, preset={}) {
   if (type === 'org') {
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="org-form"><div class="modal-head"><div><span class="eyebrow">Yeni müştəri</span><h2>Yeni təşkilat</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" required></div><div class="field"><label>Rayon</label><select class="select" id="org-district">${districts.map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Aylıq xidmət (AZN)</label><input class="input" id="org-price" type="number" min="0" step="0.01" value="0"></div><div class="field"><label>Növbəti ödəniş</label><input class="input" id="org-next" type="date"></div><div class="field"><label>Status</label><select class="select" id="org-status"><option value="active">Aktiv</option><option value="grace">Möhlət</option><option value="suspended">Dayandırılıb</option></select></div></div><div class="modal-actions"><button class="btn">Təşkilat yarat</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
-    document.querySelector('#org-form').onsubmit = createOrg;
+    const editing = preset.organization_id ? orgs.find(o => o.id === preset.organization_id) : null;
+    const title = editing ? 'Təşkilatı redaktə et' : 'Yeni təşkilat';
+    const eyebrow = editing ? 'Müştəri məlumatları' : 'Yeni müştəri';
+    const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Təşkilat yarat';
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="org-form" data-org-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">${eyebrow}</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" value="${escapeHtml(editing?.name || '')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" value="${escapeHtml(editing?.short_name || '')}" required></div><div class="field"><label>Rayon</label><select class="select" id="org-district">${districts.map(d=>`<option value="${d.id}" ${editing?.district_id===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Aylıq xidmət (AZN)</label><input class="input" id="org-price" type="number" min="0" step="0.01" value="${Number(editing?.monthly_price || 0)}"></div><div class="field"><label>Növbəti ödəniş</label><input class="input" id="org-next" type="date" value="${editing?.next_payment_at ? String(editing.next_payment_at).slice(0,10) : ''}"></div><div class="field"><label>Xidmət statusu</label><select class="select" id="org-status"><option value="active" ${editing?.service_status==='active'?'selected':''}>Aktiv</option><option value="grace" ${editing?.service_status==='grace'?'selected':''}>Möhlət</option><option value="suspended" ${editing?.service_status==='suspended'?'selected':''}>Dayandırılıb</option><option value="archived" ${editing?.service_status==='archived'?'selected':''}>Arxiv</option></select></div></div><div class="modal-note">Aylıq qiymət, növbəti ödəniş, rayon və xidmət statusu buradan dəyişdirilir. Təşkilat dayandırıldıqda ona bağlı bütün aktiv istifadəçilərin girişinə avtomatik maneə qoyulur.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    document.querySelector('#org-form').onsubmit = saveOrg;
   } else {
     const defaultOrg = preset.organization_id || orgs.find(o => o.short_name?.toLowerCase().includes('bərdə'))?.id || orgs[0]?.id || '';
     const posOptions = positionOptionsForOrg(defaultOrg, preset.position_id || '');
@@ -258,8 +274,9 @@ function modal(type, preset={}) {
 
 function closeModal() { document.querySelector('#modal-root').innerHTML = ''; }
 
-async function createOrg(e) {
+async function saveOrg(e) {
   e.preventDefault();
+  const orgId = e.currentTarget.dataset.orgId || '';
   const row = {
     name: document.querySelector('#org-name').value.trim(),
     short_name: document.querySelector('#org-short').value.trim(),
@@ -268,8 +285,9 @@ async function createOrg(e) {
     next_payment_at: document.querySelector('#org-next').value || null,
     service_status: document.querySelector('#org-status').value
   };
-  const { error } = await supabase.from('organizations').insert(row);
-  toast(error ? error.message : 'Təşkilat yaradıldı', error ? 'error' : 'success');
+  const query = orgId ? supabase.from('organizations').update(row).eq('id', orgId) : supabase.from('organizations').insert(row);
+  const { error } = await query;
+  toast(error ? error.message : (orgId ? 'Təşkilat məlumatları yeniləndi' : 'Təşkilat yaradıldı'), error ? 'error' : 'success');
   if (!error) { closeModal(); await refresh(); location.hash = 'organizations'; route(); }
 }
 
@@ -285,7 +303,7 @@ async function createUser(e) {
     position_id:document.querySelector('#u-position').value || null,
     system_role:document.querySelector('#u-role').value
   };
-  const { data, error } = await supabase.functions.invoke('admin-users', { body });
+  const { data, error } = await invokeBackend('admin-users', body);
   const message = error ? error.message : (data?.error || data?.message || 'İstifadəçi yaradıldı');
   toast(message, error || data?.ok === false ? 'error' : 'success');
   if (!error && data?.ok !== false) { closeModal(); await refresh(); location.hash = 'users'; route(); }
@@ -354,20 +372,13 @@ async function runMonitorNow() {
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Monitorinq işləyir…';
-  const { data, error } = await supabase.functions.invoke('monitor-worker', { body:{ mode:'manual' } });
+  const { data, error } = await invokeBackend('monitor-worker', { mode:'manual' });
   btn.disabled = false;
   btn.textContent = old;
   if (error || data?.ok === false) return toast(error?.message || data?.error || 'Monitorinq işə salınmadı', 'error');
   toast(`Monitorinq tamamlandı: ${data?.new_mentions || 0} yeni nəticə`, 'success');
   const el = document.querySelector('#barda-status');
   if (el) el.insertAdjacentHTML('beforeend', `<span class="badge info">Son yoxlama: ${data?.checked_sources || 0} mənbə / ${data?.new_mentions || 0} yeni</span>`);
-}
-
-function openVugar() {
-  const org = orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
-  if (!org) return toast('Bərdə SMSİİ tapılmadı.','error');
-  const position = positions.find(p => p.name === 'İdarə rəisi' && (!p.organization_id || p.organization_id === org.id));
-  modal('user',{ first_name:'Vüqar', last_name:'Zeynalov', organization_id:org.id, position_id:position?.id || '', system_role:'organization_admin' });
 }
 
 document.querySelector('#position-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('positions').insert({name:document.querySelector('#position-name').value.trim(),organization_id:document.querySelector('#position-org').value||null}); toast(error?error.message:'Vəzifə əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
@@ -377,7 +388,6 @@ document.querySelector('#keyword-form').onsubmit = async e => { e.preventDefault
 document.querySelector('#source-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('sources').insert({organization_id:document.querySelector('#source-org').value,platform:document.querySelector('#source-platform').value.trim(),url:document.querySelector('#source-url').value.trim(),is_active:true}); toast(error?error.message:'Mənbə əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
 
 document.querySelector('#configure-barda').onclick = configureBarda;
-document.querySelector('#create-vugar').onclick = openVugar;
 document.querySelector('#run-monitor').onclick = runMonitorNow;
 
 await refresh();

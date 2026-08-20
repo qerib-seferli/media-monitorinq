@@ -27,7 +27,8 @@ Deno.serve(async (req) => {
         user_metadata: { first_name: body.first_name || '', last_name: body.last_name || '' }
       });
       if (error) throw error;
-      const { error: pError } = await admin.from('profiles').update({
+      const profileRow = {
+        auth_user_id: data.user.id,
         organization_id: body.organization_id,
         position_id: body.position_id || null,
         first_name: body.first_name || '',
@@ -35,8 +36,12 @@ Deno.serve(async (req) => {
         email: body.email,
         system_role: body.system_role || 'viewer',
         is_active: true
-      }).eq('auth_user_id', data.user.id);
-      if (pError) throw pError;
+      };
+      const { error: pError } = await admin.from('profiles').upsert(profileRow, { onConflict:'auth_user_id' });
+      if (pError) {
+        await admin.auth.admin.deleteUser(data.user.id).catch(()=>{});
+        throw pError;
+      }
       await admin.from('audit_logs').insert({actor_profile_id:profile.id,actor_email:profile.email,organization_id:body.organization_id,action:'İstifadəçi yaradıldı',entity_type:'profile',entity_id:data.user.id,details:{email:body.email,role:body.system_role}});
       return json({ ok: true, message: 'İstifadəçi hesabı yaradıldı', user_id: data.user.id });
     }
