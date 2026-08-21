@@ -16,27 +16,15 @@ Deno.serve(async (req) => {
       const authHeader = req.headers.get('Authorization') || '';
       const anon = Deno.env.get('SUPABASE_ANON_KEY')!;
       const caller = createClient(url, anon, { global:{ headers:{ Authorization:authHeader } } });
-      const authResult = await caller.auth.getUser();
-      const user = authResult?.data?.user || null;
-      if (authResult?.error) throw new Error(`Auth yoxlaması uğursuz oldu: ${safeError(authResult.error)}`);
+      const { data:{ user } } = await caller.auth.getUser();
       if (!user) throw new Error('İcazəsiz monitor sorğusu');
-
-      const profileResult = await admin
-        .from('profiles')
-        .select('system_role,is_active')
-        .eq('auth_user_id',user.id)
-        .maybeSingle();
-      if (!profileResult) throw new Error('Profil sorğusuna cavab alınmadı');
-      if (profileResult.error) throw new Error(`Profil sorğusu uğursuz oldu: ${safeError(profileResult.error)}`);
-      const profile = profileResult.data;
+      const { data:profile } = await admin.from('profiles').select('system_role,is_active').eq('auth_user_id',user.id).maybeSingle();
       if (!profile?.is_active || profile.system_role !== 'super_admin') throw new Error('Yalnız Super Admin monitorinqi manual işə sala bilər');
     }
-    const orgResult = await admin.from('organizations')
+    const { data:orgs, error } = await admin.from('organizations')
       .select('id,name,short_name,district_id,districts(name),keywords(*),sources(*)')
       .in('service_status',['active','grace']);
-    if (!orgResult) throw new Error('Təşkilat sorğusuna cavab alınmadı');
-    if (orgResult.error) throw new Error(`Təşkilatlar oxunmadı: ${safeError(orgResult.error)}`);
-    const orgs = orgResult.data || [];
+    if (error) throw error;
 
     let checked = 0, inserted = 0, failures = 0;
     const details:any[] = [];
@@ -104,20 +92,18 @@ Deno.serve(async (req) => {
 
             // Əgər bu təşkilat üçün hələ YouTube qeydi yoxdursa, ilk real işə düşmədə
             // ilk işə düşmədə son 12 ayı geri oxuyuruq. Sonrakı işlər isə yalnız yeni intervalı yoxlayır.
-            const youtubeCountResult = await admin
+            const { count: existingYoutubeCount } = await admin
               .from('mentions')
               .select('id', { count:'exact', head:true })
               .eq('organization_id', org.id)
               .eq('source_platform', 'YouTube');
-            if (!youtubeCountResult) throw new Error('YouTube say sorğusuna cavab alınmadı');
-            if (youtubeCountResult.error) throw new Error(`YouTube say sorğusu uğursuz oldu: ${safeError(youtubeCountResult.error)}`);
-            const existingYoutubeCount = Number(youtubeCountResult.count || 0);
 
             const discovery = await youtubeItems(
               org,
               keywords,
               key,
-              existingYoutubeCount ? source.last_checked_at : null
+              options.youtube_backfill ? null : (existingYoutubeCount ? source.last_checked_at : null),
+              options.youtube_backfill ? 3 : 1
             );
 
             let count = 0;
@@ -229,21 +215,9 @@ Deno.serve(async (req) => {
 
     return json({ok:true,checked_sources:checked,new_mentions:inserted,failures,details});
   } catch (e) {
-    console.error('monitor-worker-fatal', e);
-    return json({ok:false,error:safeError(e)},400);
+    return json({ok:false,error:e.message || String(e)},400);
   }
 });
-
-
-function safeError(value:unknown):string {
-  if (value instanceof Error) return value.message || value.name || 'Naməlum xəta';
-  if (typeof value === 'string') return value;
-  if (value && typeof value === 'object') {
-    const v:any = value;
-    return String(v.message || v.error_description || v.details || v.hint || v.code || 'Naməlum obyekt xətası');
-  }
-  return String(value ?? 'Naməlum xəta');
-}
 
 async function googleNewsItems(org:any, keywords:string[]):Promise<Item[]> {
   const queries = buildDiscoveryQueries(org, keywords, 5);
@@ -380,7 +354,8 @@ async function youtubeItems(
   org:any,
   keywords:string[],
   key:string,
-  lastCheckedAt:string|null
+  lastCheckedAt:string|null,
+  maxPagesPerQuery=1
 ):Promise<{items:Item[]; comments:Item[]; queries:string[]}> {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();
@@ -391,7 +366,7 @@ async function youtubeItems(
   const queries = buildDiscoveryQueries(org, keywords, 5);
 
   const lastMs = lastCheckedAt ? new Date(lastCheckedAt).getTime() : 0;
-  const backfillMs = 365 * 24 * 3600 * 1000;
+  const backfillMs = 5 * 365 * 24 * 3600 * 1000;
   const overlapMs = 2 * 3600 * 1000;
   const publishedAfter = new Date(
     lastMs && Number.isFinite(lastMs)
@@ -402,20 +377,26 @@ async function youtubeItems(
   const searchItems:any[] = [];
 
   for (const q of queries) {
-    const endpoint = new URL('https://www.googleapis.com/youtube/v3/search');
-    endpoint.searchParams.set('part','snippet');
-    endpoint.searchParams.set('type','video');
-    endpoint.searchParams.set('maxResults','25');
-    endpoint.searchParams.set('order', lastCheckedAt ? 'date' : 'relevance');
-    endpoint.searchParams.set('publishedAfter',publishedAfter);
-    endpoint.searchParams.set('q',q);
-    endpoint.searchParams.set('relevanceLanguage','az');
-    endpoint.searchParams.set('regionCode','AZ');
-    endpoint.searchParams.set('key',key);
+    let pageToken = '';
+    for (let page = 0; page < Math.max(1, Math.min(maxPagesPerQuery, 3)); page++) {
+      const endpoint = new URL('https://www.googleapis.com/youtube/v3/search');
+      endpoint.searchParams.set('part','snippet');
+      endpoint.searchParams.set('type','video');
+      endpoint.searchParams.set('maxResults','50');
+      endpoint.searchParams.set('order', lastCheckedAt ? 'date' : 'relevance');
+      endpoint.searchParams.set('publishedAfter',publishedAfter);
+      endpoint.searchParams.set('q',q);
+      endpoint.searchParams.set('relevanceLanguage','az');
+      endpoint.searchParams.set('regionCode','AZ');
+      endpoint.searchParams.set('key',key);
+      if (pageToken) endpoint.searchParams.set('pageToken', pageToken);
 
-    const data = await fetchJsonWithRetry(endpoint.toString(), {}, 2);
-    if (data?.error) throw new Error(data.error?.message || 'YouTube Search API xətası');
-    searchItems.push(...(data?.items || []));
+      const data = await fetchJsonWithRetry(endpoint.toString(), {}, 2);
+      if (data?.error) throw new Error(data.error?.message || 'YouTube Search API xətası');
+      searchItems.push(...(data?.items || []));
+      pageToken = String(data?.nextPageToken || '');
+      if (!pageToken) break;
+    }
   }
 
   const byVideoId = new Map<string,any>();
@@ -424,17 +405,20 @@ async function youtubeItems(
     if (id && !byVideoId.has(id)) byVideoId.set(id,x);
   }
 
-  const videoIds = [...byVideoId.keys()].slice(0,50);
+  const videoIds = [...byVideoId.keys()].slice(0,250);
   const detailsById = new Map<string,any>();
 
   if (videoIds.length) {
-    const endpoint = new URL('https://www.googleapis.com/youtube/v3/videos');
-    endpoint.searchParams.set('part','snippet,statistics,contentDetails');
-    endpoint.searchParams.set('id',videoIds.join(','));
-    endpoint.searchParams.set('key',key);
-    const data = await fetchJsonWithRetry(endpoint.toString(), {}, 2);
-    if (data?.error) throw new Error(data.error?.message || 'YouTube Videos API xətası');
-    for (const v of data?.items || []) detailsById.set(String(v.id),v);
+    for (let i = 0; i < videoIds.length; i += 50) {
+      const batch = videoIds.slice(i, i + 50);
+      const endpoint = new URL('https://www.googleapis.com/youtube/v3/videos');
+      endpoint.searchParams.set('part','snippet,statistics,contentDetails');
+      endpoint.searchParams.set('id',batch.join(','));
+      endpoint.searchParams.set('key',key);
+      const data = await fetchJsonWithRetry(endpoint.toString(), {}, 2);
+      if (data?.error) throw new Error(data.error?.message || 'YouTube Videos API xətası');
+      for (const v of data?.items || []) detailsById.set(String(v.id),v);
+    }
   }
 
   const items:Item[] = videoIds.map((videoId:string)=>{
@@ -741,13 +725,11 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     consecutive_misses:0
   };
 
-  const upsertResult = await admin.from('mentions')
+  const { data, error } = await admin.from('mentions')
     .upsert(row,{onConflict:'organization_id,content_hash',ignoreDuplicates:true})
     .select('id')
     .maybeSingle();
-  if (!upsertResult) throw new Error('Mention yazma sorğusuna cavab alınmadı');
-  if (upsertResult.error) throw new Error(`Mention yazılmadı: ${safeError(upsertResult.error)}`);
-  const data = upsertResult.data;
+  if (error) throw error;
   if (!data?.id) {
     await admin.from('mentions').update({
       source_status:'active',
@@ -769,21 +751,22 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   return 1;
 }
 
-type RunOptions = { debug:boolean; force_youtube:boolean; verify_existing:boolean };
+type RunOptions = { debug:boolean; force_youtube:boolean; verify_existing:boolean; youtube_backfill:boolean };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
-  if (req.method !== 'POST') return {debug:false,force_youtube:false,verify_existing:true};
+  if (req.method !== 'POST') return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false};
   try {
     const text = await req.clone().text();
-    if (!text.trim()) return {debug:false,force_youtube:false,verify_existing:true};
+    if (!text.trim()) return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false};
     const body = JSON.parse(text);
     return {
       debug:body?.debug === true,
       force_youtube:body?.force_youtube === true,
-      verify_existing:body?.verify_existing !== false
+      verify_existing:body?.verify_existing !== false,
+      youtube_backfill:body?.youtube_backfill === true || body?.force_youtube === true
     };
   } catch {
-    return {debug:false,force_youtube:false,verify_existing:true};
+    return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false};
   }
 }
 
@@ -868,17 +851,16 @@ function normalizeForMatch(value:string):string {
 }
 
 async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
-  const verifyResult = await admin.from('mentions')
+  const { data:rows, error } = await admin.from('mentions')
     .select('id,source_platform,source_url,raw_payload,source_status,last_verified_at,consecutive_misses')
     .eq('organization_id',org.id)
     .in('source_status',['active','unavailable'])
     .not('source_url','is',null)
     .order('last_verified_at',{ascending:true,nullsFirst:true})
     .limit(20);
-  if (!verifyResult) throw new Error('Mənbə yoxlama sorğusuna cavab alınmadı');
-  if (verifyResult.error) throw new Error(`Mənbə yoxlaması oxunmadı: ${safeError(verifyResult.error)}`);
+  if (error) throw error;
 
-  const candidates = verifyResult.data || [];
+  const candidates = rows || [];
   let checked = 0, active = 0, removed = 0, unavailable = 0, unchanged = 0;
   const youtubeRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()==='youtube');
   const otherRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()!=='youtube');
