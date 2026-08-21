@@ -179,7 +179,27 @@ function renderCatalogs() {
 function renderKeywords() {
   const el = document.querySelector('#keyword-list');
   if (!el) return;
-  el.innerHTML = keywords.map(x => `<div class="list-row"><div><strong>${escapeHtml(x.value)}</strong><small>${escapeHtml(x.organizations?.short_name || '')}</small></div><span class="badge info">${escapeHtml(x.kind || 'phrase')}</span></div>`).join('') || '<div class="empty compact">Açar söz yoxdur.</div>';
+  if (!keywords.length) {
+    el.innerHTML = '<div class="empty compact">Açar söz yoxdur.</div>';
+    return;
+  }
+
+  const groups = new Map();
+  for (const item of keywords) {
+    const name = item.organizations?.short_name || 'Təşkilatsız';
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(item);
+  }
+
+  el.innerHTML = [...groups.entries()].map(([name, items]) => {
+    const activeCount = items.filter(x => x.is_active !== false).length;
+    const rows = items
+      .slice()
+      .sort((a,b)=>String(a.kind||'').localeCompare(String(b.kind||''),'az') || String(a.value||'').localeCompare(String(b.value||''),'az'))
+      .map(x => `<div class="keyword-item"><span>${escapeHtml(x.value)}</span><span class="badge info">${escapeHtml(x.kind || 'phrase')}</span></div>`)
+      .join('');
+    return `<details class="keyword-group"><summary><span><strong>${escapeHtml(name)}</strong><small>${activeCount} aktiv açar söz</small></span><span class="keyword-count">${items.length}</span></summary><div class="keyword-group-body">${rows}</div></details>`;
+  }).join('');
 }
 
 function renderSources() {

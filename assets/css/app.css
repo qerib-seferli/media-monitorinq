@@ -646,3 +646,18 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .audit-table{min-width:760px}
 }
 
+
+/* Monitorinq açar sözləri: təşkilat üzrə yığcam qruplama */
+.keyword-group{border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.015);margin-top:8px;overflow:hidden}
+.keyword-group summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;user-select:none}
+.keyword-group summary::-webkit-details-marker{display:none}
+.keyword-group summary>span:first-child{min-width:0}
+.keyword-group summary strong{display:block;font-size:12px}
+.keyword-group summary small{display:block;margin-top:3px;color:var(--muted);font-size:10px}
+.keyword-count{min-width:30px;height:26px;padding:0 9px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--soft);color:var(--accent);font-size:10px;font-weight:800}
+.keyword-group[open] summary{border-bottom:1px solid var(--line)}
+.keyword-group-body{max-height:330px;overflow:auto;padding:4px 12px 10px}
+.keyword-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line)}
+.keyword-item:last-child{border-bottom:0}
+.keyword-item>span:first-child{min-width:0;font-size:11px;font-weight:700;overflow-wrap:anywhere}
+@media(max-width:720px){.keyword-group summary{padding:11px 12px}.keyword-group-body{max-height:280px}.keyword-item>span:first-child{font-size:10px}}

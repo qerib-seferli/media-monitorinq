@@ -33,15 +33,28 @@ Deno.serve(async (req) => {
       const keywords = (org.keywords || []).filter((k:any)=>k.is_active !== false).map((k:any)=>String(k.value || '').trim()).filter(Boolean);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
       const sources = (org.sources || []).filter((s:any)=>s.is_active !== false);
+      let villageNames:string[] = [];
+      if (org.district_id) {
+        const { data:villageRows, error:villageError } = await admin
+          .from('villages')
+          .select('name')
+          .eq('district_id', org.district_id)
+          .order('name');
+        if (villageError) console.error('villages', org.short_name, villageError);
+        else villageNames = (villageRows || []).map((x:any)=>String(x.name || '').trim()).filter(Boolean);
+      }
 
+      // YouTube arxiv yığımı zamanı Edge Function vaxt limitinə düşməmək üçün
+      // web/news lane-ləri həmin xüsusi run-da saxlanılır. Normal run-da hamısı işləyir.
+      if (!options.youtube_backfill) {
       // Zero-cost discovery lane: Google News RSS. No API key is required.
       try {
         checked++;
-        const rssItems = await googleNewsItems(org, keywords);
+        const rssItems = await googleNewsItems(org, keywords, villageNames);
         let newsCount = 0;
-        for (const item of rssItems.slice(0,30)) newsCount += await save(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords);
+        for (const item of rssItems.slice(0,30)) newsCount += await save(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords,villageNames);
         inserted += newsCount;
-        details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, ...(options.debug ? { sample_results:debugSamples(rssItems, org, lowerKeywords, 5) } : {}) });
+        details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, ...(options.debug ? { sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 5) } : {}) });
       } catch (e) {
         failures++;
         console.error('google-news',org.short_name,e);
@@ -52,10 +65,10 @@ Deno.serve(async (req) => {
       // Bing RSS-in qeyri-dəqiq nəticələri production axınından çıxarılıb.
       try {
         checked++;
-        const webItems = await gdeltNewsItems(org, keywords);
+        const webItems = await gdeltNewsItems(org, keywords, villageNames);
         let webCount = 0;
         for (const item of webItems.slice(0,60)) {
-          webCount += await save(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords);
+          webCount += await save(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords,villageNames);
         }
         inserted += webCount;
         details.push({
@@ -63,11 +76,14 @@ Deno.serve(async (req) => {
           source:'GDELT Web / Xəbər',
           found:webItems.length,
           inserted:webCount,
-          ...(options.debug ? { sample_results:debugSamples(webItems, org, lowerKeywords, 10) } : {})
+          ...(options.debug ? { sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 10) } : {})
         });
       } catch (e) {
         failures++;
         console.error('gdelt-web-news',org.short_name,e);
+      }
+      } else if (options.debug) {
+        details.push({ organization:org.short_name, source:'Web / Xəbər lane-ləri', skipped:'youtube-backfill-focus' });
       }
 
       for (const source of sources) {
@@ -101,20 +117,21 @@ Deno.serve(async (req) => {
             const discovery = await youtubeItems(
               org,
               keywords,
+              villageNames,
               key,
               options.youtube_backfill ? null : (existingYoutubeCount ? source.last_checked_at : null),
-              options.youtube_backfill ? 3 : 1
+              1
             );
 
             let count = 0;
             for (const item of discovery.items) {
-              count += await save(admin,org,source,item,lowerKeywords);
+              count += await save(admin,org,source,item,lowerKeywords,villageNames);
             }
 
             // Aşkarlanmış videoların son açıq şərhlərini də yoxlayırıq.
             // save() yalnız təşkilat/açar söz uyğunluğu olan şərhləri bazaya buraxır.
             for (const item of discovery.comments) {
-              count += await save(admin,org,source,item,lowerKeywords);
+              count += await save(admin,org,source,item,lowerKeywords,villageNames);
             }
 
             inserted += count;
@@ -126,7 +143,7 @@ Deno.serve(async (req) => {
               comments_checked:discovery.comments.length,
               inserted:count,
               ...(options.debug ? {
-                sample_results:debugSamples([...discovery.items, ...discovery.comments], org, lowerKeywords, 10)
+                sample_results:debugSamples([...discovery.items, ...discovery.comments], org, lowerKeywords, villageNames, 12)
               } : {})
             });
 } else if (
@@ -164,7 +181,7 @@ Deno.serve(async (req) => {
 
   let count = 0;
   for (const item of items.slice(0, 30)) {
-    count += await save(admin, org, source, item, lowerKeywords);
+    count += await save(admin, org, source, item, lowerKeywords, villageNames);
   }
 
   inserted += count;
@@ -181,7 +198,7 @@ Deno.serve(async (req) => {
             const web = await webSourceItems(source.url, source.name || source.url);
             let count = 0;
             for (const item of web.items) {
-              count += await save(admin,org,source,item,lowerKeywords);
+              count += await save(admin,org,source,item,lowerKeywords,villageNames);
             }
             inserted += count;
             details.push({
@@ -215,12 +232,12 @@ Deno.serve(async (req) => {
 
     return json({ok:true,checked_sources:checked,new_mentions:inserted,failures,details});
   } catch (e) {
-    return json({ok:false,error:e.message || String(e)},400);
+    return json({ok:false,error:e instanceof Error ? e.message : String(e ?? 'Naməlum xəta')},400);
   }
 });
 
-async function googleNewsItems(org:any, keywords:string[]):Promise<Item[]> {
-  const queries = buildDiscoveryQueries(org, keywords, 5);
+async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<Item[]> {
+  const queries = buildDiscoveryQueries(org, keywords, villages, 5);
   const all:Item[] = [];
 
   for (const query of queries) {
@@ -249,8 +266,8 @@ async function googleNewsItems(org:any, keywords:string[]):Promise<Item[]> {
   return dedupeItems(all);
 }
 
-async function gdeltNewsItems(org:any, keywords:string[]):Promise<Item[]> {
-  const queries = buildDiscoveryQueries(org, keywords, 5);
+async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<Item[]> {
+  const queries = buildDiscoveryQueries(org, keywords, villages, 5);
   const all:Item[] = [];
 
   for (const query of queries) {
@@ -292,22 +309,31 @@ async function gdeltNewsItems(org:any, keywords:string[]):Promise<Item[]> {
   return dedupeItems(all);
 }
 
-function buildDiscoveryQueries(org:any, keywords:string[], max=5):string[] {
+function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [], max=8):string[] {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
-  const candidates:string[] = [shortName];
+  const candidates:string[] = [];
 
-  const preferredTopics = ['suvarma','kanal','arx','su','fermer','susuz','su çatışmazlığı'];
+  // Search API-də bir uzun AND cümləsi əvəzinə ayrıca, real mövzu sorğuları.
+  if (shortName) candidates.push(shortName);
+  if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(fullName);
+
+  const preferredTopics = [
+    'suvarma', 'suvarma kanalı', 'kanal', 'arx',
+    'subartezian', 'kollektor drenaj', 'meliorasiya', 'fermer su'
+  ];
   for (const topic of preferredTopics) {
     if (district) candidates.push(`${district} ${topic}`);
   }
-  if (fullName) candidates.push(fullName);
 
+  // Admin paneldə daxil edilmiş Bərdə-yə bağlı güclü frazalar da discovery-yə qoşulur.
   for (const value of keywords) {
     const k = String(value || '').trim();
     if (!k) continue;
-    if (district && normalizeForMatch(k).includes(normalizeForMatch(district))) candidates.push(k);
+    const nk = normalizeForMatch(k);
+    if (district && nk.includes(normalizeForMatch(district))) candidates.push(k);
+    else if (shortName && nk.includes(normalizeForMatch(shortName))) candidates.push(k);
   }
 
   const seen = new Set<string>();
@@ -321,7 +347,6 @@ function buildDiscoveryQueries(org:any, keywords:string[], max=5):string[] {
   }
   return out;
 }
-
 function dedupeItems(items:Item[]):Item[] {
   const seen = new Set<string>();
   return items.filter(item=>{
@@ -353,6 +378,7 @@ function inferPlatform(value:string) {
 async function youtubeItems(
   org:any,
   keywords:string[],
+  villages:string[],
   key:string,
   lastCheckedAt:string|null,
   maxPagesPerQuery=1
@@ -363,16 +389,13 @@ async function youtubeItems(
 
   // Hər anlayış ayrıca sorğudur. Bir neçə açar sözü bir uzun cümləyə
   // birləşdirmək YouTube nəticələrini sıfırlayırdı.
-  const queries = buildDiscoveryQueries(org, keywords, 5);
+  const queries = buildDiscoveryQueries(org, keywords, villages, 8);
 
   const lastMs = lastCheckedAt ? new Date(lastCheckedAt).getTime() : 0;
-  const backfillMs = 5 * 365 * 24 * 3600 * 1000;
   const overlapMs = 2 * 3600 * 1000;
-  const publishedAfter = new Date(
-    lastMs && Number.isFinite(lastMs)
-      ? Math.max(Date.now() - backfillMs, lastMs - overlapMs)
-      : Date.now() - backfillMs
-  ).toISOString();
+  const publishedAfter = lastMs && Number.isFinite(lastMs)
+    ? new Date(lastMs - overlapMs).toISOString()
+    : null;
 
   const searchItems:any[] = [];
 
@@ -384,7 +407,7 @@ async function youtubeItems(
       endpoint.searchParams.set('type','video');
       endpoint.searchParams.set('maxResults','50');
       endpoint.searchParams.set('order', lastCheckedAt ? 'date' : 'relevance');
-      endpoint.searchParams.set('publishedAfter',publishedAfter);
+      if (publishedAfter) endpoint.searchParams.set('publishedAfter',publishedAfter);
       endpoint.searchParams.set('q',q);
       endpoint.searchParams.set('relevanceLanguage','az');
       endpoint.searchParams.set('regionCode','AZ');
@@ -444,9 +467,10 @@ async function youtubeItems(
   });
 
   const comments:Item[] = [];
-  // Şərh sorğuları ucuzdur, amma funksiyanın vaxtını və kvotanı qorumaq üçün
-  // ən yeni maksimum 8 videonu yoxlayırıq.
-  for (const item of items.slice(0,8)) {
+  // Şərhləri bütün tapılan videolarda yoxlamaq timeout yaradır. Əvvəlcə lokal
+  // uyğunluq filtri tətbiq olunur, sonra maksimum 5 relevant videonun şərhi oxunur.
+  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,5);
+  for (const item of relevantForComments) {
     const raw:any = item.raw || {};
     const videoId = String(raw.video_id || '');
     if (!videoId) continue;
@@ -676,9 +700,9 @@ async function pageItem(url:string, fallback:string):Promise<Item> {
   return pageItemFromHtml(url,fallback,html);
 }
 
-async function save(admin:any, org:any, source:any, item:Item, keywords:string[]) {
+async function save(admin:any, org:any, source:any, item:Item, keywords:string[], villages:string[] = []) {
   if (!item.url) return 0;
-  const match = evaluateMatch(org, item, keywords);
+  const match = evaluateMatch(org, item, keywords, villages);
   const normalized = match.normalized;
   const direct = match.direct;
   const matches = match.matches;
@@ -770,9 +794,9 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
   }
 }
 
-function debugSamples(items:Item[], org:any, keywords:string[], limit=6) {
+function debugSamples(items:Item[], org:any, keywords:string[], villages:string[] = [], limit=6) {
   return items.slice(0,limit).map(item=>{
-    const match = evaluateMatch(org,item,keywords);
+    const match = evaluateMatch(org,item,keywords,villages);
     return {
       platform:inferPlatform(item.url || ''),
       title:String(item.title || '').slice(0,180),
@@ -784,38 +808,48 @@ function debugSamples(items:Item[], org:any, keywords:string[], limit=6) {
   });
 }
 
-function evaluateMatch(org:any, item:Item, keywords:string[]) {
+function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] = []) {
   const normalized = normalizeForMatch(`${item.title || ''} ${item.text || ''}`);
   const direct = [String(org.name||''),String(org.short_name||'')]
     .map(normalizeForMatch)
     .filter(Boolean);
   const normalizedKeywords = keywords.map(normalizeForMatch).filter(Boolean);
-  const directMatches = direct.filter(term=>normalized.includes(term));
-  const exactKeywordMatches = normalizedKeywords.filter(term=>normalized.includes(term));
+  const directMatches = direct.filter(term=>term.length >= 4 && normalized.includes(term));
 
   const district = normalizeForMatch(String(org.districts?.name || ''));
+  const villageTerms = villages.map(normalizeForMatch).filter(term=>term.length >= 4);
+  const villageHits = villageTerms.filter(term=>normalized.includes(term)).slice(0,5);
   const districtHit = Boolean(district && normalized.includes(district));
-  const stop = new Set([
-    ...district.split(' '),
-    'smsii','smsi','suvarma','sistemlerinin','sistemleri','istismari','idaresi','idare','berde'
-  ]);
-  const topicTokens = [...new Set(
-    normalizedKeywords.flatMap(term=>term.split(' '))
-      .filter(token=>token.length >= 2 && !stop.has(token))
-  )];
-  const topicHits = topicTokens.filter(token=>normalized.includes(token));
+  const locationHit = districtHit || villageHits.length > 0;
+
+  // Mövzu sözləri kənd/rayon adı ilə birlikdə qəbul edilir. Beləliklə
+  // "Bərdə yol qəzası" kimi sistemə aid olmayan materiallar bazaya düşmür.
+  const builtinTopics = [
+    'suvarma','kanal','arx','kollektor','drenaj','meliorasiya','subartezian',
+    'su quyusu','nasos stansiyasi','hidrotexniki','su catismamazligi','susuz',
+    'su verilmir','su gelmir','su teminati','su verilisi','su itkisi','ekin sahesi',
+    'fermer','lilden temizlen','berpa','temir','suvarma sebekesi'
+  ].map(normalizeForMatch);
+  const keywordTopics = normalizedKeywords.filter(term=>{
+    if (!term) return false;
+    if (district && term.includes(district)) return true;
+    return builtinTopics.some(topic=>term.includes(topic) || topic.includes(term));
+  });
+  const topicTerms = [...new Set([...builtinTopics, ...keywordTopics])];
+  const topicHits = topicTerms.filter(term=>term.length >= 3 && normalized.includes(term)).slice(0,8);
+
   const raw:any = item.raw || {};
   const discoveryQuery = normalizeForMatch(String(raw.discovery_query || ''));
   const queryDistrictHit = Boolean(district && discoveryQuery.includes(district));
-  const queryTopicHit = topicTokens.some(token=>discoveryQuery.includes(token));
+  const queryTopicHit = topicTerms.some(term=>term && discoveryQuery.includes(term));
   const trustedDiscovery = ['google_news','gdelt_article'].includes(String(raw.kind || '')) &&
-    (direct.some(term=>discoveryQuery.includes(term)) || (queryDistrictHit && queryTopicHit));
+    (direct.some(term=>term && discoveryQuery.includes(term)) || (queryDistrictHit && queryTopicHit));
 
-  const accepted = directMatches.length > 0 || exactKeywordMatches.length > 0 || (districtHit && topicHits.length > 0) || trustedDiscovery;
+  const accepted = directMatches.length > 0 || (locationHit && topicHits.length > 0) || trustedDiscovery;
   const matches = [...new Set([
     ...directMatches,
-    ...exactKeywordMatches,
     ...(districtHit && topicHits.length ? topicHits.map(t=>`${district}+${t}`) : []),
+    ...(!districtHit && villageHits.length && topicHits.length ? villageHits.flatMap(v=>topicHits.slice(0,2).map(t=>`${v}+${t}`)) : []),
     ...(trustedDiscovery && discoveryQuery ? [`axtaris:${discoveryQuery}`] : [])
   ])];
 
@@ -826,13 +860,12 @@ function evaluateMatch(org:any, item:Item, keywords:string[]) {
     matches,
     reason:accepted
       ? (directMatches.length ? 'təşkilat-adı-uyğunluğu'
-        : exactKeywordMatches.length ? 'açar-söz-uyğunluğu'
         : (districtHit && topicHits.length) ? 'rayon-mövzu-uyğunluğu'
+        : (villageHits.length && topicHits.length) ? 'kənd-mövzu-uyğunluğu'
         : 'mənbə-axtarış-uyğunluğu')
-      : (districtHit ? 'rayon-var-mövzu-yoxdur' : 'rayon-və-açar-söz-uyğunluğu-yoxdur')
+      : (locationHit ? 'ərazi-var-mövzu-yoxdur' : 'ərazi-və-mövzu-uyğunluğu-yoxdur')
   };
 }
-
 function normalizeForMatch(value:string):string {
   return String(value || '')
     .toLocaleLowerCase('az-AZ')
