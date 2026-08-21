@@ -364,6 +364,18 @@ function gdeltDate(value:any):string|null {
   return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`;
 }
 
+function canonicalPlatform(value:string) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'youtube') return 'YouTube';
+  if (v === 'google news' || v === 'googlenews') return 'Google News';
+  if (v === 'facebook') return 'Facebook';
+  if (v === 'instagram') return 'Instagram';
+  if (v === 'tiktok') return 'TikTok';
+  if (v === 'linkedin') return 'LinkedIn';
+  if (v === 'x' || v === 'twitter') return 'X';
+  return value ? String(value).trim() : 'Web';
+}
+
 function inferPlatform(value:string) {
   const host = String(value || '').toLowerCase();
   if (host.includes('youtube.com') || host.includes('youtu.be')) return 'YouTube';
@@ -389,7 +401,7 @@ async function youtubeItems(
 
   // Hər anlayış ayrıca sorğudur. Bir neçə açar sözü bir uzun cümləyə
   // birləşdirmək YouTube nəticələrini sıfırlayırdı.
-  const queries = buildDiscoveryQueries(org, keywords, villages, 8);
+  const queries = buildDiscoveryQueries(org, keywords, villages, 4);
 
   const lastMs = lastCheckedAt ? new Date(lastCheckedAt).getTime() : 0;
   const overlapMs = 2 * 3600 * 1000;
@@ -405,7 +417,7 @@ async function youtubeItems(
       const endpoint = new URL('https://www.googleapis.com/youtube/v3/search');
       endpoint.searchParams.set('part','snippet');
       endpoint.searchParams.set('type','video');
-      endpoint.searchParams.set('maxResults','50');
+      endpoint.searchParams.set('maxResults','25');
       endpoint.searchParams.set('order', lastCheckedAt ? 'date' : 'relevance');
       if (publishedAfter) endpoint.searchParams.set('publishedAfter',publishedAfter);
       endpoint.searchParams.set('q',q);
@@ -469,7 +481,7 @@ async function youtubeItems(
   const comments:Item[] = [];
   // Şərhləri bütün tapılan videolarda yoxlamaq timeout yaradır. Əvvəlcə lokal
   // uyğunluq filtri tətbiq olunur, sonra maksimum 5 relevant videonun şərhi oxunur.
-  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,5);
+  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,4);
   for (const item of relevantForComments) {
     const raw:any = item.raw || {};
     const videoId = String(raw.video_id || '');
@@ -478,7 +490,7 @@ async function youtubeItems(
       const endpoint = new URL('https://www.googleapis.com/youtube/v3/commentThreads');
       endpoint.searchParams.set('part','snippet');
       endpoint.searchParams.set('videoId',videoId);
-      endpoint.searchParams.set('maxResults','20');
+      endpoint.searchParams.set('maxResults','50');
       endpoint.searchParams.set('order','time');
       endpoint.searchParams.set('textFormat','plainText');
       endpoint.searchParams.set('key',key);
@@ -727,7 +739,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   const row:any = {
     organization_id:org.id,
     district_id:org.district_id || null,
-    source_platform:source.platform || 'Web',
+    source_platform:canonicalPlatform(source.platform || inferPlatform(item.url || '') || 'Web'),
     source_url:item.url,
     author_name:item.author || null,
     title:item.title || 'Monitorinq qeydi',
@@ -845,7 +857,8 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const trustedDiscovery = ['google_news','gdelt_article'].includes(String(raw.kind || '')) &&
     (direct.some(term=>term && discoveryQuery.includes(term)) || (queryDistrictHit && queryTopicHit));
 
-  const accepted = directMatches.length > 0 || (locationHit && topicHits.length > 0) || trustedDiscovery;
+  const districtWide = org.show_district_wide !== false;
+  const accepted = directMatches.length > 0 || (districtWide && locationHit && topicHits.length > 0) || trustedDiscovery;
   const matches = [...new Set([
     ...directMatches,
     ...(districtHit && topicHits.length ? topicHits.map(t=>`${district}+${t}`) : []),

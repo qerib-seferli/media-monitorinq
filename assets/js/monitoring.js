@@ -2,17 +2,40 @@ import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 
-const cachedProfile=getCachedProfile();if(cachedProfile)renderShell(cachedProfile,'monitoring');showPageLoader();const ctx=await requireAuth();if(!ctx)throw new Error('auth');renderShell(ctx.profile,'monitoring');hidePageLoader();
-const list=document.querySelector('#list'),platform=document.querySelector('#platform'),sentiment=document.querySelector('#sentiment');let rows=[];
+const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'monitoring'); showPageLoader();
+const ctx=await requireAuth(); if(!ctx) throw new Error('auth'); renderShell(ctx.profile,'monitoring'); hidePageLoader();
 
-async function load(){
-  let q=supabase.from('mentions').select('*, districts(name), villages(name), mention_media(*)').order('detected_at',{ascending:false}).limit(150);
-  if(platform.value)q=q.eq('source_platform',platform.value);
-  if(sentiment.value)q=q.eq('sentiment',sentiment.value);
-  const{data,error}=await q;
-  if(error){list.innerHTML=`<div class="empty">${escapeHtml(error.message)}</div>`;return;}
-  rows=data||[];render();
+const list=document.querySelector('#list');
+const platform=document.querySelector('#platform');
+const sentiment=document.querySelector('#sentiment');
+const period=document.querySelector('#period');
+const dateFrom=document.querySelector('#date-from');
+const dateTo=document.querySelector('#date-to');
+const sentinel=document.querySelector('#load-sentinel');
+const PAGE_SIZE=50;
+let rows=[], page=0, loading=false, done=false, requestToken=0;
+
+function isoDay(d,end=false){
+  const x=new Date(d); x.setHours(end?23:0,end?59:0,end?59:0,end?999:0); return x.toISOString();
 }
+function dateRange(){
+  const now=new Date(); let start=new Date(now), end=new Date(now);
+  const v=period.value;
+  if(v==='today') start=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  else if(v==='month') start=new Date(now.getFullYear(),now.getMonth(),1);
+  else if(v==='custom'){
+    if(!dateFrom.value||!dateTo.value) return null;
+    return {from:isoDay(dateFrom.value),to:isoDay(dateTo.value,true)};
+  } else {
+    const m={ '3m':3,'6m':6,'9m':9,'1y':12,'2y':24,'3y':36,'4y':48,'5y':60 }[v]||1;
+    start.setMonth(start.getMonth()-m);
+  }
+  return {from:isoDay(start),to:isoDay(end,true)};
+}
+function updateDateInputs(){
+  const custom=period.value==='custom'; dateFrom.classList.toggle('hidden',!custom); dateTo.classList.toggle('hidden',!custom);
+}
+function publishedDate(m){return m.published_at||m.detected_at||null;}
 function sourceStateBadge(m){
   const state=String(m.source_status||'active');
   if(state==='removed')return '<span class="badge danger">Mənbədən silinib</span>';
@@ -22,20 +45,54 @@ function sourceStateBadge(m){
 function sourceStateText(m){
   const state=String(m.source_status||'active');
   if(state==='removed')return 'Orijinal material mənbədən silinib. Arxiv qeydi sistemdə saxlanılır.';
-  if(state==='unavailable')return 'Orijinal material hazırda açıq şəkildə əlçatan deyil. Bu, silinmə, məxfilik və ya giriş məhdudiyyəti ola bilər.';
+  if(state==='unavailable')return 'Orijinal material hazırda açıq şəkildə əlçatan deyil.';
   return 'Orijinal material son yoxlamada mənbədə əlçatan olub.';
 }
-
-function render(){
-  list.innerHTML=rows.length?rows.map(m=>`<article class="mention-card"><img class="thumb" src="${m.mention_media?.[0]?.url||'./assets/img/icon.svg'}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.summary||m.original_text||'')}</p><div class="mention-meta"><span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">${fmtDate(m.detected_at)}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">Orijinalı aç</a>`:''}</div></article>`).join(''):'<div class="card empty">Nəticə tapılmadı.</div>';
+function isComment(m){return String(m.raw_payload?.kind||'').includes('comment');}
+function card(m){
+  const comment=isComment(m);
+  return `<article class="mention-card"><img class="thumb" src="${m.mention_media?.[0]?.url||'./assets/img/icon.svg'}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.summary||m.original_text||'')}</p><div class="mention-meta"><span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${comment?'<span class="badge info">Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${fmtDate(publishedDate(m))}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
+}
+function render(append=false){
+  if(!append) list.innerHTML='';
+  if(!rows.length){list.innerHTML='<div class="card empty">Nəticə tapılmadı.</div>';return;}
+  list.innerHTML=rows.map(card).join('');
   document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openDetail(b.dataset.open));
 }
+async function load({reset=false}={}){
+  if(loading||(done&&!reset)) return;
+  if(reset){page=0;done=false;rows=[];requestToken++;render();}
+  const token=requestToken; const range=dateRange(); if(!range) return;
+  loading=true; sentinel.classList.add('loading');
+  try{
+    const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
+    let q=supabase.from('mentions').select('*, districts(name), villages(name), mention_media(*)')
+      .gte('published_at',range.from).lte('published_at',range.to)
+      .order('published_at',{ascending:false,nullsFirst:false}).range(from,to);
+    if(platform.value) q=q.ilike('source_platform',platform.value);
+    if(sentiment.value) q=q.eq('sentiment',sentiment.value);
+    const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
+    const batch=data||[]; rows.push(...batch); done=batch.length<PAGE_SIZE; page++; render(true);
+  }catch(e){ if(!rows.length) list.innerHTML=`<div class="empty">${escapeHtml(e.message||String(e))}</div>`; else toast(e,'error'); }
+  finally{loading=false;sentinel.classList.remove('loading');}
+}
+
+function speechText(m){return [m.title,m.summary,m.original_text].filter(Boolean).join('. ');}
+function speak(m,button){
+  if(!('speechSynthesis' in window)) return toast('Bu cihazda səslə oxuma dəstəklənmir.','error');
+  if(window.speechSynthesis.speaking){window.speechSynthesis.cancel();button.textContent='🔊 Dinlə';return;}
+  const u=new SpeechSynthesisUtterance(speechText(m)); u.lang='az-AZ'; u.rate=.95;
+  const voices=window.speechSynthesis.getVoices(); u.voice=voices.find(v=>String(v.lang).toLowerCase().startsWith('az'))||null;
+  u.onend=u.onerror=()=>button.textContent='🔊 Dinlə'; button.textContent='■ Dayandır'; window.speechSynthesis.speak(u);
+}
 function openDetail(id){
-  const m=rows.find(x=>x.id===id);if(!m)return;
-  const media=(m.mention_media||[]).map(x=>`<img src="${x.url}" data-media="${x.url}" style="width:100%;max-height:260px;object-fit:cover;border-radius:14px;cursor:zoom-in" alt="media">`).join('');
-  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal"><div class="modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close">✕</button></div><div class="grid grid-2"><div><strong>Platforma</strong><p class="muted">${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Aşkarlanıb</strong><p class="muted">${fmtDate(m.detected_at)}</p></div></div><div class="card" style="padding:12px 14px;margin:12px 0"><div class="mention-meta" style="margin-bottom:6px">${sourceStateBadge(m)}</div><p class="muted" style="margin:0">${escapeHtml(sourceStateText(m))}</p>${m.last_verified_at?`<p class="muted" style="margin:6px 0 0">Son mənbə yoxlaması: ${fmtDate(m.last_verified_at)}</p>`:''}</div><h3>AI xülasəsi</h3><p>${escapeHtml(m.summary||'Xülasə yoxdur.')}</p><h3>Orijinal mətn</h3><p class="muted" style="white-space:pre-wrap">${escapeHtml(m.original_text||'Mətn saxlanmayıb.')}</p>${media?`<h3>Screenshot / Media</h3><div class="grid grid-2">${media}</div>`:''}<div class="toolbar" style="margin-top:18px">${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">🔗 Orijinal paylaşımı aç</a>`:''}</div></div></div>`;
-  document.querySelector('#detail-close').onclick=()=>document.querySelector('#modal-root').innerHTML='';
-  document.querySelector('#detail-bg').onclick=e=>{if(e.target.id==='detail-bg')document.querySelector('#modal-root').innerHTML=''};
+  const m=rows.find(x=>x.id===id); if(!m)return; window.speechSynthesis?.cancel?.();
+  const media=(m.mention_media||[]).map(x=>`<img src="${x.url}" data-media="${x.url}" class="detail-media" alt="Media">`).join('');
+  const raw=m.raw_payload||{}; const comment=isComment(m);
+  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Paylaşılma tarixi</strong><p>${fmtDate(publishedDate(m))}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(m.author_name||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><h3>AI xülasəsi</h3><p>${escapeHtml(m.summary||'Xülasə yoxdur.')}</p><h3>Orijinal mətn</h3><p class="muted detail-text">${escapeHtml(m.original_text||'Mətn saxlanmayıb.')}</p>${raw.comment_id?`<div class="detail-grid"><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Video</strong><p>${escapeHtml(raw.video_title||'—')}</p></div></div>`:''}${media?`<h3>Media / arxiv görüntüsü</h3><div class="grid grid-2">${media}</div>`:''}</div></div>`;
+  document.querySelector('#detail-close').onclick=()=>{window.speechSynthesis?.cancel?.();document.querySelector('#modal-root').innerHTML='';};
+  document.querySelector('#detail-bg').onclick=e=>{if(e.target.id==='detail-bg')document.querySelector('#detail-close').click();};
+  document.querySelector('#detail-speak').onclick=e=>speak(m,e.currentTarget);
   document.querySelectorAll('[data-media]').forEach(x=>x.onclick=()=>openViewer(x.dataset.media));
 }
 
@@ -45,15 +102,10 @@ function applyTransform(){img.style.transform=`translate(${tx}px,${ty}px) scale(
 function resetViewer(){scale=1;tx=0;ty=0;applyTransform();}
 function openViewer(url){currentUrl=url;resetViewer();img.src=url;document.querySelector('#save-media').href=url;viewer.classList.remove('hidden');document.body.style.overflow='hidden';}
 function closeViewer(){viewer.classList.add('hidden');document.body.style.overflow='';resetViewer();}
-
 document.querySelector('#viewer-close').onclick=closeViewer;
 document.querySelector('#zoom-in').onclick=()=>{scale=Math.min(4,scale+.25);applyTransform()};
 document.querySelector('#zoom-out').onclick=()=>{scale=Math.max(.75,scale-.25);if(scale<=1){tx=0;ty=0}applyTransform()};
-document.querySelector('#share-media').onclick=async()=>{
-  if(navigator.share){try{await navigator.share({title:'Media Monitorinq — Screenshot',url:currentUrl})}catch{}}
-  else if(navigator.clipboard){await navigator.clipboard.writeText(currentUrl);toast('Media linki kopyalandı','success')}
-};
-
+document.querySelector('#share-media').onclick=async()=>{if(navigator.share){try{await navigator.share({title:'Media Monitorinq — Media',url:currentUrl})}catch{}}else if(navigator.clipboard){await navigator.clipboard.writeText(currentUrl);toast('Media linki kopyalandı','success')}};
 stage.addEventListener('pointerdown',e=>{if(scale<=1)return;isDragging=true;startX=e.clientX;startY=e.clientY;baseX=tx;baseY=ty;stage.setPointerCapture?.(e.pointerId)});
 stage.addEventListener('pointermove',e=>{if(!isDragging)return;tx=baseX+(e.clientX-startX);ty=baseY+(e.clientY-startY);applyTransform()});
 stage.addEventListener('pointerup',()=>isDragging=false);stage.addEventListener('pointercancel',()=>isDragging=false);
@@ -62,5 +114,7 @@ stage.addEventListener('touchstart',e=>{if(e.touches.length===2){pinchStart=Math
 stage.addEventListener('touchmove',e=>{if(e.touches.length===2&&pinchStart){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);scale=Math.max(.75,Math.min(4,pinchScale*(d/pinchStart)));applyTransform()}},{passive:true});
 stage.addEventListener('touchend',()=>{pinchStart=0});
 
-platform.onchange=load;sentiment.onchange=load;await load();
-const openId=new URLSearchParams(location.search).get('id');if(openId)openDetail(openId);
+const reset=()=>load({reset:true}); platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{updateDateInputs();reset();}; dateFrom.onchange=reset;dateTo.onchange=reset;
+new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)load();},{rootMargin:'500px'}).observe(sentinel);
+updateDateInputs(); await load({reset:true});
+const openId=new URLSearchParams(location.search).get('id'); if(openId)openDetail(openId);
