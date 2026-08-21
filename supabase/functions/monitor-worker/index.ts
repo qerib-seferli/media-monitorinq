@@ -86,15 +86,54 @@ Deno.serve(async (req) => {
 
           if (platform === 'youtube') {
             const last = source.last_checked_at ? new Date(source.last_checked_at).getTime() : 0;
-            // YouTube search costs quota; do not spend it every 15 minutes.
-            if (Date.now() - last < 6 * 3600 * 1000) continue;
+            // YouTube Search API quota sərf edir. Planlı iş 15 dəqiqədən bir işləsə də,
+            // YouTube lane maksimum 6 saatdan bir çağırılır.
+            if (last && Date.now() - last < 6 * 3600 * 1000) {
+              details.push({ organization:org.short_name, source:'YouTube', skipped:'quota-window' });
+              continue;
+            }
+
             const key = Deno.env.get('YOUTUBE_API_KEY');
-            if (!key) continue;
-            const items = await youtubeItems(org, keywords, key);
+            if (!key) {
+              details.push({ organization:org.short_name, source:'YouTube', skipped:'missing-youtube-api-key' });
+              continue;
+            }
+
+            // Əgər bu təşkilat üçün hələ YouTube qeydi yoxdursa, ilk real işə düşmədə
+            // son 30 günü geri oxuyuruq. Sonrakı işlər isə yalnız yeni intervalı yoxlayır.
+            const { count: existingYoutubeCount } = await admin
+              .from('mentions')
+              .select('id', { count:'exact', head:true })
+              .eq('organization_id', org.id)
+              .eq('source_platform', 'YouTube');
+
+            const discovery = await youtubeItems(
+              org,
+              keywords,
+              key,
+              existingYoutubeCount ? source.last_checked_at : null
+            );
+
             let count = 0;
-            for (const item of items) count += await save(admin,org,source,item,lowerKeywords);
+            for (const item of discovery.items) {
+              count += await save(admin,org,source,item,lowerKeywords);
+            }
+
+            // Aşkarlanmış videoların son açıq şərhlərini də yoxlayırıq.
+            // save() yalnız təşkilat/açar söz uyğunluğu olan şərhləri bazaya buraxır.
+            for (const item of discovery.comments) {
+              count += await save(admin,org,source,item,lowerKeywords);
+            }
+
             inserted += count;
-            details.push({ organization:org.short_name, source:'YouTube', found:items.length, inserted:count });
+            details.push({
+              organization:org.short_name,
+              source:'YouTube Data API v3',
+              queries:discovery.queries,
+              videos_found:discovery.items.length,
+              comments_checked:discovery.comments.length,
+              inserted:count
+            });
 } else if (
   platform === 'rss' ||
   source.url?.match(/(\.xml|\.rss)(\?|$)/i) ||
@@ -142,8 +181,21 @@ Deno.serve(async (req) => {
     inserted: count
   });
 } else {
-            const item = await pageItem(source.url, source.name || source.url);
-            inserted += await save(admin,org,source,item,lowerKeywords);
+            // Açıq web mənbəsi: səhifənin özünü və varsa elan etdiyi RSS/Atom feed-ləri
+            // API açarı olmadan yoxlanılır.
+            const web = await webSourceItems(source.url, source.name || source.url);
+            let count = 0;
+            for (const item of web.items) {
+              count += await save(admin,org,source,item,lowerKeywords);
+            }
+            inserted += count;
+            details.push({
+              organization:org.short_name,
+              source:source.url,
+              web_items:web.items.length,
+              discovered_feeds:web.feeds,
+              inserted:count
+            });
           }
 
           await admin.from('sources').update({last_checked_at:new Date().toISOString()}).eq('id',source.id);
@@ -301,22 +353,263 @@ function inferPlatform(value:string) {
   return 'Web';
 }
 
-async function youtubeItems(org:any, keywords:string[], key:string):Promise<Item[]> {
-  const q = [org.short_name, ...keywords.filter(k=>/bərdə|suvarma|kanal|arx/i.test(k)).slice(0,2)].filter(Boolean).join(' ');
-  const after = new Date(Date.now()-48*3600*1000).toISOString();
-  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&order=date&publishedAfter=${encodeURIComponent(after)}&q=${encodeURIComponent(q)}&key=${encodeURIComponent(key)}`;
-  const response = await fetch(url);
-  const data = await response.json();
-  if (!response.ok || data.error) throw new Error(data.error?.message || `YouTube HTTP ${response.status}`);
-  return (data.items || []).map((x:any)=>({
-    title:x.snippet?.title || '',
-    text:x.snippet?.description || '',
-    url:x.id?.videoId ? `https://www.youtube.com/watch?v=${x.id.videoId}` : '',
-    published_at:x.snippet?.publishedAt || null,
-    image:x.snippet?.thumbnails?.high?.url || x.snippet?.thumbnails?.medium?.url || null,
-    author:x.snippet?.channelTitle || null,
-    raw:x
-  }));
+async function youtubeItems(
+  org:any,
+  keywords:string[],
+  key:string,
+  lastCheckedAt:string|null
+):Promise<{items:Item[]; comments:Item[]; queries:string[]}> {
+  const district = String(org.districts?.name || '').trim();
+  const shortName = String(org.short_name || '').trim();
+  const fullName = String(org.name || '').trim();
+
+  const usefulKeywords = keywords
+    .map((x:string)=>String(x || '').trim())
+    .filter(Boolean)
+    .filter((x:string)=>x.length >= 3 && x.length <= 70)
+    .filter((x:string)=>![shortName,fullName].includes(x))
+    .slice(0,4);
+
+  // Quota nəzarəti: hər təşkilat üçün maksimum 2 Search API sorğusu.
+  // 1) təşkilatın adı, 2) rayon + ən güclü monitorinq terminləri.
+  const queries = [
+    shortName || fullName,
+    [district, ...usefulKeywords.slice(0,2)].filter(Boolean).join(' ')
+  ]
+    .map((x:string)=>x.trim())
+    .filter(Boolean)
+    .filter((v:string,i:number,a:string[])=>a.indexOf(v)===i)
+    .slice(0,2);
+
+  const lastMs = lastCheckedAt ? new Date(lastCheckedAt).getTime() : 0;
+  const backfillMs = 30 * 24 * 3600 * 1000;
+  const overlapMs = 2 * 3600 * 1000;
+  const publishedAfter = new Date(
+    lastMs && Number.isFinite(lastMs)
+      ? Math.max(Date.now() - backfillMs, lastMs - overlapMs)
+      : Date.now() - backfillMs
+  ).toISOString();
+
+  const searchItems:any[] = [];
+
+  for (const q of queries) {
+    const endpoint = new URL('https://www.googleapis.com/youtube/v3/search');
+    endpoint.searchParams.set('part','snippet');
+    endpoint.searchParams.set('type','video');
+    endpoint.searchParams.set('maxResults','25');
+    endpoint.searchParams.set('order','date');
+    endpoint.searchParams.set('publishedAfter',publishedAfter);
+    endpoint.searchParams.set('q',q);
+    endpoint.searchParams.set('relevanceLanguage','az');
+    endpoint.searchParams.set('regionCode','AZ');
+    endpoint.searchParams.set('key',key);
+
+    const data = await fetchJsonWithRetry(endpoint.toString(), {}, 2);
+    if (data?.error) throw new Error(data.error?.message || 'YouTube Search API xətası');
+    searchItems.push(...(data?.items || []));
+  }
+
+  const byVideoId = new Map<string,any>();
+  for (const x of searchItems) {
+    const id = String(x?.id?.videoId || '');
+    if (id && !byVideoId.has(id)) byVideoId.set(id,x);
+  }
+
+  const videoIds = [...byVideoId.keys()].slice(0,50);
+  const detailsById = new Map<string,any>();
+
+  if (videoIds.length) {
+    const endpoint = new URL('https://www.googleapis.com/youtube/v3/videos');
+    endpoint.searchParams.set('part','snippet,statistics,contentDetails');
+    endpoint.searchParams.set('id',videoIds.join(','));
+    endpoint.searchParams.set('key',key);
+    const data = await fetchJsonWithRetry(endpoint.toString(), {}, 2);
+    if (data?.error) throw new Error(data.error?.message || 'YouTube Videos API xətası');
+    for (const v of data?.items || []) detailsById.set(String(v.id),v);
+  }
+
+  const items:Item[] = videoIds.map((videoId:string)=>{
+    const search = byVideoId.get(videoId) || {};
+    const detail = detailsById.get(videoId) || {};
+    const snippet = detail.snippet || search.snippet || {};
+    return {
+      title:snippet.title || '',
+      text:snippet.description || '',
+      url:`https://www.youtube.com/watch?v=${videoId}`,
+      published_at:snippet.publishedAt || null,
+      image:snippet.thumbnails?.maxres?.url || snippet.thumbnails?.high?.url || snippet.thumbnails?.medium?.url || null,
+      author:snippet.channelTitle || null,
+      raw:{
+        kind:'youtube_video',
+        video_id:videoId,
+        channel_id:snippet.channelId || null,
+        statistics:detail.statistics || null,
+        content_details:detail.contentDetails || null,
+        search
+      }
+    };
+  });
+
+  const comments:Item[] = [];
+  // Şərh sorğuları ucuzdur, amma funksiyanın vaxtını və kvotanı qorumaq üçün
+  // ən yeni maksimum 8 videonu yoxlayırıq.
+  for (const item of items.slice(0,8)) {
+    const raw:any = item.raw || {};
+    const videoId = String(raw.video_id || '');
+    if (!videoId) continue;
+    try {
+      const endpoint = new URL('https://www.googleapis.com/youtube/v3/commentThreads');
+      endpoint.searchParams.set('part','snippet');
+      endpoint.searchParams.set('videoId',videoId);
+      endpoint.searchParams.set('maxResults','20');
+      endpoint.searchParams.set('order','time');
+      endpoint.searchParams.set('textFormat','plainText');
+      endpoint.searchParams.set('key',key);
+      const data = await fetchJsonWithRetry(endpoint.toString(), {}, 1);
+      if (data?.error) continue; // şərhlər bağlı ola bilər
+
+      for (const thread of data?.items || []) {
+        const top = thread?.snippet?.topLevelComment;
+        const sn = top?.snippet || {};
+        const commentId = String(top?.id || thread?.id || '');
+        const text = String(sn.textDisplay || sn.textOriginal || '').trim();
+        if (!commentId || !text) continue;
+        comments.push({
+          title:`YouTube şərhi — ${sn.authorDisplayName || 'istifadəçi'}`,
+          text,
+          url:`https://www.youtube.com/watch?v=${videoId}&lc=${encodeURIComponent(commentId)}`,
+          published_at:sn.publishedAt || null,
+          image:item.image || null,
+          author:sn.authorDisplayName || null,
+          raw:{
+            kind:'youtube_comment',
+            video_id:videoId,
+            comment_id:commentId,
+            video_title:item.title || '',
+            like_count:sn.likeCount ?? null,
+            thread
+          }
+        });
+      }
+    } catch (e) {
+      console.error('youtube-comments',videoId,e);
+    }
+  }
+
+  return { items, comments, queries };
+}
+
+async function fetchJsonWithRetry(
+  url:string,
+  init:RequestInit = {},
+  maxAttempts = 2
+):Promise<any> {
+  let lastError:Error|null = null;
+  for (let attempt=1; attempt<=maxAttempts; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(()=>controller.abort(),12000);
+      const response = await fetch(url,{...init,signal:controller.signal,redirect:'follow'});
+      clearTimeout(timeout);
+      const data = await response.json().catch(()=>null);
+      if (response.ok) return data;
+      const message = data?.error?.message || `HTTP ${response.status}`;
+      lastError = new Error(message);
+      if (![429,500,502,503,504].includes(response.status)) throw lastError;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+    if (attempt < maxAttempts) await new Promise(resolve=>setTimeout(resolve,650*attempt));
+  }
+  throw lastError || new Error('JSON sorğusu uğursuz oldu');
+}
+
+async function webSourceItems(url:string, fallback:string):Promise<{items:Item[];feeds:string[]}> {
+  const sourceUrl = String(url || '').trim();
+  if (!sourceUrl) return {items:[],feeds:[]};
+
+  const html = await fetchTextWithRetry(sourceUrl,{
+    headers:{
+      'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/3.2)',
+      'accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language':'az,en;q=0.8'
+    }
+  },2);
+
+  const items:Item[] = [pageItemFromHtml(sourceUrl,fallback,html)];
+  const feeds = discoverFeedUrls(html,sourceUrl).slice(0,2);
+
+  for (const feedUrl of feeds) {
+    try {
+      const xml = await fetchTextWithRetry(feedUrl,{
+        headers:{
+          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/3.2)',
+          'accept':'application/rss+xml,application/atom+xml,application/xml,text/xml,*/*'
+        }
+      },2);
+      items.push(...parseRss(xml).slice(0,30));
+    } catch (e) {
+      console.error('web-feed',feedUrl,e);
+    }
+  }
+
+  // Eyni URL-i bir run daxilində yalnız bir dəfə emal et.
+  const seen = new Set<string>();
+  return {
+    items:items.filter((item:Item)=>{
+      const key = String(item.url || '').trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }),
+    feeds
+  };
+}
+
+function pageItemFromHtml(url:string, fallback:string, html:string):Item {
+  const title = clean(meta(html,'og:title') || html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || fallback);
+  const description = clean(meta(html,'og:description') || meta(html,'description') || '');
+  const text = clean(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi,' ')
+      .replace(/<style[\s\S]*?<\/style>/gi,' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi,' ')
+      .replace(/<[^>]+>/g,' ')
+  ).slice(0,14000);
+  return {
+    title,
+    text:`${description}\n${text}`.trim(),
+    url,
+    image:resolveUrl(meta(html,'og:image') || '',url),
+    published_at:meta(html,'article:published_time') || meta(html,'date') || null,
+    raw:{kind:'web_page'}
+  };
+}
+
+function discoverFeedUrls(html:string,baseUrl:string):string[] {
+  const out:string[] = [];
+  const rx = /<link\b[^>]*>/gi;
+  for (const match of html.match(rx) || []) {
+    const rel = attr(match,'rel').toLowerCase();
+    const type = attr(match,'type').toLowerCase();
+    const href = attr(match,'href');
+    if (!href) continue;
+    if (!rel.includes('alternate')) continue;
+    if (!(type.includes('rss') || type.includes('atom') || type.includes('xml'))) continue;
+    const resolved = resolveUrl(href,baseUrl);
+    if (resolved && !out.includes(resolved)) out.push(resolved);
+  }
+  return out;
+}
+
+function attr(tagText:string,name:string):string {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  return tagText.match(new RegExp(`${escaped}\\s*=\\s*["']([^"']+)["']`,'i'))?.[1] || '';
+}
+
+function resolveUrl(value:string,base:string):string|null {
+  if (!value) return null;
+  try { return new URL(value,base).toString(); } catch { return null; }
 }
 
 
@@ -386,13 +679,8 @@ async function fetchTextWithRetry(
 
 
 async function pageItem(url:string, fallback:string):Promise<Item> {
-  const res = await fetch(url,{headers:{'user-agent':'MediaMonitorinq/2.0'}});
-  if (!res.ok) throw new Error(`Web HTTP ${res.status}`);
-  const html = await res.text();
-  const title = clean(meta(html,'og:title') || html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || fallback);
-  const description = clean(meta(html,'og:description') || meta(html,'description') || '');
-  const text = clean(html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ')).slice(0,14000);
-  return { title, text:`${description}\n${text}`.trim(), url, image:meta(html,'og:image') || null, published_at:meta(html,'article:published_time') || null };
+  const html = await fetchTextWithRetry(url,{headers:{'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/3.2)'}},2);
+  return pageItemFromHtml(url,fallback,html);
 }
 
 async function save(admin:any, org:any, source:any, item:Item, keywords:string[]) {
