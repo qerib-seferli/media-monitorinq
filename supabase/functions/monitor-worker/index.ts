@@ -46,6 +46,39 @@ Deno.serve(async (req) => {
         console.error('google-news',org.short_name,e);
       }
 
+
+      // Zero-cost broad public web discovery. Bing RSS is used as a best-effort
+      // index lane; it can also surface publicly indexed social posts.
+      try {
+        checked++;
+        const webItems = await bingWebItems(org, keywords, false);
+        let webCount = 0;
+        for (const item of webItems.slice(0,30)) {
+          const platform = inferPlatform(item.url || '');
+          webCount += await save(admin,org,{platform,url:'https://www.bing.com/search'},item,lowerKeywords);
+        }
+        inserted += webCount;
+        details.push({ organization:org.short_name, source:'Public Web Index', found:webItems.length, inserted:webCount });
+      } catch (e) {
+        failures++;
+        console.error('public-web-index',org.short_name,e);
+      }
+
+      try {
+        checked++;
+        const socialItems = await bingWebItems(org, keywords, true);
+        let socialCount = 0;
+        for (const item of socialItems.slice(0,30)) {
+          const platform = inferPlatform(item.url || '');
+          socialCount += await save(admin,org,{platform,url:item.url || ''},item,lowerKeywords);
+        }
+        inserted += socialCount;
+        details.push({ organization:org.short_name, source:'Public Social Index', found:socialItems.length, inserted:socialCount });
+      } catch (e) {
+        failures++;
+        console.error('public-social-index',org.short_name,e);
+      }
+
       for (const source of sources) {
         checked++;
         try {
@@ -216,6 +249,56 @@ async function googleNewsItems(
 
     return [];
   }
+}
+
+
+async function bingWebItems(org:any, keywords:string[], socialOnly=false):Promise<Item[]> {
+  const terms = [org.short_name, org.name, ...keywords]
+    .filter(Boolean)
+    .map((v:string)=>String(v).trim())
+    .filter((v:string,i:number,a:string[])=>a.indexOf(v)===i)
+    .slice(0,4);
+
+  const phraseQuery = terms.map((v:string)=>`"${v.replaceAll('"','')}"`).join(' OR ');
+  const socialScope = socialOnly
+    ? ' (site:instagram.com OR site:tiktok.com OR site:linkedin.com OR site:x.com OR site:twitter.com OR site:youtube.com OR site:facebook.com)'
+    : '';
+
+  const searchUrl = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(`(${phraseQuery})${socialScope}`)}`;
+  const xml = await fetchTextWithRetry(searchUrl,{
+    headers:{
+      'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/3.1)',
+      'accept':'application/rss+xml, application/xml, text/xml, */*',
+      'accept-language':'az,en;q=0.8'
+    }
+  },2);
+
+  return parseRss(xml).map(item=>({
+    ...item,
+    url:unwrapBingUrl(item.url || ''),
+    raw:{...((item.raw as any)||{}), discovery:socialOnly?'social-index':'web-index'}
+  }));
+}
+
+function unwrapBingUrl(value:string) {
+  try {
+    const u = new URL(value);
+    const nested = u.searchParams.get('url');
+    return nested ? decodeURIComponent(nested) : value;
+  } catch {
+    return value;
+  }
+}
+
+function inferPlatform(value:string) {
+  const host = String(value || '').toLowerCase();
+  if (host.includes('youtube.com') || host.includes('youtu.be')) return 'YouTube';
+  if (host.includes('instagram.com')) return 'Instagram';
+  if (host.includes('tiktok.com')) return 'TikTok';
+  if (host.includes('linkedin.com')) return 'LinkedIn';
+  if (host.includes('x.com') || host.includes('twitter.com')) return 'X';
+  if (host.includes('facebook.com')) return 'Facebook';
+  return 'Web';
 }
 
 async function youtubeItems(org:any, keywords:string[], key:string):Promise<Item[]> {

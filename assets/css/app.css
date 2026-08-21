@@ -468,3 +468,181 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .page-loader-disc{width:72px !important;height:72px !important}
   .page-loader-disc img{width:144px !important;height:72px !important}
 }
+
+/* =========================================================
+   V8 FINAL TARGETED FIXES
+   loader / login eye / audit table / stable desktop shell
+   ========================================================= */
+
+/* Login password eye stays strictly inside input. */
+.login-card .password-field{
+  position:relative !important;
+  display:block !important;
+  width:100% !important;
+}
+.login-card .password-field > .input{
+  display:block !important;
+  width:100% !important;
+  padding-right:50px !important;
+}
+.login-card .password-field > .password-toggle{
+  position:absolute !important;
+  inset:auto 7px auto auto !important;
+  top:50% !important;
+  transform:translateY(-50%) !important;
+  width:36px !important;
+  height:36px !important;
+  margin:0 !important;
+  padding:0 !important;
+  z-index:5 !important;
+  border:0 !important;
+  border-radius:10px !important;
+  background:transparent !important;
+  color:#9fb0c5 !important;
+}
+.login-card .password-field > .password-toggle:hover,
+.login-card .password-field > .password-toggle.is-visible{
+  background:rgba(255,255,255,.06) !important;
+  color:var(--gold2) !important;
+}
+
+/* Full-screen loading layer: dark blur, centered animation, never part of page flow. */
+#page-loader.page-loader{
+  position:fixed !important;
+  inset:0 !important;
+  width:100% !important;
+  height:100% !important;
+  min-height:100dvh !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  margin:0 !important;
+  padding:0 !important;
+  z-index:2147483000 !important;
+  pointer-events:none !important;
+  background:rgba(3,10,19,.58) !important;
+  -webkit-backdrop-filter:blur(5px) !important;
+  backdrop-filter:blur(5px) !important;
+  opacity:1 !important;
+  visibility:visible !important;
+  transition:opacity .14s ease, visibility .14s ease !important;
+}
+#page-loader.page-loader.is-hidden{
+  opacity:0 !important;
+  visibility:hidden !important;
+}
+#page-loader .page-loader-disc{
+  position:relative !important;
+  flex:0 0 auto !important;
+  width:96px !important;
+  height:96px !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  border-radius:50% !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  background:#dff4f5 !important;
+  border:1px solid rgba(240,216,155,.34) !important;
+  box-shadow:0 18px 55px rgba(0,0,0,.52) !important;
+}
+#page-loader .page-loader-disc img{
+  display:block !important;
+  width:128px !important;
+  height:96px !important;
+  max-width:none !important;
+  flex:none !important;
+  margin:0 !important;
+  padding:0 !important;
+  object-fit:cover !important;
+  object-position:50% 50% !important;
+  transform:none !important;
+}
+
+/* Desktop sidebar remains visually fixed while main content scrolls. */
+@media (min-width:1051px){
+  .sidebar{
+    position:fixed !important;
+    inset:0 auto 0 0 !important;
+    width:264px !important;
+    height:100dvh !important;
+    overflow:hidden !important;
+  }
+  .app-shell{
+    grid-template-columns:264px minmax(0,1fr) !important;
+  }
+  .app-shell > .main{
+    grid-column:2 !important;
+    min-width:0 !important;
+  }
+}
+
+/* Audit Log: one header row, one data row per event. */
+.audit-table-wrap{
+  width:100%;
+  overflow-x:auto;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:rgba(255,255,255,.012);
+}
+.audit-table{
+  width:100%;
+  min-width:900px;
+  border-collapse:collapse;
+  table-layout:fixed;
+}
+.audit-table th{
+  padding:12px 14px;
+  text-align:left;
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:#8194aa;
+  background:rgba(255,255,255,.025);
+  border-bottom:1px solid var(--line);
+}
+.audit-table th:nth-child(1){width:32%}
+.audit-table th:nth-child(2){width:20%}
+.audit-table th:nth-child(3){width:30%}
+.audit-table th:nth-child(4){width:18%}
+.audit-table td{
+  padding:13px 14px;
+  vertical-align:middle;
+  border-bottom:1px solid var(--line);
+  font-size:11px;
+  line-height:1.45;
+  overflow-wrap:anywhere;
+}
+.audit-table tbody tr:last-child td{border-bottom:0}
+.audit-table td > small,
+.audit-action-cell small{
+  display:block;
+  margin-top:4px;
+  color:var(--muted);
+  font-size:10px;
+  font-weight:400;
+}
+.audit-action-cell{
+  display:grid;
+  grid-template-columns:34px minmax(0,1fr);
+  align-items:start;
+  gap:10px;
+}
+.audit-action-cell .audit-icon{
+  margin:0;
+}
+.audit-table time{white-space:nowrap}
+
+@media(max-width:700px){
+  #page-loader .page-loader-disc{
+    width:88px !important;
+    height:88px !important;
+  }
+  #page-loader .page-loader-disc img{
+    width:118px !important;
+    height:88px !important;
+  }
+  .audit-table{min-width:760px}
+}
+

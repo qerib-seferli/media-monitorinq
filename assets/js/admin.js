@@ -238,10 +238,48 @@ function auditDetails(row) {
 function renderAudit() {
   const el = document.querySelector('#audit-list');
   if (!el) return;
-  el.innerHTML = auditRows.map(x => {
-    const actor = auditActor(x);
-    return `<article class="audit-card"><div class="audit-main"><span class="audit-icon">✓</span><div><strong>${escapeHtml(x.action || 'Sistem əməliyyatı')}</strong><p>${escapeHtml(auditDetails(x))}</p></div></div><dl class="audit-meta"><div><dt>Kim</dt><dd>${escapeHtml(actor.name)}${actor.email && actor.email !== actor.name ? `<small>${escapeHtml(actor.email)}</small>` : ''}</dd></div><div><dt>Hədəf</dt><dd>${escapeHtml(auditTarget(x))}</dd></div><div><dt>Nə vaxt</dt><dd>${fmtDate(x.created_at)}</dd></div></dl></article>`;
-  }).join('') || '<div class="empty">Audit qeydi yoxdur.</div>';
+
+  if (!auditRows.length) {
+    el.innerHTML = '<div class="empty">Audit qeydi yoxdur.</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="audit-table-wrap">
+      <table class="audit-table">
+        <thead>
+          <tr>
+            <th>Əməliyyat</th>
+            <th>Kim</th>
+            <th>Hədəf</th>
+            <th>Nə vaxt</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${auditRows.map(x => {
+            const actor = auditActor(x);
+            const actorText = actor.email && actor.email !== actor.name
+              ? `${escapeHtml(actor.name)}<small>${escapeHtml(actor.email)}</small>`
+              : escapeHtml(actor.name);
+            return `
+              <tr>
+                <td>
+                  <div class="audit-action-cell">
+                    <span class="audit-icon">✓</span>
+                    <div>
+                      <strong>${escapeHtml(x.action || 'Sistem əməliyyatı')}</strong>
+                      <small>${escapeHtml(auditDetails(x))}</small>
+                    </div>
+                  </div>
+                </td>
+                <td>${actorText}</td>
+                <td>${escapeHtml(auditTarget(x))}</td>
+                <td><time>${fmtDate(x.created_at)}</time></td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 function bindDynamicActions() {

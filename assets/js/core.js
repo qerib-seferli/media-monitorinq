@@ -76,37 +76,64 @@ export function getCachedProfile() {
   try { return JSON.parse(sessionStorage.getItem('mm.cachedProfile') || 'null'); } catch { return null; }
 }
 
+let pageLoaderTimer = null;
+
 export function showPageLoader() {
   let loader = document.querySelector('#page-loader');
   if (!loader) {
     loader = document.createElement('div');
     loader.id = 'page-loader';
-    loader.className = 'page-loader';
-    loader.innerHTML = '<span class="page-loader-disc"><img src="./assets/img/loading.gif" alt="Yüklənir"></span>';
+    loader.className = 'page-loader is-hidden';
+    loader.setAttribute('aria-hidden', 'true');
+    loader.innerHTML = '<span class="page-loader-disc"><img src="./assets/img/loading.gif" alt=""></span>';
     document.body.appendChild(loader);
   }
+
+  if (pageLoaderTimer) clearTimeout(pageLoaderTimer);
   loader.classList.remove('is-hidden');
+  loader.setAttribute('aria-hidden', 'false');
+
+  // Heç bir route/fetch loader-i ekranda ilişdirib saxlamasın.
+  pageLoaderTimer = setTimeout(() => hidePageLoader(), 4500);
 }
 
 export function hidePageLoader() {
+  if (pageLoaderTimer) {
+    clearTimeout(pageLoaderTimer);
+    pageLoaderTimer = null;
+  }
   const loader = document.querySelector('#page-loader');
   if (!loader) return;
   loader.classList.add('is-hidden');
+  loader.setAttribute('aria-hidden', 'true');
 }
 
 function installNavigationLoader() {
   if (window.__mmNavigationLoaderInstalled) return;
   window.__mmNavigationLoaderInstalled = true;
+
   document.addEventListener('click', (event) => {
     const a = event.target.closest?.('a[href]');
     if (!a || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const href = a.getAttribute('href') || '';
-    if (!href || href.startsWith('#') || href.startsWith('javascript:') || a.target === '_blank' || a.hasAttribute('download')) return;
+    if (!href || href.startsWith('javascript:') || a.target === '_blank' || a.hasAttribute('download')) return;
+
     try {
       const target = new URL(a.href, location.href);
-      if (target.origin === location.origin) showPageLoader();
+      if (target.origin !== location.origin) return;
+
+      // Eyni HTML daxilində hash-route dəyişəndə tam səhifə loader-i göstərilmir.
+      if (target.pathname === location.pathname && target.search === location.search) return;
+
+      showPageLoader();
     } catch {}
   }, true);
+
+  window.addEventListener('pageshow', hidePageLoader);
+  window.addEventListener('load', hidePageLoader);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) hidePageLoader();
+  });
 }
 
 installNavigationLoader();
