@@ -13,14 +13,27 @@ async function load(){
   if(error){list.innerHTML=`<div class="empty">${escapeHtml(error.message)}</div>`;return;}
   rows=data||[];render();
 }
+function sourceStateBadge(m){
+  const state=String(m.source_status||'active');
+  if(state==='removed')return '<span class="badge danger">Mənbədən silinib</span>';
+  if(state==='unavailable')return '<span class="badge warn">Mənbədə əlçatan deyil</span>';
+  return '<span class="badge success">Mənbədə aktivdir</span>';
+}
+function sourceStateText(m){
+  const state=String(m.source_status||'active');
+  if(state==='removed')return 'Orijinal material mənbədən silinib. Arxiv qeydi sistemdə saxlanılır.';
+  if(state==='unavailable')return 'Orijinal material hazırda açıq şəkildə əlçatan deyil. Bu, silinmə, məxfilik və ya giriş məhdudiyyəti ola bilər.';
+  return 'Orijinal material son yoxlamada mənbədə əlçatan olub.';
+}
+
 function render(){
-  list.innerHTML=rows.length?rows.map(m=>`<article class="mention-card"><img class="thumb" src="${m.mention_media?.[0]?.url||'./assets/img/icon.svg'}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.summary||m.original_text||'')}</p><div class="mention-meta"><span class="badge info">${escapeHtml(m.source_platform||'Web')}</span><span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">${fmtDate(m.detected_at)}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">Orijinalı aç</a>`:''}</div></article>`).join(''):'<div class="card empty">Nəticə tapılmadı.</div>';
+  list.innerHTML=rows.length?rows.map(m=>`<article class="mention-card"><img class="thumb" src="${m.mention_media?.[0]?.url||'./assets/img/icon.svg'}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.summary||m.original_text||'')}</p><div class="mention-meta"><span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">${fmtDate(m.detected_at)}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">Orijinalı aç</a>`:''}</div></article>`).join(''):'<div class="card empty">Nəticə tapılmadı.</div>';
   document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openDetail(b.dataset.open));
 }
 function openDetail(id){
   const m=rows.find(x=>x.id===id);if(!m)return;
   const media=(m.mention_media||[]).map(x=>`<img src="${x.url}" data-media="${x.url}" style="width:100%;max-height:260px;object-fit:cover;border-radius:14px;cursor:zoom-in" alt="media">`).join('');
-  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal"><div class="modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close">✕</button></div><div class="grid grid-2"><div><strong>Platforma</strong><p class="muted">${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Aşkarlanıb</strong><p class="muted">${fmtDate(m.detected_at)}</p></div></div><h3>AI xülasəsi</h3><p>${escapeHtml(m.summary||'Xülasə yoxdur.')}</p><h3>Orijinal mətn</h3><p class="muted" style="white-space:pre-wrap">${escapeHtml(m.original_text||'Mətn saxlanmayıb.')}</p>${media?`<h3>Screenshot / Media</h3><div class="grid grid-2">${media}</div>`:''}<div class="toolbar" style="margin-top:18px">${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">🔗 Orijinal paylaşımı aç</a>`:''}</div></div></div>`;
+  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal"><div class="modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close">✕</button></div><div class="grid grid-2"><div><strong>Platforma</strong><p class="muted">${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Aşkarlanıb</strong><p class="muted">${fmtDate(m.detected_at)}</p></div></div><div class="card" style="padding:12px 14px;margin:12px 0"><div class="mention-meta" style="margin-bottom:6px">${sourceStateBadge(m)}</div><p class="muted" style="margin:0">${escapeHtml(sourceStateText(m))}</p>${m.last_verified_at?`<p class="muted" style="margin:6px 0 0">Son mənbə yoxlaması: ${fmtDate(m.last_verified_at)}</p>`:''}</div><h3>AI xülasəsi</h3><p>${escapeHtml(m.summary||'Xülasə yoxdur.')}</p><h3>Orijinal mətn</h3><p class="muted" style="white-space:pre-wrap">${escapeHtml(m.original_text||'Mətn saxlanmayıb.')}</p>${media?`<h3>Screenshot / Media</h3><div class="grid grid-2">${media}</div>`:''}<div class="toolbar" style="margin-top:18px">${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">🔗 Orijinal paylaşımı aç</a>`:''}</div></div></div>`;
   document.querySelector('#detail-close').onclick=()=>document.querySelector('#modal-root').innerHTML='';
   document.querySelector('#detail-bg').onclick=e=>{if(e.target.id==='detail-bg')document.querySelector('#modal-root').innerHTML=''};
   document.querySelectorAll('[data-media]').forEach(x=>x.onclick=()=>openViewer(x.dataset.media));

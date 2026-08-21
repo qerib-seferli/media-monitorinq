@@ -9,6 +9,7 @@ Deno.serve(async (req) => {
     const url = Deno.env.get('SUPABASE_URL')!;
     const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const admin = createClient(url, service);
+    const options = await readRunOptions(req);
     const expected = Deno.env.get('MONITOR_SECRET');
     const secretOk = Boolean(expected && req.headers.get('x-monitor-secret') === expected);
     if (!secretOk) {
@@ -40,7 +41,7 @@ Deno.serve(async (req) => {
         let newsCount = 0;
         for (const item of rssItems.slice(0,30)) newsCount += await save(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords);
         inserted += newsCount;
-        details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount });
+        details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, ...(options.debug ? { sample_results:debugSamples(rssItems, org, lowerKeywords, 5) } : {}) });
       } catch (e) {
         failures++;
         console.error('google-news',org.short_name,e);
@@ -58,7 +59,7 @@ Deno.serve(async (req) => {
           webCount += await save(admin,org,{platform,url:'https://www.bing.com/search'},item,lowerKeywords);
         }
         inserted += webCount;
-        details.push({ organization:org.short_name, source:'Public Web Index', found:webItems.length, inserted:webCount });
+        details.push({ organization:org.short_name, source:'Public Web Index', found:webItems.length, inserted:webCount, ...(options.debug ? { sample_results:debugSamples(webItems, org, lowerKeywords, 8) } : {}) });
       } catch (e) {
         failures++;
         console.error('public-web-index',org.short_name,e);
@@ -73,7 +74,7 @@ Deno.serve(async (req) => {
           socialCount += await save(admin,org,{platform,url:item.url || ''},item,lowerKeywords);
         }
         inserted += socialCount;
-        details.push({ organization:org.short_name, source:'Public Social Index', found:socialItems.length, inserted:socialCount });
+        details.push({ organization:org.short_name, source:'Public Social Index', found:socialItems.length, inserted:socialCount, ...(options.debug ? { sample_results:debugSamples(socialItems, org, lowerKeywords, 8) } : {}) });
       } catch (e) {
         failures++;
         console.error('public-social-index',org.short_name,e);
@@ -88,7 +89,7 @@ Deno.serve(async (req) => {
             const last = source.last_checked_at ? new Date(source.last_checked_at).getTime() : 0;
             // YouTube Search API quota sərf edir. Planlı iş 15 dəqiqədən bir işləsə də,
             // YouTube lane maksimum 6 saatdan bir çağırılır.
-            if (last && Date.now() - last < 6 * 3600 * 1000) {
+            if (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000) {
               details.push({ organization:org.short_name, source:'YouTube', skipped:'quota-window' });
               continue;
             }
@@ -132,7 +133,10 @@ Deno.serve(async (req) => {
               queries:discovery.queries,
               videos_found:discovery.items.length,
               comments_checked:discovery.comments.length,
-              inserted:count
+              inserted:count,
+              ...(options.debug ? {
+                sample_results:debugSamples([...discovery.items, ...discovery.comments], org, lowerKeywords, 10)
+              } : {})
             });
 } else if (
   platform === 'rss' ||
@@ -202,6 +206,18 @@ Deno.serve(async (req) => {
         } catch (e) {
           failures++;
           console.error('source',source.url,e);
+        }
+      }
+
+      if (options.verify_existing !== false) {
+        try {
+          const verification = await verifyExistingMentions(admin, org, Deno.env.get('YOUTUBE_API_KEY') || '');
+          if (verification.checked || options.debug) {
+            details.push({ organization:org.short_name, source:'Mənbə mövcudluğu yoxlaması', ...verification });
+          }
+        } catch (e) {
+          failures++;
+          console.error('source-verification', org.short_name, e);
         }
       }
     }
@@ -722,7 +738,13 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     relevance_score:ai?.relevance_score ? clamp(ai.relevance_score) : relevance,
     published_at:item.published_at || null,
     content_hash:hash,
-    raw_payload:item.raw || item
+    raw_payload:item.raw || item,
+    source_status:'active',
+    last_seen_at:new Date().toISOString(),
+    last_verified_at:new Date().toISOString(),
+    unavailable_since:null,
+    unavailable_reason:null,
+    consecutive_misses:0
   };
 
   const { data, error } = await admin.from('mentions')
@@ -730,7 +752,17 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     .select('id')
     .maybeSingle();
   if (error) throw error;
-  if (!data?.id) return 0;
+  if (!data?.id) {
+    await admin.from('mentions').update({
+      source_status:'active',
+      last_seen_at:new Date().toISOString(),
+      last_verified_at:new Date().toISOString(),
+      unavailable_since:null,
+      unavailable_reason:null,
+      consecutive_misses:0
+    }).eq('organization_id',org.id).eq('content_hash',hash);
+    return 0;
+  }
 
   if (item.image) {
     await admin.from('mention_media').insert({mention_id:data.id,media_type:'preview',url:item.image,captured_at:new Date().toISOString()});
@@ -739,6 +771,155 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     await admin.from('notifications').insert({organization_id:org.id,mention_id:data.id,title:'Yüksək prioritetli yeni qeyd',body:item.title || 'Yeni material',kind:'critical'});
   }
   return 1;
+}
+
+type RunOptions = { debug:boolean; force_youtube:boolean; verify_existing:boolean };
+
+async function readRunOptions(req:Request):Promise<RunOptions> {
+  if (req.method !== 'POST') return {debug:false,force_youtube:false,verify_existing:true};
+  try {
+    const text = await req.clone().text();
+    if (!text.trim()) return {debug:false,force_youtube:false,verify_existing:true};
+    const body = JSON.parse(text);
+    return {
+      debug:body?.debug === true,
+      force_youtube:body?.force_youtube === true,
+      verify_existing:body?.verify_existing !== false
+    };
+  } catch {
+    return {debug:false,force_youtube:false,verify_existing:true};
+  }
+}
+
+function debugSamples(items:Item[], org:any, keywords:string[], limit=6) {
+  const direct = [String(org.name||''),String(org.short_name||'')]
+    .map(x=>x.toLocaleLowerCase('az-AZ')).filter(Boolean);
+  return items.slice(0,limit).map(item=>{
+    const normalized = `${item.title || ''} ${item.text || ''}`.toLocaleLowerCase('az-AZ');
+    const matched = [...new Set([...direct,...keywords].filter(k=>k && normalized.includes(k)))];
+    return {
+      platform:inferPlatform(item.url || ''),
+      title:String(item.title || '').slice(0,180),
+      url:item.url || '',
+      accepted:matched.length > 0,
+      matched_terms:matched,
+      reason:matched.length ? 'uyğunluq-tapıldı' : 'açar-söz-uyğunluğu-yoxdur'
+    };
+  });
+}
+
+async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
+  const { data:rows, error } = await admin.from('mentions')
+    .select('id,source_platform,source_url,raw_payload,source_status,last_verified_at,consecutive_misses')
+    .eq('organization_id',org.id)
+    .in('source_status',['active','unavailable'])
+    .not('source_url','is',null)
+    .order('last_verified_at',{ascending:true,nullsFirst:true})
+    .limit(20);
+  if (error) throw error;
+
+  const candidates = rows || [];
+  let checked = 0, active = 0, removed = 0, unavailable = 0, unchanged = 0;
+  const youtubeRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()==='youtube');
+  const otherRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()!=='youtube');
+  const now = new Date().toISOString();
+
+  if (youtubeRows.length && youtubeKey) {
+    const ids = youtubeRows.map((row:any)=>extractYoutubeVideoId(row)).filter(Boolean).slice(0,50);
+    const uniqueIds = [...new Set(ids)];
+    const publicIds = new Set<string>();
+    if (uniqueIds.length) {
+      const endpoint = new URL('https://www.googleapis.com/youtube/v3/videos');
+      endpoint.searchParams.set('part','id,status');
+      endpoint.searchParams.set('id',uniqueIds.join(','));
+      endpoint.searchParams.set('key',youtubeKey);
+      const data = await fetchJsonWithRetry(endpoint.toString(),{},1);
+      for (const item of data?.items || []) publicIds.add(String(item.id));
+    }
+    for (const row of youtubeRows) {
+      const videoId = extractYoutubeVideoId(row);
+      if (!videoId) { unchanged++; continue; }
+      checked++;
+      if (publicIds.has(videoId)) {
+        active++;
+        await admin.from('mentions').update({source_status:'active',last_verified_at:now,last_seen_at:now,unavailable_since:null,unavailable_reason:null,consecutive_misses:0}).eq('id',row.id);
+      } else {
+        unavailable++;
+        await markUnavailable(admin,row,'youtube-not-public',now,false);
+      }
+    }
+  }
+
+  for (const row of otherRows) {
+    const sourceUrl = String(row.source_url || '').trim();
+    if (!sourceUrl) continue;
+    checked++;
+    const state = await probeSourceUrl(sourceUrl);
+    if (state.kind === 'active') {
+      active++;
+      await admin.from('mentions').update({source_status:'active',last_verified_at:now,last_seen_at:now,unavailable_since:null,unavailable_reason:null,consecutive_misses:0}).eq('id',row.id);
+    } else if (state.kind === 'removed') {
+      const nextMisses = Number(row.consecutive_misses || 0) + 1;
+      if (nextMisses >= 2) removed++;
+      else unavailable++;
+      await markUnavailable(admin,row,`http-${state.status}`,now,nextMisses >= 2);
+    } else if (state.kind === 'restricted') {
+      unavailable++;
+      await markUnavailable(admin,row,`http-${state.status}`,now,false);
+    } else {
+      unchanged++;
+      await admin.from('mentions').update({last_verified_at:now}).eq('id',row.id);
+    }
+  }
+
+  return {checked,active,removed,unavailable,unchanged};
+}
+
+function extractYoutubeVideoId(row:any):string {
+  const raw = row?.raw_payload || {};
+  const fromRaw = String(raw?.video_id || '');
+  if (fromRaw) return fromRaw;
+  try {
+    const u = new URL(String(row?.source_url || ''));
+    if (u.hostname.includes('youtu.be')) return u.pathname.replace(/^\//,'').split('/')[0] || '';
+    return u.searchParams.get('v') || '';
+  } catch { return ''; }
+}
+
+async function markUnavailable(admin:any,row:any,reason:string,now:string,confirmedRemoved:boolean) {
+  const misses = Number(row.consecutive_misses || 0) + 1;
+  await admin.from('mentions').update({
+    source_status:confirmedRemoved ? 'removed' : 'unavailable',
+    last_verified_at:now,
+    unavailable_since:row.source_status === 'active' ? now : undefined,
+    unavailable_reason:reason,
+    consecutive_misses:misses
+  }).eq('id',row.id);
+}
+
+async function probeSourceUrl(url:string):Promise<{kind:'active'|'removed'|'restricted'|'unknown';status:number}> {
+  const controller = new AbortController();
+  const timeout = setTimeout(()=>controller.abort(),8000);
+  try {
+    const response = await fetch(url,{
+      method:'GET',
+      redirect:'follow',
+      signal:controller.signal,
+      headers:{
+        'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/3.3)',
+        'accept':'text/html,application/xhtml+xml,*/*;q=0.8',
+        'range':'bytes=0-2048'
+      }
+    });
+    clearTimeout(timeout);
+    if (response.status === 404 || response.status === 410) return {kind:'removed',status:response.status};
+    if (response.status === 401 || response.status === 403) return {kind:'restricted',status:response.status};
+    if (response.ok || (response.status >= 300 && response.status < 400)) return {kind:'active',status:response.status};
+    return {kind:'unknown',status:response.status};
+  } catch {
+    clearTimeout(timeout);
+    return {kind:'unknown',status:0};
+  }
 }
 
 async function optionalAiAnalysis(org:any,item:Item,relevance:number,sentiment:string) {
