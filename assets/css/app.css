@@ -273,3 +273,56 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 @media(max-width:430px){
   .topbar{grid-template-columns:34px minmax(0,1fr) minmax(108px,auto)}.topbar-center strong{font-size:12px!important}.topbar-center span{font-size:7.5px!important}.profile-chip .profile-text{max-width:76px}.profile-chip .profile-text strong{font-size:9px}.profile-chip .profile-text span{font-size:7.5px}.avatar{width:32px;height:32px}.dashboard-head .page-actions .btn{min-width:142px}.profile-form-grid{grid-template-columns:1fr}.profile-photo-actions{grid-template-columns:1fr 1fr}.profile-actions{grid-template-columns:1fr 1fr}.notification-filters{gap:5px}.filter-chip{padding:6px 5px;font-size:10px}.admin-bottom-nav small{font-size:6.5px!important}.source-row a{max-width:58vw}
 }
+
+/* =========================================================
+   HEADER — idarə adı gerbin yanında, solda
+   Yalnız başlıq yerləşimi üçün override
+   ========================================================= */
+.topbar{
+  grid-template-columns:auto minmax(0,1fr) auto;
+  column-gap:12px;
+}
+.topbar-left{
+  min-width:0;
+}
+.topbar-kicker{
+  display:none !important;
+}
+.topbar-center{
+  justify-self:start;
+  text-align:left;
+  min-width:0;
+}
+.topbar-center strong,
+.topbar-center span{
+  text-align:left;
+}
+
+@media(max-width:1050px){
+  .topbar{
+    grid-template-columns:auto minmax(0,1fr) auto;
+    column-gap:9px;
+  }
+  .topbar-center{
+    justify-self:start;
+    text-align:left;
+  }
+}
+
+@media(max-width:700px){
+  .topbar{
+    grid-template-columns:auto minmax(0,1fr) auto;
+    column-gap:7px;
+  }
+  .topbar-center{
+    justify-self:start;
+    text-align:left;
+  }
+}
+
+@media(max-width:430px){
+  .topbar{
+    grid-template-columns:auto minmax(0,1fr) auto;
+  }
+}
+
