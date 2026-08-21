@@ -1,1 +1,45 @@
-<!doctype html><html lang="az"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Profil — Media Monitorinq</title><meta name="theme-color" content="#07111f"><link rel="manifest" href="./manifest.webmanifest"><link rel="stylesheet" href="./assets/css/app.css"><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script></head><body><div class="app-shell"><aside class="sidebar" id="sidebar"></aside><main class="main"><header class="topbar" id="topbar"></header><section class="page-head"><div><h1>Profil</h1><p>Şəxsi hesab, görünüş və təhlükəsizlik ayarları.</p></div></section><section class="grid grid-2"><div class="card"><h2 id="name"></h2><p class="muted" id="meta"></p><div class="field"><label>Telefon</label><input class="input" id="phone"></div><button class="btn" id="save">Yadda saxla</button></div><div class="card"><h2>Təhlükəsizlik</h2><div class="field"><label>Yeni şifrə</label><input class="input" type="password" id="pass" minlength="8"></div><div class="toolbar"><button class="btn secondary" id="password">Şifrəni dəyiş</button><button class="btn secondary" id="theme">Tema dəyiş</button><button class="btn danger" data-action="signout">Çıxış</button></div></div></section></main></div><nav class="bottom-nav" id="bottom-nav"></nav><div id="toast-stack"></div><script type="module" src="./assets/js/profile.js"></script></body></html>
+<!doctype html>
+<html lang="az">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Profil — Media Monitorinq</title>
+  <meta name="theme-color" content="#07111f">
+  <link rel="icon" href="./assets/img/icon-192.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./assets/css/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="main">
+      <header class="topbar" id="topbar"></header>
+      <section class="page-head"><div><h1>Profil</h1><p>Şəxsi məlumatlar, profil şəkli, görünüş və təhlükəsizlik.</p></div></section>
+      <section class="grid grid-2 profile-layout">
+        <article class="card profile-card">
+          <div class="profile-identity">
+            <button type="button" class="profile-avatar-large" id="profile-avatar" aria-label="Profil şəklini dəyiş"></button>
+            <div class="profile-identity-copy"><h2 id="name"></h2><p class="muted" id="meta"></p><span class="profile-image-hint">Şəkilə toxunaraq dəyişə bilərsiniz</span></div>
+          </div>
+          <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/webp" hidden>
+          <div class="profile-photo-actions"><button class="btn secondary" type="button" id="avatar-upload">Profil şəkli yüklə</button><button class="btn ghost hidden" type="button" id="avatar-remove">Şəkli sil</button></div>
+          <div class="profile-form-grid">
+            <div class="field"><label>E-mail</label><input class="input readonly-input" id="email" type="email" readonly aria-readonly="true"><small>E-mail yalnız Super Administrator tərəfindən idarə olunur.</small></div>
+            <div class="field"><label>Telefon</label><input class="input" id="phone" type="tel" inputmode="tel" placeholder="+994 50 000 00 00" autocomplete="tel"></div>
+          </div>
+          <div class="profile-save-row"><button class="btn" id="save">Məlumatları yadda saxla</button></div>
+        </article>
+        <article class="card profile-security">
+          <div class="section-head"><div><h2>Təhlükəsizlik</h2><p>Şifrənizi və tətbiqin görünüşünü idarə edin.</p></div></div>
+          <div class="field"><label>Yeni şifrə</label><input class="input" type="password" id="pass" minlength="8" autocomplete="new-password" placeholder="Ən az 8 simvol"></div>
+          <div class="profile-actions"><button class="btn secondary" id="password">Şifrəni dəyiş</button><button class="btn secondary" id="theme">Tema dəyiş</button><button class="btn danger" data-action="signout">Çıxış</button></div>
+        </article>
+      </section>
+    </main>
+  </div>
+  <nav class="bottom-nav" id="bottom-nav"></nav>
+  <div id="toast-stack"></div>
+  <script type="module" src="./assets/js/profile.js"></script>
+</body>
+</html>

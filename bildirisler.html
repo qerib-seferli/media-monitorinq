@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="az">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Bildirişlər — Media Monitorinq</title>
+  <meta name="theme-color" content="#07111f">
+  <link rel="icon" href="./assets/img/icon-192.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./assets/css/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="main">
+      <header class="topbar" id="topbar"></header>
+      <section class="page-head notifications-head">
+        <div><h1>Bildirişlər</h1><p>Yüksək prioritetli nəticələr və sistem məlumatları.</p></div>
+        <div class="notification-filters" role="group" aria-label="Bildiriş filtrləri">
+          <button class="filter-chip active" data-notification-filter="all">Hamısı</button>
+          <button class="filter-chip" data-notification-filter="critical">Kritik</button>
+          <button class="filter-chip" data-notification-filter="system">Sistem</button>
+        </div>
+      </section>
+      <section class="notification-list" id="notification-list"></section>
+    </main>
+  </div>
+  <nav class="bottom-nav" id="bottom-nav"></nav>
+  <div id="toast-stack"></div>
+  <script type="module" src="./assets/js/notifications.js"></script>
+</body>
+</html>

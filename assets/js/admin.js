@@ -183,7 +183,21 @@ function renderKeywords() {
 function renderSources() {
   const el = document.querySelector('#source-list');
   if (!el) return;
-  el.innerHTML = sources.map(x => `<div class="list-row source-row"><div><strong>${escapeHtml(x.platform || 'Web')}</strong><small>${escapeHtml(x.organizations?.short_name || '')}</small><a target="_blank" rel="noopener" href="${escapeHtml(x.url || '#')}">${escapeHtml(x.url || '')}</a></div><span class="badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span></div>`).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
+  const seen = new Set();
+  const visible = sources.filter(x => {
+    const orgKey = x.organization_id || 'global';
+    const rawUrl = String(x.url || '').trim();
+    const isGoogleNews = rawUrl.includes('news.google.com/rss/');
+    const key = isGoogleNews ? `${orgKey}|google-news-rss` : `${orgKey}|${rawUrl.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  el.innerHTML = visible.map(x => {
+    const rawUrl = String(x.url || '');
+    const platform = rawUrl.includes('news.google.com/rss/') ? 'Google News RSS' : (x.platform || 'Web');
+    return `<div class="list-row source-row"><div><strong>${escapeHtml(platform)}</strong><small>${escapeHtml(x.organizations?.short_name || '')}</small><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl)}</a></div><span class="badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span></div>`;
+  }).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
 }
 
 function renderBilling() {
@@ -236,7 +250,7 @@ async function invokeBackend(name, body) {
   if (error) {
     const raw = `${error.message || ''} ${error.context?.status || ''}`.toLowerCase();
     if (raw.includes('404') || raw.includes('not found') || raw.includes('failed to send')) {
-      return { data:null, error:new Error(`Sistem backend modulu (${name}) hələ Supabase-də aktiv deyil. Edge Functions deploy olunmalıdır.`) };
+      return { data:null, error:new Error('Sistem xidməti hazırda əlçatan deyil. Bir neçə saniyə sonra yenidən yoxlayın.') };
     }
   }
   return { data, error };
@@ -278,7 +292,7 @@ function modal(type, preset={}) {
     const posOptions = positionOptionsForOrg(defaultOrg, editing?.position_id || preset.position_id || '');
     const title = editing ? 'İstifadəçini redaktə et' : 'Yeni istifadəçi';
     const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Hesab yarat';
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat hesabı</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Təşkilat</label><select class="select" id="u-org" required>${orgs.map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">${editing ? 'Ad, soyad, e-mail, təşkilat, vəzifə və rol yenilənə bilər. Şifrə ayrıca “Şifrə” düyməsindən dəyişdirilir.' : 'Hesab yalnız seçilən təşkilatın məlumatlarını görəcək. Təşkilat xidməti dayandırılarsa bu hesab da avtomatik bloklanacaq.'}</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat hesabı</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Təşkilat</label><select class="select" id="u-org" required>${orgs.map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">${editing ? 'Ad, soyad, təşkilat, vəzifə və rol yenilənə bilər. E-mail dəyişdirilmir; şifrə ayrıca “Şifrə” düyməsindən dəyişdirilir.' : 'Hesab yalnız seçilən təşkilatın məlumatlarını görəcək. Təşkilat xidməti dayandırılarsa bu hesab da avtomatik bloklanacaq.'}</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     const orgSelect = document.querySelector('#u-org');
     orgSelect.onchange = () => { document.querySelector('#u-position').innerHTML = positionOptionsForOrg(orgSelect.value); };
     document.querySelector('#user-form').onsubmit = editing ? updateUser : createUser;
@@ -418,7 +432,18 @@ document.querySelector('#position-form').onsubmit = async e => { e.preventDefaul
 document.querySelector('#district-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('districts').insert({name:document.querySelector('#district-name').value.trim()}); toast(error?error.message:'Rayon əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
 document.querySelector('#village-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('villages').insert({district_id:document.querySelector('#village-district').value,name:document.querySelector('#village-name').value.trim()}); toast(error?error.message:'Kənd əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
 document.querySelector('#keyword-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('keywords').insert({organization_id:document.querySelector('#keyword-org').value,value:document.querySelector('#keyword-value').value.trim(),kind:'phrase',is_active:true}); toast(error?error.message:'Açar söz əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
-document.querySelector('#source-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('sources').insert({organization_id:document.querySelector('#source-org').value,platform:document.querySelector('#source-platform').value.trim(),url:document.querySelector('#source-url').value.trim(),is_active:true}); toast(error?error.message:'Mənbə əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
+document.querySelector('#source-form').onsubmit = async e => {
+  e.preventDefault();
+  const organization_id = document.querySelector('#source-org').value;
+  const platform = document.querySelector('#source-platform').value.trim();
+  const url = document.querySelector('#source-url').value.trim();
+  const googleNews = url.includes('news.google.com/rss/');
+  const duplicate = sources.some(s => s.organization_id === organization_id && (googleNews ? String(s.url||'').includes('news.google.com/rss/') : String(s.url||'').trim().toLowerCase() === url.toLowerCase()));
+  if (duplicate) return toast(googleNews ? 'Bu təşkilat üçün Google News RSS artıq mövcuddur.' : 'Bu mənbə artıq mövcuddur.', 'error');
+  const { error } = await supabase.from('sources').insert({organization_id,platform,url,is_active:true});
+  toast(error || 'Mənbə əlavə edildi',error?'error':'success');
+  if(!error){e.target.reset();await refresh();}
+};
 
 document.querySelector('#configure-barda').onclick = configureBarda;
 document.querySelector('#run-monitor').onclick = runMonitorNow;
