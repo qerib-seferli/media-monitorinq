@@ -48,36 +48,26 @@ Deno.serve(async (req) => {
       }
 
 
-      // Zero-cost broad public web discovery. Bing RSS is used as a best-effort
-      // index lane; it can also surface publicly indexed social posts.
+      // API-siz real web/xəbər discovery: GDELT DOC 2.0.
+      // Bing RSS-in qeyri-dəqiq nəticələri production axınından çıxarılıb.
       try {
         checked++;
-        const webItems = await bingWebItems(org, keywords, false);
+        const webItems = await gdeltNewsItems(org, keywords);
         let webCount = 0;
-        for (const item of webItems.slice(0,30)) {
-          const platform = inferPlatform(item.url || '');
-          webCount += await save(admin,org,{platform,url:'https://www.bing.com/search'},item,lowerKeywords);
+        for (const item of webItems.slice(0,60)) {
+          webCount += await save(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords);
         }
         inserted += webCount;
-        details.push({ organization:org.short_name, source:'Public Web Index', found:webItems.length, inserted:webCount, ...(options.debug ? { sample_results:debugSamples(webItems, org, lowerKeywords, 8) } : {}) });
+        details.push({
+          organization:org.short_name,
+          source:'GDELT Web / Xəbər',
+          found:webItems.length,
+          inserted:webCount,
+          ...(options.debug ? { sample_results:debugSamples(webItems, org, lowerKeywords, 10) } : {})
+        });
       } catch (e) {
         failures++;
-        console.error('public-web-index',org.short_name,e);
-      }
-
-      try {
-        checked++;
-        const socialItems = await bingWebItems(org, keywords, true);
-        let socialCount = 0;
-        for (const item of socialItems.slice(0,30)) {
-          const platform = inferPlatform(item.url || '');
-          socialCount += await save(admin,org,{platform,url:item.url || ''},item,lowerKeywords);
-        }
-        inserted += socialCount;
-        details.push({ organization:org.short_name, source:'Public Social Index', found:socialItems.length, inserted:socialCount, ...(options.debug ? { sample_results:debugSamples(socialItems, org, lowerKeywords, 8) } : {}) });
-      } catch (e) {
-        failures++;
-        console.error('public-social-index',org.short_name,e);
+        console.error('gdelt-web-news',org.short_name,e);
       }
 
       for (const source of sources) {
@@ -101,7 +91,7 @@ Deno.serve(async (req) => {
             }
 
             // Əgər bu təşkilat üçün hələ YouTube qeydi yoxdursa, ilk real işə düşmədə
-            // son 30 günü geri oxuyuruq. Sonrakı işlər isə yalnız yeni intervalı yoxlayır.
+            // ilk işə düşmədə son 12 ayı geri oxuyuruq. Sonrakı işlər isə yalnız yeni intervalı yoxlayır.
             const { count: existingYoutubeCount } = await admin
               .from('mentions')
               .select('id', { count:'exact', head:true })
@@ -228,134 +218,124 @@ Deno.serve(async (req) => {
   }
 });
 
-async function googleNewsItems(
-  org: any,
-  keywords: string[]
-): Promise<Item[]> {
-  const strong = [
-    org.short_name,
-    org.name,
-    ...keywords
-  ]
-    .filter(Boolean)
-    .map((v: string) => String(v).trim())
-    .filter(
-      (v: string, i: number, a: string[]) =>
-        a.indexOf(v) === i
-    )
-    .slice(0, 5);
+async function googleNewsItems(org:any, keywords:string[]):Promise<Item[]> {
+  const queries = buildDiscoveryQueries(org, keywords, 5);
+  const all:Item[] = [];
 
-  const query = strong
-    .map((v: string) => `"${v.replaceAll('"', '')}"`)
-    .join(' OR ');
+  for (const query of queries) {
+    const googleUrl =
+      `https://news.google.com/rss/search` +
+      `?q=${encodeURIComponent(query)}` +
+      `&hl=az&gl=AZ&ceid=AZ:az`;
 
-  const googleUrl =
-    `https://news.google.com/rss/search` +
-    `?q=${encodeURIComponent(query)}` +
-    `&hl=az&gl=AZ&ceid=AZ:az`;
-
-  try {
-    const xml = await fetchTextWithRetry(
-      googleUrl,
-      {
+    try {
+      const xml = await fetchTextWithRetry(googleUrl, {
         headers: {
-          'user-agent':
-            'Mozilla/5.0 (compatible; MediaMonitorinq/3.0; +https://github.com/)',
-          'accept':
-            'application/rss+xml, application/xml, text/xml, */*',
-          'accept-language': 'az,en;q=0.8'
+          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/4.0)',
+          'accept':'application/rss+xml, application/xml, text/xml, */*',
+          'accept-language':'az,en;q=0.8'
         }
-      },
-      3
-    );
-
-    const items = parseRss(xml);
-
-    if (items.length) {
-      return items;
+      }, 2);
+      all.push(...parseRss(xml).map(item=>({
+        ...item,
+        raw:{...((item.raw as any) || {}), kind:'google_news', discovery_query:query}
+      })));
+    } catch (e) {
+      console.error('google-news-query', query, e);
     }
-  } catch (e) {
-    console.error(
-      'google-news-primary-failed',
-      org.short_name,
-      e
-    );
   }
 
-  // Pulsuz fallback
-  const fallbackQuery =
-    [org.short_name, 'suvarma']
-      .filter(Boolean)
-      .join(' ');
-
-  const bingUrl =
-    `https://www.bing.com/news/search` +
-    `?q=${encodeURIComponent(fallbackQuery)}` +
-    `&format=rss`;
-
-  try {
-    const xml = await fetchTextWithRetry(
-      bingUrl,
-      {
-        headers: {
-          'user-agent':
-            'Mozilla/5.0 (compatible; MediaMonitorinq/3.0)',
-          'accept':
-            'application/rss+xml, application/xml, text/xml, */*'
-        }
-      },
-      2
-    );
-
-    return parseRss(xml);
-  } catch (e) {
-    console.error(
-      'bing-news-fallback-failed',
-      org.short_name,
-      e
-    );
-
-    return [];
-  }
+  return dedupeItems(all);
 }
 
+async function gdeltNewsItems(org:any, keywords:string[]):Promise<Item[]> {
+  const queries = buildDiscoveryQueries(org, keywords, 5);
+  const all:Item[] = [];
 
-async function bingWebItems(org:any, keywords:string[], socialOnly=false):Promise<Item[]> {
-  const terms = [org.short_name, org.name, ...keywords]
-    .filter(Boolean)
-    .map((v:string)=>String(v).trim())
-    .filter((v:string,i:number,a:string[])=>a.indexOf(v)===i)
-    .slice(0,4);
+  for (const query of queries) {
+    try {
+      const endpoint = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
+      endpoint.searchParams.set('query', query);
+      endpoint.searchParams.set('mode', 'ArtList');
+      endpoint.searchParams.set('maxrecords', '25');
+      endpoint.searchParams.set('format', 'json');
+      endpoint.searchParams.set('sort', 'DateDesc');
+      endpoint.searchParams.set('timespan', '3months');
 
-  const phraseQuery = terms.map((v:string)=>`"${v.replaceAll('"','')}"`).join(' OR ');
-  const socialScope = socialOnly
-    ? ' (site:instagram.com OR site:tiktok.com OR site:linkedin.com OR site:x.com OR site:twitter.com OR site:youtube.com OR site:facebook.com)'
-    : '';
+      const data = await fetchJsonWithRetry(endpoint.toString(), {
+        headers:{
+          'user-agent':'MediaMonitorinq/4.0 (+public-news-monitoring)',
+          'accept':'application/json'
+        }
+      }, 2);
 
-  const searchUrl = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(`(${phraseQuery})${socialScope}`)}`;
-  const xml = await fetchTextWithRetry(searchUrl,{
-    headers:{
-      'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/3.1)',
-      'accept':'application/rss+xml, application/xml, text/xml, */*',
-      'accept-language':'az,en;q=0.8'
+      for (const article of data?.articles || []) {
+        const url = String(article?.url || '').trim();
+        const title = String(article?.title || '').trim();
+        if (!url || !title) continue;
+        all.push({
+          title,
+          text:`${article?.domain || ''} ${article?.language || ''} ${article?.sourcecountry || ''}`.trim(),
+          url,
+          published_at:gdeltDate(article?.seendate),
+          image:String(article?.socialimage || '').trim() || null,
+          author:String(article?.domain || '').trim() || null,
+          raw:{kind:'gdelt_article', discovery_query:query, ...article}
+        });
+      }
+    } catch (e) {
+      console.error('gdelt-query', query, e);
     }
-  },2);
+  }
 
-  return parseRss(xml).map(item=>({
-    ...item,
-    url:unwrapBingUrl(item.url || ''),
-    raw:{...((item.raw as any)||{}), discovery:socialOnly?'social-index':'web-index'}
-  }));
+  return dedupeItems(all);
 }
 
-function unwrapBingUrl(value:string) {
-  try {
-    const u = new URL(value);
-    const nested = u.searchParams.get('url');
-    return nested ? decodeURIComponent(nested) : value;
-  } catch {
-    return value;
+function buildDiscoveryQueries(org:any, keywords:string[], max=5):string[] {
+  const district = String(org.districts?.name || '').trim();
+  const shortName = String(org.short_name || '').trim();
+  const fullName = String(org.name || '').trim();
+  const candidates:string[] = [shortName];
+
+  const preferredTopics = ['suvarma','kanal','arx','su','fermer','susuz','su çatışmazlığı'];
+  for (const topic of preferredTopics) {
+    if (district) candidates.push(`${district} ${topic}`);
   }
+  if (fullName) candidates.push(fullName);
+
+  for (const value of keywords) {
+    const k = String(value || '').trim();
+    if (!k) continue;
+    if (district && normalizeForMatch(k).includes(normalizeForMatch(district))) candidates.push(k);
+  }
+
+  const seen = new Set<string>();
+  const out:string[] = [];
+  for (const candidate of candidates) {
+    const key = normalizeForMatch(candidate);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function dedupeItems(items:Item[]):Item[] {
+  const seen = new Set<string>();
+  return items.filter(item=>{
+    const key = String(item.url || '').trim() || normalizeForMatch(item.title || '');
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function gdeltDate(value:any):string|null {
+  const s = String(value || '').trim();
+  const m = s.match(/^(\d{4})(\d{2})(\d{2})T?(\d{2})(\d{2})(\d{2})Z?$/);
+  if (!m) return s || null;
+  return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`;
 }
 
 function inferPlatform(value:string) {
@@ -379,26 +359,12 @@ async function youtubeItems(
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
 
-  const usefulKeywords = keywords
-    .map((x:string)=>String(x || '').trim())
-    .filter(Boolean)
-    .filter((x:string)=>x.length >= 3 && x.length <= 70)
-    .filter((x:string)=>![shortName,fullName].includes(x))
-    .slice(0,4);
-
-  // Quota nəzarəti: hər təşkilat üçün maksimum 2 Search API sorğusu.
-  // 1) təşkilatın adı, 2) rayon + ən güclü monitorinq terminləri.
-  const queries = [
-    shortName || fullName,
-    [district, ...usefulKeywords.slice(0,2)].filter(Boolean).join(' ')
-  ]
-    .map((x:string)=>x.trim())
-    .filter(Boolean)
-    .filter((v:string,i:number,a:string[])=>a.indexOf(v)===i)
-    .slice(0,2);
+  // Hər anlayış ayrıca sorğudur. Bir neçə açar sözü bir uzun cümləyə
+  // birləşdirmək YouTube nəticələrini sıfırlayırdı.
+  const queries = buildDiscoveryQueries(org, keywords, 5);
 
   const lastMs = lastCheckedAt ? new Date(lastCheckedAt).getTime() : 0;
-  const backfillMs = 30 * 24 * 3600 * 1000;
+  const backfillMs = 365 * 24 * 3600 * 1000;
   const overlapMs = 2 * 3600 * 1000;
   const publishedAfter = new Date(
     lastMs && Number.isFinite(lastMs)
@@ -413,7 +379,7 @@ async function youtubeItems(
     endpoint.searchParams.set('part','snippet');
     endpoint.searchParams.set('type','video');
     endpoint.searchParams.set('maxResults','25');
-    endpoint.searchParams.set('order','date');
+    endpoint.searchParams.set('order', lastCheckedAt ? 'date' : 'relevance');
     endpoint.searchParams.set('publishedAfter',publishedAfter);
     endpoint.searchParams.set('q',q);
     endpoint.searchParams.set('relevanceLanguage','az');
@@ -492,7 +458,7 @@ async function youtubeItems(
         if (!commentId || !text) continue;
         comments.push({
           title:`YouTube şərhi — ${sn.authorDisplayName || 'istifadəçi'}`,
-          text,
+          text:`Video: ${item.title || ''}\nŞərh: ${text}`,
           url:`https://www.youtube.com/watch?v=${videoId}&lc=${encodeURIComponent(commentId)}`,
           published_at:sn.publishedAt || null,
           image:item.image || null,
@@ -701,13 +667,14 @@ async function pageItem(url:string, fallback:string):Promise<Item> {
 
 async function save(admin:any, org:any, source:any, item:Item, keywords:string[]) {
   if (!item.url) return 0;
-  const normalized = `${item.title || ''} ${item.text || ''}`.toLocaleLowerCase('az-AZ');
-  const direct = [String(org.name||''),String(org.short_name||'')].map(x=>x.toLocaleLowerCase('az-AZ')).filter(Boolean);
-  const matches = [...new Set([...direct,...keywords].filter(k=>k && normalized.includes(k)))];
-  if (!matches.length) return 0;
+  const match = evaluateMatch(org, item, keywords);
+  const normalized = match.normalized;
+  const direct = match.direct;
+  const matches = match.matches;
+  if (!match.accepted) return 0;
 
-  const negativeWords = ['şikayət','problem','su yoxdur','su gəlmir','verilmir','quruyur','narazı','etiraz','çatışmazlıq','susuz','kanal təmizlənmir'];
-  const positiveWords = ['təşəkkür','bərpa olundu','təmir edildi','su verildi','işlər başa çatdı'];
+  const negativeWords = ['sikayet','problem','su yoxdur','su gelmir','verilmir','quruyur','narazi','etiraz','catismazliq','susuz','kanal temizlenmir'];
+  const positiveWords = ['tesekkur','berpa olundu','temir edildi','su verildi','isler basa catdi'];
   const neg = negativeWords.some(x=>normalized.includes(x));
   const pos = !neg && positiveWords.some(x=>normalized.includes(x));
   const directHit = direct.some(x=>normalized.includes(x));
@@ -792,20 +759,83 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
 }
 
 function debugSamples(items:Item[], org:any, keywords:string[], limit=6) {
-  const direct = [String(org.name||''),String(org.short_name||'')]
-    .map(x=>x.toLocaleLowerCase('az-AZ')).filter(Boolean);
   return items.slice(0,limit).map(item=>{
-    const normalized = `${item.title || ''} ${item.text || ''}`.toLocaleLowerCase('az-AZ');
-    const matched = [...new Set([...direct,...keywords].filter(k=>k && normalized.includes(k)))];
+    const match = evaluateMatch(org,item,keywords);
     return {
       platform:inferPlatform(item.url || ''),
       title:String(item.title || '').slice(0,180),
       url:item.url || '',
-      accepted:matched.length > 0,
-      matched_terms:matched,
-      reason:matched.length ? 'uyğunluq-tapıldı' : 'açar-söz-uyğunluğu-yoxdur'
+      accepted:match.accepted,
+      matched_terms:match.matches,
+      reason:match.reason
     };
   });
+}
+
+function evaluateMatch(org:any, item:Item, keywords:string[]) {
+  const normalized = normalizeForMatch(`${item.title || ''} ${item.text || ''}`);
+  const direct = [String(org.name||''),String(org.short_name||'')]
+    .map(normalizeForMatch)
+    .filter(Boolean);
+  const normalizedKeywords = keywords.map(normalizeForMatch).filter(Boolean);
+  const directMatches = direct.filter(term=>normalized.includes(term));
+  const exactKeywordMatches = normalizedKeywords.filter(term=>normalized.includes(term));
+
+  const district = normalizeForMatch(String(org.districts?.name || ''));
+  const districtHit = Boolean(district && normalized.includes(district));
+  const stop = new Set([
+    ...district.split(' '),
+    'smsii','smsi','suvarma','sistemlerinin','sistemleri','istismari','idaresi','idare','berde'
+  ]);
+  const topicTokens = [...new Set(
+    normalizedKeywords.flatMap(term=>term.split(' '))
+      .filter(token=>token.length >= 2 && !stop.has(token))
+  )];
+  const topicHits = topicTokens.filter(token=>normalized.includes(token));
+  const raw:any = item.raw || {};
+  const discoveryQuery = normalizeForMatch(String(raw.discovery_query || ''));
+  const queryDistrictHit = Boolean(district && discoveryQuery.includes(district));
+  const queryTopicHit = topicTokens.some(token=>discoveryQuery.includes(token));
+  const trustedDiscovery = ['google_news','gdelt_article'].includes(String(raw.kind || '')) &&
+    (direct.some(term=>discoveryQuery.includes(term)) || (queryDistrictHit && queryTopicHit));
+
+  const accepted = directMatches.length > 0 || exactKeywordMatches.length > 0 || (districtHit && topicHits.length > 0) || trustedDiscovery;
+  const matches = [...new Set([
+    ...directMatches,
+    ...exactKeywordMatches,
+    ...(districtHit && topicHits.length ? topicHits.map(t=>`${district}+${t}`) : []),
+    ...(trustedDiscovery && discoveryQuery ? [`axtaris:${discoveryQuery}`] : [])
+  ])];
+
+  return {
+    accepted,
+    normalized,
+    direct,
+    matches,
+    reason:accepted
+      ? (directMatches.length ? 'təşkilat-adı-uyğunluğu'
+        : exactKeywordMatches.length ? 'açar-söz-uyğunluğu'
+        : (districtHit && topicHits.length) ? 'rayon-mövzu-uyğunluğu'
+        : 'mənbə-axtarış-uyğunluğu')
+      : (districtHit ? 'rayon-var-mövzu-yoxdur' : 'rayon-və-açar-söz-uyğunluğu-yoxdur')
+  };
+}
+
+function normalizeForMatch(value:string):string {
+  return String(value || '')
+    .toLocaleLowerCase('az-AZ')
+    .normalize('NFKD')
+    .replace(/[əƏ]/g,'e')
+    .replace(/[ıİ]/g,'i')
+    .replace(/[şŞ]/g,'s')
+    .replace(/[çÇ]/g,'c')
+    .replace(/[öÖ]/g,'o')
+    .replace(/[üÜ]/g,'u')
+    .replace(/[ğĞ]/g,'g')
+    .replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]+/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
 }
 
 async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
