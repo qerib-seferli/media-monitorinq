@@ -62,15 +62,53 @@ Deno.serve(async (req) => {
             for (const item of items) count += await save(admin,org,source,item,lowerKeywords);
             inserted += count;
             details.push({ organization:org.short_name, source:'YouTube', found:items.length, inserted:count });
-          } else if (platform === 'rss' || source.url?.match(/(\.xml|\.rss)(\?|$)/i) || String(source.url||'').includes('/rss')) {
-            const response = await fetch(source.url,{headers:{'user-agent':'MediaMonitorinq/2.0'}});
-            if (!response.ok) throw new Error(`RSS HTTP ${response.status}`);
-            const items = parseRss(await response.text());
-            let count = 0;
-            for (const item of items.slice(0,30)) count += await save(admin,org,source,item,lowerKeywords);
-            inserted += count;
-            details.push({ organization:org.short_name, source:source.url, found:items.length, inserted:count });
-          } else {
+} else if (
+  platform === 'rss' ||
+  source.url?.match(/(\.xml|\.rss)(\?|$)/i) ||
+  String(source.url || '').includes('/rss')
+) {
+  const sourceUrl = String(source.url || '').trim();
+
+  // Google News RSS artıq yuxarıdakı discovery lane-də yoxlanılır.
+  // Eyni mənbəni ikinci dəfə çağırmır.
+  if (sourceUrl.includes('news.google.com/rss/')) {
+    details.push({
+      organization: org.short_name,
+      source: sourceUrl,
+      skipped: 'duplicate-google-news-source'
+    });
+
+    await admin
+      .from('sources')
+      .update({ last_checked_at: new Date().toISOString() })
+      .eq('id', source.id);
+
+    continue;
+  }
+
+  const xml = await fetchTextWithRetry(sourceUrl, {
+    headers: {
+      'user-agent': 'Mozilla/5.0 MediaMonitorinq/3.0',
+      'accept': 'application/rss+xml, application/xml, text/xml, */*'
+    }
+  });
+
+  const items = parseRss(xml);
+
+  let count = 0;
+  for (const item of items.slice(0, 30)) {
+    count += await save(admin, org, source, item, lowerKeywords);
+  }
+
+  inserted += count;
+
+  details.push({
+    organization: org.short_name,
+    source: sourceUrl,
+    found: items.length,
+    inserted: count
+  });
+} else {
             const item = await pageItem(source.url, source.name || source.url);
             inserted += await save(admin,org,source,item,lowerKeywords);
           }
@@ -89,17 +127,95 @@ Deno.serve(async (req) => {
   }
 });
 
-async function googleNewsItems(org:any, keywords:string[]):Promise<Item[]> {
-  const strong = [org.short_name, org.name, ...keywords]
+async function googleNewsItems(
+  org: any,
+  keywords: string[]
+): Promise<Item[]> {
+  const strong = [
+    org.short_name,
+    org.name,
+    ...keywords
+  ]
     .filter(Boolean)
-    .filter((v:string,i:number,a:string[])=>a.indexOf(v)===i)
-    .slice(0,6);
-  // Separate phrases with OR so one huge AND-query does not miss relevant mentions.
-  const query = strong.map((v:string)=>`"${v.replaceAll('"','')}"`).join(' OR ');
-  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=az&gl=AZ&ceid=AZ:az`;
-  const response = await fetch(url,{headers:{'user-agent':'MediaMonitorinq/2.0'}});
-  if (!response.ok) throw new Error(`Google News RSS HTTP ${response.status}`);
-  return parseRss(await response.text());
+    .map((v: string) => String(v).trim())
+    .filter(
+      (v: string, i: number, a: string[]) =>
+        a.indexOf(v) === i
+    )
+    .slice(0, 5);
+
+  const query = strong
+    .map((v: string) => `"${v.replaceAll('"', '')}"`)
+    .join(' OR ');
+
+  const googleUrl =
+    `https://news.google.com/rss/search` +
+    `?q=${encodeURIComponent(query)}` +
+    `&hl=az&gl=AZ&ceid=AZ:az`;
+
+  try {
+    const xml = await fetchTextWithRetry(
+      googleUrl,
+      {
+        headers: {
+          'user-agent':
+            'Mozilla/5.0 (compatible; MediaMonitorinq/3.0; +https://github.com/)',
+          'accept':
+            'application/rss+xml, application/xml, text/xml, */*',
+          'accept-language': 'az,en;q=0.8'
+        }
+      },
+      3
+    );
+
+    const items = parseRss(xml);
+
+    if (items.length) {
+      return items;
+    }
+  } catch (e) {
+    console.error(
+      'google-news-primary-failed',
+      org.short_name,
+      e
+    );
+  }
+
+  // Pulsuz fallback
+  const fallbackQuery =
+    [org.short_name, 'suvarma']
+      .filter(Boolean)
+      .join(' ');
+
+  const bingUrl =
+    `https://www.bing.com/news/search` +
+    `?q=${encodeURIComponent(fallbackQuery)}` +
+    `&format=rss`;
+
+  try {
+    const xml = await fetchTextWithRetry(
+      bingUrl,
+      {
+        headers: {
+          'user-agent':
+            'Mozilla/5.0 (compatible; MediaMonitorinq/3.0)',
+          'accept':
+            'application/rss+xml, application/xml, text/xml, */*'
+        }
+      },
+      2
+    );
+
+    return parseRss(xml);
+  } catch (e) {
+    console.error(
+      'bing-news-fallback-failed',
+      org.short_name,
+      e
+    );
+
+    return [];
+  }
 }
 
 async function youtubeItems(org:any, keywords:string[], key:string):Promise<Item[]> {
@@ -119,6 +235,72 @@ async function youtubeItems(org:any, keywords:string[], key:string):Promise<Item
     raw:x
   }));
 }
+
+
+async function fetchTextWithRetry(
+  url: string,
+  init: RequestInit = {},
+  maxAttempts = 3
+): Promise<string> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        12000
+      );
+
+      const response = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+        redirect: 'follow'
+      });
+
+      clearTimeout(timeout);
+
+      if (response.ok) {
+        return await response.text();
+      }
+
+      const retryable =
+        response.status === 429 ||
+        response.status === 502 ||
+        response.status === 503 ||
+        response.status === 504;
+
+      lastError = new Error(
+        `HTTP ${response.status} — ${url}`
+      );
+
+      if (!retryable) {
+        throw lastError;
+      }
+    } catch (e) {
+      lastError =
+        e instanceof Error
+          ? e
+          : new Error(String(e));
+    }
+
+    if (attempt < maxAttempts) {
+      const delay =
+        600 * attempt +
+        Math.floor(Math.random() * 400);
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, delay)
+      );
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error(`Fetch failed — ${url}`)
+  );
+}
+
 
 async function pageItem(url:string, fallback:string):Promise<Item> {
   const res = await fetch(url,{headers:{'user-agent':'MediaMonitorinq/2.0'}});
