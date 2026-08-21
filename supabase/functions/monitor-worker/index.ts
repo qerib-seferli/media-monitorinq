@@ -16,15 +16,27 @@ Deno.serve(async (req) => {
       const authHeader = req.headers.get('Authorization') || '';
       const anon = Deno.env.get('SUPABASE_ANON_KEY')!;
       const caller = createClient(url, anon, { global:{ headers:{ Authorization:authHeader } } });
-      const { data:{ user } } = await caller.auth.getUser();
+      const authResult = await caller.auth.getUser();
+      const user = authResult?.data?.user || null;
+      if (authResult?.error) throw new Error(`Auth yoxlaması uğursuz oldu: ${safeError(authResult.error)}`);
       if (!user) throw new Error('İcazəsiz monitor sorğusu');
-      const { data:profile } = await admin.from('profiles').select('system_role,is_active').eq('auth_user_id',user.id).maybeSingle();
+
+      const profileResult = await admin
+        .from('profiles')
+        .select('system_role,is_active')
+        .eq('auth_user_id',user.id)
+        .maybeSingle();
+      if (!profileResult) throw new Error('Profil sorğusuna cavab alınmadı');
+      if (profileResult.error) throw new Error(`Profil sorğusu uğursuz oldu: ${safeError(profileResult.error)}`);
+      const profile = profileResult.data;
       if (!profile?.is_active || profile.system_role !== 'super_admin') throw new Error('Yalnız Super Admin monitorinqi manual işə sala bilər');
     }
-    const { data:orgs, error } = await admin.from('organizations')
+    const orgResult = await admin.from('organizations')
       .select('id,name,short_name,district_id,districts(name),keywords(*),sources(*)')
       .in('service_status',['active','grace']);
-    if (error) throw error;
+    if (!orgResult) throw new Error('Təşkilat sorğusuna cavab alınmadı');
+    if (orgResult.error) throw new Error(`Təşkilatlar oxunmadı: ${safeError(orgResult.error)}`);
+    const orgs = orgResult.data || [];
 
     let checked = 0, inserted = 0, failures = 0;
     const details:any[] = [];
@@ -92,11 +104,14 @@ Deno.serve(async (req) => {
 
             // Əgər bu təşkilat üçün hələ YouTube qeydi yoxdursa, ilk real işə düşmədə
             // ilk işə düşmədə son 12 ayı geri oxuyuruq. Sonrakı işlər isə yalnız yeni intervalı yoxlayır.
-            const { count: existingYoutubeCount } = await admin
+            const youtubeCountResult = await admin
               .from('mentions')
               .select('id', { count:'exact', head:true })
               .eq('organization_id', org.id)
               .eq('source_platform', 'YouTube');
+            if (!youtubeCountResult) throw new Error('YouTube say sorğusuna cavab alınmadı');
+            if (youtubeCountResult.error) throw new Error(`YouTube say sorğusu uğursuz oldu: ${safeError(youtubeCountResult.error)}`);
+            const existingYoutubeCount = Number(youtubeCountResult.count || 0);
 
             const discovery = await youtubeItems(
               org,
@@ -214,9 +229,21 @@ Deno.serve(async (req) => {
 
     return json({ok:true,checked_sources:checked,new_mentions:inserted,failures,details});
   } catch (e) {
-    return json({ok:false,error:e.message || String(e)},400);
+    console.error('monitor-worker-fatal', e);
+    return json({ok:false,error:safeError(e)},400);
   }
 });
+
+
+function safeError(value:unknown):string {
+  if (value instanceof Error) return value.message || value.name || 'Naməlum xəta';
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const v:any = value;
+    return String(v.message || v.error_description || v.details || v.hint || v.code || 'Naməlum obyekt xətası');
+  }
+  return String(value ?? 'Naməlum xəta');
+}
 
 async function googleNewsItems(org:any, keywords:string[]):Promise<Item[]> {
   const queries = buildDiscoveryQueries(org, keywords, 5);
@@ -714,11 +741,13 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     consecutive_misses:0
   };
 
-  const { data, error } = await admin.from('mentions')
+  const upsertResult = await admin.from('mentions')
     .upsert(row,{onConflict:'organization_id,content_hash',ignoreDuplicates:true})
     .select('id')
     .maybeSingle();
-  if (error) throw error;
+  if (!upsertResult) throw new Error('Mention yazma sorğusuna cavab alınmadı');
+  if (upsertResult.error) throw new Error(`Mention yazılmadı: ${safeError(upsertResult.error)}`);
+  const data = upsertResult.data;
   if (!data?.id) {
     await admin.from('mentions').update({
       source_status:'active',
@@ -839,16 +868,17 @@ function normalizeForMatch(value:string):string {
 }
 
 async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
-  const { data:rows, error } = await admin.from('mentions')
+  const verifyResult = await admin.from('mentions')
     .select('id,source_platform,source_url,raw_payload,source_status,last_verified_at,consecutive_misses')
     .eq('organization_id',org.id)
     .in('source_status',['active','unavailable'])
     .not('source_url','is',null)
     .order('last_verified_at',{ascending:true,nullsFirst:true})
     .limit(20);
-  if (error) throw error;
+  if (!verifyResult) throw new Error('Mənbə yoxlama sorğusuna cavab alınmadı');
+  if (verifyResult.error) throw new Error(`Mənbə yoxlaması oxunmadı: ${safeError(verifyResult.error)}`);
 
-  const candidates = rows || [];
+  const candidates = verifyResult.data || [];
   let checked = 0, active = 0, removed = 0, unavailable = 0, unchanged = 0;
   const youtubeRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()==='youtube');
   const otherRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()!=='youtube');
