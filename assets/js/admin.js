@@ -142,14 +142,14 @@ function renderUsers() {
       <td>${escapeHtml(u.positions?.name || '—')}</td>
       <td>${escapeHtml(ROLE_LABELS[u.system_role] || u.system_role || '—')}</td>
       <td><span class="badge ${u.is_active ? 'ok' : 'danger'}">${u.is_active ? 'Aktiv' : 'Deaktiv'}</span></td>
-      <td>${u.system_role !== 'super_admin' ? `<div class="inline-actions"><button class="btn secondary btn-sm" data-user-toggle="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Blokla' : 'Aktiv et'}</button><button class="btn ghost btn-sm" data-reset="${u.auth_user_id}">Şifrə</button></div>` : '—'}</td>
+      <td>${u.system_role !== 'super_admin' ? `<div class="inline-actions"><button class="btn ghost btn-sm" data-user-edit="${u.id}">Redaktə et</button><button class="btn secondary btn-sm" data-user-toggle="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Blokla' : 'Aktiv et'}</button><button class="btn ghost btn-sm" data-reset="${u.auth_user_id}">Şifrə</button></div>` : '<span class="badge info">Qorunan hesab</span>'}</td>
     </tr>`).join('') || '<tr><td colspan="6" class="empty">İstifadəçi yoxdur.</td></tr>';
 
   mobile.innerHTML = users.map(u => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(userName(u))}</strong><small>${escapeHtml(u.email || '')}</small></div><span class="badge ${u.is_active ? 'ok' : 'danger'}">${u.is_active ? 'Aktiv' : 'Deaktiv'}</span></div>
       <div class="record-grid"><div><span>Təşkilat</span><b>${escapeHtml(u.organizations?.short_name || 'Sistem')}</b></div><div><span>Vəzifə</span><b>${escapeHtml(u.positions?.name || '—')}</b></div><div><span>Rol</span><b>${escapeHtml(ROLE_LABELS[u.system_role] || u.system_role || '—')}</b></div></div>
-      ${u.system_role !== 'super_admin' ? `<div class="record-actions two"><button class="btn secondary" data-user-toggle="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Hesabı blokla' : 'Hesabı aktiv et'}</button><button class="btn ghost" data-reset="${u.auth_user_id}">Şifrəni yenilə</button></div>` : ''}
+      ${u.system_role !== 'super_admin' ? `<div class="record-actions"><button class="btn ghost" data-user-edit="${u.id}">Redaktə et</button><button class="btn secondary" data-user-toggle="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Blokla' : 'Aktiv et'}</button><button class="btn ghost" data-reset="${u.auth_user_id}">Şifrə</button></div>` : '<div class="record-actions"><span class="badge info">Super Admin qorunur</span></div>'}
     </article>`).join('') || '<div class="empty">İstifadəçi yoxdur.</div>';
 }
 
@@ -164,7 +164,11 @@ function fillSelects() {
 
 function renderCatalogs() {
   const p = document.querySelector('#position-list');
-  if (p) p.innerHTML = positions.map(x => `<span class="chip"><i></i>${escapeHtml(x.name)}${x.organization_id ? '<small>özəl</small>' : ''}</span>`).join('') || '<div class="empty compact">Vəzifə yoxdur.</div>';
+  if (p) {
+    const seen = new Set();
+    const visiblePositions = positions.filter(x => { const key = String(x.name || '').trim().toLocaleLowerCase('az-AZ'); if (seen.has(key)) return false; seen.add(key); return true; });
+    p.innerHTML = visiblePositions.map(x => `<span class="chip"><i></i>${escapeHtml(x.name)}</span>`).join('') || '<div class="empty compact">Vəzifə yoxdur.</div>';
+  }
   const l = document.querySelector('#location-list');
   if (l) l.innerHTML = districts.map(d => `
     <article class="location-row"><div class="location-title"><strong>${escapeHtml(d.name)}</strong><span>${(d.villages || []).length} məntəqə</span></div><div class="location-values">${(d.villages || []).map(v => `<span>${escapeHtml(v.name)}</span>`).join('') || '<em>Kənd əlavə edilməyib</em>'}</div></article>`).join('') || '<div class="empty">Rayon yoxdur.</div>';
@@ -198,6 +202,7 @@ function renderAudit() {
 function bindDynamicActions() {
   document.querySelectorAll('[data-org-toggle]').forEach(b => b.onclick = () => toggleOrg(b.dataset.orgToggle));
   document.querySelectorAll('[data-org-edit]').forEach(b => b.onclick = () => modal('org', { organization_id:b.dataset.orgEdit }));
+  document.querySelectorAll('[data-user-edit]').forEach(b => b.onclick = () => modal('user', { user_id:b.dataset.userEdit }));
   document.querySelectorAll('[data-user-toggle]').forEach(b => b.onclick = () => toggleUser(b.dataset.userToggle, b.dataset.active === 'true'));
   document.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => resetPassword(b.dataset.reset));
   document.querySelectorAll('[data-modal]').forEach(b => b.onclick = () => modal(b.dataset.modal));
@@ -246,8 +251,15 @@ async function resetPassword(authUserId) {
 }
 
 function positionOptionsForOrg(orgId, selected='') {
-  return '<option value="">Seçilməyib</option>' + positions
-    .filter(p => !p.organization_id || p.organization_id === orgId)
+  const candidates = positions.filter(p => !p.organization_id || p.organization_id === orgId);
+  const byName = new Map();
+  for (const p of candidates) {
+    const key = String(p.name || '').trim().toLocaleLowerCase('az-AZ');
+    const old = byName.get(key);
+    if (!old || (p.organization_id === orgId && old.organization_id !== orgId) || p.id === selected) byName.set(key, p);
+  }
+  return '<option value="">Seçilməyib</option>' + [...byName.values()]
+    .sort((a,b) => String(a.name).localeCompare(String(b.name), 'az'))
     .map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
 }
 
@@ -260,12 +272,16 @@ function modal(type, preset={}) {
     document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="org-form" data-org-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">${eyebrow}</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" value="${escapeHtml(editing?.name || '')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" value="${escapeHtml(editing?.short_name || '')}" required></div><div class="field"><label>Rayon</label><select class="select" id="org-district">${districts.map(d=>`<option value="${d.id}" ${editing?.district_id===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Aylıq xidmət (AZN)</label><input class="input" id="org-price" type="number" min="0" step="0.01" value="${Number(editing?.monthly_price || 0)}"></div><div class="field"><label>Növbəti ödəniş</label><input class="input" id="org-next" type="date" value="${editing?.next_payment_at ? String(editing.next_payment_at).slice(0,10) : ''}"></div><div class="field"><label>Xidmət statusu</label><select class="select" id="org-status"><option value="active" ${editing?.service_status==='active'?'selected':''}>Aktiv</option><option value="grace" ${editing?.service_status==='grace'?'selected':''}>Möhlət</option><option value="suspended" ${editing?.service_status==='suspended'?'selected':''}>Dayandırılıb</option><option value="archived" ${editing?.service_status==='archived'?'selected':''}>Arxiv</option></select></div></div><div class="modal-note">Aylıq qiymət, növbəti ödəniş, rayon və xidmət statusu buradan dəyişdirilir. Təşkilat dayandırıldıqda ona bağlı bütün aktiv istifadəçilərin girişinə avtomatik maneə qoyulur.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     document.querySelector('#org-form').onsubmit = saveOrg;
   } else {
-    const defaultOrg = preset.organization_id || orgs.find(o => o.short_name?.toLowerCase().includes('bərdə'))?.id || orgs[0]?.id || '';
-    const posOptions = positionOptionsForOrg(defaultOrg, preset.position_id || '');
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form"><div class="modal-head"><div><span class="eyebrow">Təşkilat hesabı</span><h2>Yeni istifadəçi</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" autocomplete="off" required></div><div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div><div class="field"><label>Təşkilat</label><select class="select" id="u-org" required>${orgs.map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${preset.system_role==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${preset.system_role==='manager'?'selected':''}>Menecer</option><option value="analyst">Analitik</option><option value="viewer">Baxış</option></select></div></div><div class="modal-note">Hesab yalnız seçilən təşkilatın məlumatlarını görəcək. Təşkilat xidməti dayandırılarsa bu hesab da avtomatik bloklanacaq.</div><div class="modal-actions"><button class="btn">Hesab yarat</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    const editing = preset.user_id ? users.find(u => u.id === preset.user_id) : null;
+    if (editing?.system_role === 'super_admin') return toast('Super Admin sistem hesabı redaktə edilə bilməz.', 'error');
+    const defaultOrg = editing?.organization_id || preset.organization_id || orgs.find(o => o.short_name?.toLowerCase().includes('bərdə'))?.id || orgs[0]?.id || '';
+    const posOptions = positionOptionsForOrg(defaultOrg, editing?.position_id || preset.position_id || '');
+    const title = editing ? 'İstifadəçini redaktə et' : 'Yeni istifadəçi';
+    const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Hesab yarat';
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat hesabı</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Təşkilat</label><select class="select" id="u-org" required>${orgs.map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">${editing ? 'Ad, soyad, e-mail, təşkilat, vəzifə və rol yenilənə bilər. Şifrə ayrıca “Şifrə” düyməsindən dəyişdirilir.' : 'Hesab yalnız seçilən təşkilatın məlumatlarını görəcək. Təşkilat xidməti dayandırılarsa bu hesab da avtomatik bloklanacaq.'}</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     const orgSelect = document.querySelector('#u-org');
     orgSelect.onchange = () => { document.querySelector('#u-position').innerHTML = positionOptionsForOrg(orgSelect.value); };
-    document.querySelector('#user-form').onsubmit = createUser;
+    document.querySelector('#user-form').onsubmit = editing ? updateUser : createUser;
   }
   document.querySelector('#close-modal').onclick = closeModal;
   document.querySelector('#cancel-modal').onclick = closeModal;
@@ -289,6 +305,23 @@ async function saveOrg(e) {
   const { error } = await query;
   toast(error ? error.message : (orgId ? 'Təşkilat məlumatları yeniləndi' : 'Təşkilat yaradıldı'), error ? 'error' : 'success');
   if (!error) { closeModal(); await refresh(); location.hash = 'organizations'; route(); }
+}
+
+async function updateUser(e) {
+  e.preventDefault();
+  const id = e.currentTarget.dataset.userId;
+  const target = users.find(u => u.id === id);
+  if (!target || target.system_role === 'super_admin') return toast('Super Admin sistem hesabı dəyişdirilə bilməz.', 'error');
+  const row = {
+    first_name:document.querySelector('#u-first').value.trim(),
+    last_name:document.querySelector('#u-last').value.trim(),
+    organization_id:document.querySelector('#u-org').value,
+    position_id:document.querySelector('#u-position').value || null,
+    system_role:document.querySelector('#u-role').value
+  };
+  const { error } = await supabase.from('profiles').update(row).eq('id', id).neq('system_role', 'super_admin');
+  toast(error ? error.message : 'İstifadəçi məlumatları yeniləndi', error ? 'error' : 'success');
+  if (!error) { closeModal(); await refresh(); location.hash = 'users'; route(); }
 }
 
 async function createUser(e) {
