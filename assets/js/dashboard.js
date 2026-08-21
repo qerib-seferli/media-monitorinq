@@ -1,11 +1,13 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
-import { supabase, escapeHtml, fmtDate, registerSW, friendlyError } from './core.js';
+import { supabase, escapeHtml, fmtDate, registerSW, friendlyError, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 
 registerSW();
+const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'dashboard'); showPageLoader();
 const ctx = await requireAuth();
 if (!ctx) throw new Error('auth');
 renderShell(ctx.profile,'dashboard');
+hidePageLoader();
 
 const fullName = `${ctx.profile.first_name || ''} ${ctx.profile.last_name || ''}`.trim() || 'İstifadəçi';
 document.querySelector('#hello').textContent = `Salam, ${fullName}`;

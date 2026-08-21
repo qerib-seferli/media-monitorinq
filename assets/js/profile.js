@@ -1,12 +1,14 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
-import { supabase, toast, avatarText } from './core.js';
+import { supabase, toast, avatarText, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 import { toggleTheme } from './theme.js';
 
+const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'profile'); showPageLoader();
 const ctx = await requireAuth();
 if (!ctx) throw new Error('auth');
 let profile = ctx.profile;
 renderShell(profile,'profile');
+hidePageLoader();
 
 const nameEl = document.querySelector('#name');
 const metaEl = document.querySelector('#meta');

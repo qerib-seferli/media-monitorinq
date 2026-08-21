@@ -1,10 +1,12 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
-import { supabase, escapeHtml, fmtDate, toast } from './core.js';
+import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 
+const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'notifications'); showPageLoader();
 const ctx = await requireAuth();
 if (!ctx) throw new Error('auth');
 renderShell(ctx.profile,'notifications');
+hidePageLoader();
 
 const list = document.querySelector('#notification-list');
 let rows = [];

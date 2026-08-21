@@ -27,7 +27,7 @@ function avatarMarkup(profile) {
 }
 
 export function renderShell(profile, active='dashboard') {
-  const orgName = profile?.organizations?.short_name || profile?.organizations?.name || 'Media Monitorinq';
+  const orgName = profile?.organizations?.short_name || profile?.organizations?.name || 'ADSEA';
   const isAdmin = profile?.system_role === 'super_admin';
   const fullName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim() || (isAdmin ? 'Super Administrator' : 'İstifadəçi');
   const position = profile?.positions?.name || (isAdmin ? 'Super Administrator' : 'İstifadəçi');
@@ -49,7 +49,7 @@ export function renderShell(profile, active='dashboard') {
 
   const sidebar = document.querySelector('#sidebar');
   if (sidebar) sidebar.innerHTML = `
-    <div class="brand"><div class="brand-mark">MM</div><div><strong>Media Monitorinq</strong><small>Rəqəmsal monitorinq</small></div></div>
+    <div class="brand"><div class="brand-mark brand-emblem"><img src="./assets/img/state-emblem.svg" alt="Azərbaycan gerbi"></div><div><strong>ADSEA</strong><small>Media Monitorinq</small></div></div>
     <nav class="nav">${nav.map(([href,iconKey,label,key])=>`<a href="${href}" class="${key===active?'active':''}">${icon(iconKey)}<span class="nav-label">${label}</span></a>`).join('')}</nav>
     <div class="sidebar-foot"><button class="sidebar-action" data-action="signout">${icon('signout')}<span>Çıxış</span></button></div>`;
 
@@ -59,7 +59,7 @@ export function renderShell(profile, active='dashboard') {
       ? `<button type="button" class="profile-chip profile-chip-button" id="profile-menu-toggle" aria-expanded="false"><span class="profile-text"><strong>${escapeHtml(fullName)}</strong><span>${escapeHtml(position)}</span></span>${avatarMarkup(profile)}</button><div class="profile-menu hidden" id="profile-menu"><div class="profile-menu-user"><strong>${escapeHtml(fullName)}</strong><span>${escapeHtml(position)}</span></div><button type="button" data-action="signout">${icon('signout')}<span>Çıxış</span></button></div>`
       : `<a class="profile-chip profile-link" href="./profile.html" aria-label="Profili aç"><span class="profile-text"><strong>${escapeHtml(fullName)}</strong><span>${escapeHtml(position)}</span></span>${avatarMarkup(profile)}</a>`;
     topbar.innerHTML = `
-      <div class="topbar-left"><img class="state-emblem" src="./assets/img/state-emblem.svg" alt="Azərbaycan gerbi"><span class="topbar-kicker">Rəqəmsal Media<br>Monitorinq</span></div>
+      <div class="topbar-left"><img class="state-emblem" src="./assets/img/state-emblem.svg" alt="Azərbaycan gerbi"></div>
       <div class="topbar-center"><strong>${escapeHtml(orgName)}</strong><span>Rəqəmsal Media Monitorinq Sistemi</span></div>
       <div class="topbar-profile">${profileControl}</div>`;
   }

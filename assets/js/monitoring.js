@@ -1,8 +1,8 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
-import { supabase, escapeHtml, fmtDate, toast } from './core.js';
+import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 
-const ctx=await requireAuth();if(!ctx)throw new Error('auth');renderShell(ctx.profile,'monitoring');
+const cachedProfile=getCachedProfile();if(cachedProfile)renderShell(cachedProfile,'monitoring');showPageLoader();const ctx=await requireAuth();if(!ctx)throw new Error('auth');renderShell(ctx.profile,'monitoring');hidePageLoader();
 const list=document.querySelector('#list'),platform=document.querySelector('#platform'),sentiment=document.querySelector('#sentiment');let rows=[];
 
 async function load(){

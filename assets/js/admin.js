@@ -1,7 +1,8 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
-import { supabase, escapeHtml, fmtDate, money, toast } from './core.js';
+import { supabase, escapeHtml, fmtDate, money, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 
+const cachedProfile=getCachedProfile(); if(cachedProfile?.system_role==='super_admin') renderShell(cachedProfile, location.hash.replace('#','')||'dashboard'); showPageLoader();
 const ctx = await requireAuth({ superAdmin: true });
 if (!ctx) throw new Error('auth');
 
@@ -44,6 +45,7 @@ function bindRouteLinks() {
 
 window.addEventListener('hashchange', route);
 route();
+hidePageLoader();
 
 async function refresh() {
   const results = await Promise.all([
@@ -207,10 +209,39 @@ function renderBilling() {
     <article class="billing-card"><div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div><div class="billing-amount">${money(o.monthly_price)}</div><div class="record-grid"><div><span>Növbəti ödəniş</span><b>${o.next_payment_at ? fmtDate(o.next_payment_at) : 'Təyin edilməyib'}</b></div><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div></div><div class="record-actions two"><button class="btn ghost" data-org-edit="${o.id}">Məlumatları redaktə et</button><button class="btn ${o.service_status === 'suspended' ? '' : 'secondary'}" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></div></article>`).join('') || '<div class="empty">Abunə qeydi yoxdur.</div>';
 }
 
+function auditActor(row) {
+  const actor = users.find(u => u.id === row.actor_profile_id || u.auth_user_id === row.actor_profile_id);
+  const name = actor ? userName(actor) : (row.actor_email || 'Sistem');
+  const email = row.actor_email || actor?.email || '';
+  return { name, email };
+}
+
+function auditTarget(row) {
+  const target = users.find(u => u.id === row.entity_id || u.auth_user_id === row.entity_id);
+  if (target) return `${userName(target)}${target.email ? ` • ${target.email}` : ''}`;
+  const d = row.details || {};
+  if (d.email) return `${d.email}${d.role ? ` • ${ROLE_LABELS[d.role] || d.role}` : ''}`;
+  if (row.entity_type || row.entity_id) return `${row.entity_type || 'qeyd'}${row.entity_id ? ` • ${row.entity_id}` : ''}`;
+  return '—';
+}
+
+function auditDetails(row) {
+  const d = row.details && typeof row.details === 'object' ? row.details : {};
+  const parts = [];
+  if (d.email) parts.push(`E-mail: ${d.email}`);
+  if (d.role) parts.push(`Rol: ${ROLE_LABELS[d.role] || d.role}`);
+  if (d.from || d.to) parts.push(`Dəyişiklik: ${d.from || '—'} → ${d.to || '—'}`);
+  if (d.status) parts.push(`Status: ${d.status}`);
+  return parts.join(' • ') || 'Əlavə məlumat qeydə alınmayıb.';
+}
+
 function renderAudit() {
   const el = document.querySelector('#audit-list');
   if (!el) return;
-  el.innerHTML = auditRows.map(x => `<div class="list-row audit-row"><div><strong>${escapeHtml(x.action)}</strong><small>${escapeHtml(x.actor_email || 'sistem')}</small></div><time>${fmtDate(x.created_at)}</time></div>`).join('') || '<div class="empty">Audit qeydi yoxdur.</div>';
+  el.innerHTML = auditRows.map(x => {
+    const actor = auditActor(x);
+    return `<article class="audit-card"><div class="audit-main"><span class="audit-icon">✓</span><div><strong>${escapeHtml(x.action || 'Sistem əməliyyatı')}</strong><p>${escapeHtml(auditDetails(x))}</p></div></div><dl class="audit-meta"><div><dt>Kim</dt><dd>${escapeHtml(actor.name)}${actor.email && actor.email !== actor.name ? `<small>${escapeHtml(actor.email)}</small>` : ''}</dd></div><div><dt>Hədəf</dt><dd>${escapeHtml(auditTarget(x))}</dd></div><div><dt>Nə vaxt</dt><dd>${fmtDate(x.created_at)}</dd></div></dl></article>`;
+  }).join('') || '<div class="empty">Audit qeydi yoxdur.</div>';
 }
 
 function bindDynamicActions() {
@@ -246,7 +277,9 @@ async function toggleUser(id, active) {
 }
 
 async function invokeBackend(name, body) {
-  const { data, error } = await supabase.functions.invoke(name, { body });
+  const { data:{ session } } = await supabase.auth.getSession();
+  const headers = session?.access_token ? { Authorization:`Bearer ${session.access_token}` } : {};
+  const { data, error } = await supabase.functions.invoke(name, { body, headers });
   if (error) {
     const raw = `${error.message || ''} ${error.context?.status || ''}`.toLowerCase();
     if (raw.includes('404') || raw.includes('not found') || raw.includes('failed to send')) {
