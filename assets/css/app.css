@@ -673,3 +673,44 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .report-toolbar{display:grid!important;grid-template-columns:minmax(130px,1fr) minmax(130px,1fr) minmax(130px,1fr) auto;max-width:760px!important;align-items:center}
 @media(max-width:900px){.monitor-filters{grid-template-columns:1fr 1fr}.report-toolbar{grid-template-columns:1fr 1fr!important}.report-toolbar .btn{grid-column:auto!important;width:100%!important}}
 @media(max-width:700px){.monitor-filters{grid-template-columns:1fr 1fr;width:100%}.monitor-filters #period{grid-column:1/-1}.detail-modal{padding:0 12px 14px}.detail-modal-head{padding:12px 0 9px}.detail-grid{grid-template-columns:1fr 1fr}.detail-actions{display:grid;grid-template-columns:1fr 1fr}.report-toolbar{grid-template-columns:1fr 1fr!important}.report-toolbar #report-period{grid-column:1/-1}.report-toolbar .btn{grid-column:2!important;width:100%!important}.location-values-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+
+/* v11 — monitorinq filtr sırası, dəqiq detal keçidi və hesabat idarələri */
+@media (min-width:901px){
+  .monitor-head{align-items:end}
+  .monitor-filters{
+    grid-template-columns:repeat(5,minmax(126px,1fr)) !important;
+    width:min(860px,100%) !important;
+    max-width:860px !important;
+    gap:8px !important;
+  }
+  .monitor-filters .select,.monitor-filters .input{min-width:0;height:42px;padding-top:8px;padding-bottom:8px}
+  .report-toolbar{
+    grid-template-columns:160px 150px 150px 120px !important;
+    width:auto !important;
+    max-width:none !important;
+    gap:8px !important;
+  }
+  .report-toolbar .select,.report-toolbar .input,.report-toolbar .btn{height:42px;min-width:0}
+}
+.comment-detail-grid>div{min-width:0}
+.mention-card .toolbar .btn.secondary{white-space:nowrap}
+
+@media(max-width:700px){
+  .monitor-filters{
+    grid-template-columns:1fr 1fr !important;
+    gap:8px !important;
+  }
+  .monitor-filters #period{grid-column:auto !important}
+  .monitor-filters #sentiment{grid-column:auto !important}
+  .monitor-filters .monitor-date{min-width:0 !important}
+  .report-toolbar{
+    grid-template-columns:minmax(0,1fr) 128px !important;
+    gap:8px !important;
+  }
+  .report-toolbar #report-period{grid-column:1 !important}
+  .report-toolbar #apply{grid-column:2 !important;width:100% !important}
+  .report-toolbar #from{grid-column:1 !important}
+  .report-toolbar #to{grid-column:2 !important}
+  .comment-detail-grid{grid-template-columns:1fr 1fr !important}
+}

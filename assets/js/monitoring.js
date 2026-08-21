@@ -85,11 +85,24 @@ function speak(m,button){
   const voices=window.speechSynthesis.getVoices(); u.voice=voices.find(v=>String(v.lang).toLowerCase().startsWith('az'))||null;
   u.onend=u.onerror=()=>button.textContent='🔊 Dinlə'; button.textContent='■ Dayandır'; window.speechSynthesis.speak(u);
 }
-function openDetail(id){
-  const m=rows.find(x=>x.id===id); if(!m)return; window.speechSynthesis?.cancel?.();
+async function fetchMentionById(id){
+  const {data,error}=await supabase.from('mentions')
+    .select('*, districts(name), villages(name), mention_media(*)')
+    .eq('id',id).maybeSingle();
+  if(error) throw error;
+  return data || null;
+}
+async function openDetail(id){
+  let m=rows.find(x=>x.id===id);
+  if(!m){
+    try{ m=await fetchMentionById(id); }
+    catch(e){ toast(e,'error'); return; }
+  }
+  if(!m){ toast('Seçilən monitorinq qeydi tapılmadı.','error'); return; }
+  window.speechSynthesis?.cancel?.();
   const media=(m.mention_media||[]).map(x=>`<img src="${x.url}" data-media="${x.url}" class="detail-media" alt="Media">`).join('');
   const raw=m.raw_payload||{}; const comment=isComment(m);
-  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Paylaşılma tarixi</strong><p>${fmtDate(publishedDate(m))}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(m.author_name||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><h3>AI xülasəsi</h3><p>${escapeHtml(m.summary||'Xülasə yoxdur.')}</p><h3>Orijinal mətn</h3><p class="muted detail-text">${escapeHtml(m.original_text||'Mətn saxlanmayıb.')}</p>${raw.comment_id?`<div class="detail-grid"><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Video</strong><p>${escapeHtml(raw.video_title||'—')}</p></div></div>`:''}${media?`<h3>Media / arxiv görüntüsü</h3><div class="grid grid-2">${media}</div>`:''}</div></div>`;
+  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Paylaşılma tarixi</strong><p>${fmtDate(publishedDate(m))}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(m.author_name||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><h3>AI xülasəsi</h3><p>${escapeHtml(m.summary||'Xülasə yoxdur.')}</p><h3>Orijinal mətn</h3><p class="muted detail-text">${escapeHtml(m.original_text||'Mətn saxlanmayıb.')}</p>${raw.comment_id?`<div class="detail-grid comment-detail-grid"><div><strong>Şərh müəllifi</strong><p>${escapeHtml(m.author_name||raw.author_name||'—')}</p></div><div><strong>Şərhin tarixi</strong><p>${fmtDate(m.published_at)}</p></div><div><strong>Video</strong><p>${escapeHtml(raw.video_title||'—')}</p></div><div><strong>Bəyənmə</strong><p>${escapeHtml(raw.like_count ?? '0')}</p></div><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Növ</strong><p>${raw.parent_id?'Cavab':'Əsas şərh'}</p></div></div>`:''}${media?`<h3>Media / arxiv görüntüsü</h3><div class="grid grid-2">${media}</div>`:''}</div></div>`;
   document.querySelector('#detail-close').onclick=()=>{window.speechSynthesis?.cancel?.();document.querySelector('#modal-root').innerHTML='';};
   document.querySelector('#detail-bg').onclick=e=>{if(e.target.id==='detail-bg')document.querySelector('#detail-close').click();};
   document.querySelector('#detail-speak').onclick=e=>speak(m,e.currentTarget);
@@ -117,4 +130,4 @@ stage.addEventListener('touchend',()=>{pinchStart=0});
 const reset=()=>load({reset:true}); platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{updateDateInputs();reset();}; dateFrom.onchange=reset;dateTo.onchange=reset;
 new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)load();},{rootMargin:'500px'}).observe(sentinel);
 updateDateInputs(); await load({reset:true});
-const openId=new URLSearchParams(location.search).get('id'); if(openId)openDetail(openId);
+const openId=new URLSearchParams(location.search).get('id'); if(openId)await openDetail(openId);

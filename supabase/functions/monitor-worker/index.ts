@@ -479,53 +479,93 @@ async function youtubeItems(
   });
 
   const comments:Item[] = [];
-  // Şərhləri bütün tapılan videolarda yoxlamaq timeout yaradır. Əvvəlcə lokal
-  // uyğunluq filtri tətbiq olunur, sonra maksimum 5 relevant videonun şərhi oxunur.
-  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,4);
+  // Yalnız təşkilata uyğun videoların şərhləri oxunur. Hər videoda commentThreads
+  // səhifələri ardıcıl gəzir; top-level şərhlərlə yanaşı API-nin qaytardığı cavablar
+  // da ayrıca qeyd kimi saxlanılır. Uzun arxiv run-larında vaxt limiti aşılmasın deyə
+  // təhlükəsiz deadline tətbiq olunur və növbəti run qalan videoları yenidən yoxlaya bilir.
+  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,12);
+  const commentDeadline = Date.now() + 70000;
   for (const item of relevantForComments) {
+    if (Date.now() > commentDeadline) break;
     const raw:any = item.raw || {};
     const videoId = String(raw.video_id || '');
     if (!videoId) continue;
     try {
-      const endpoint = new URL('https://www.googleapis.com/youtube/v3/commentThreads');
-      endpoint.searchParams.set('part','snippet');
-      endpoint.searchParams.set('videoId',videoId);
-      endpoint.searchParams.set('maxResults','50');
-      endpoint.searchParams.set('order','time');
-      endpoint.searchParams.set('textFormat','plainText');
-      endpoint.searchParams.set('key',key);
-      const data = await fetchJsonWithRetry(endpoint.toString(), {}, 1);
-      if (data?.error) continue; // şərhlər bağlı ola bilər
+      let pageToken = '';
+      let pageCount = 0;
+      while (pageCount < 12 && Date.now() <= commentDeadline) {
+        const endpoint = new URL('https://www.googleapis.com/youtube/v3/commentThreads');
+        endpoint.searchParams.set('part','snippet,replies');
+        endpoint.searchParams.set('videoId',videoId);
+        endpoint.searchParams.set('maxResults','100');
+        endpoint.searchParams.set('order','time');
+        endpoint.searchParams.set('textFormat','plainText');
+        if (pageToken) endpoint.searchParams.set('pageToken',pageToken);
+        endpoint.searchParams.set('key',key);
+        const data = await fetchJsonWithRetry(endpoint.toString(), {}, 1);
+        if (data?.error) break;
 
-      for (const thread of data?.items || []) {
-        const top = thread?.snippet?.topLevelComment;
-        const sn = top?.snippet || {};
-        const commentId = String(top?.id || thread?.id || '');
-        const text = String(sn.textDisplay || sn.textOriginal || '').trim();
-        if (!commentId || !text) continue;
-        comments.push({
-          title:`YouTube şərhi — ${sn.authorDisplayName || 'istifadəçi'}`,
-          text:`Video: ${item.title || ''}\nŞərh: ${text}`,
-          url:`https://www.youtube.com/watch?v=${videoId}&lc=${encodeURIComponent(commentId)}`,
-          published_at:sn.publishedAt || null,
-          image:item.image || null,
-          author:sn.authorDisplayName || null,
-          raw:{
-            kind:'youtube_comment',
-            video_id:videoId,
-            comment_id:commentId,
-            video_title:item.title || '',
-            like_count:sn.likeCount ?? null,
-            thread
+        for (const thread of data?.items || []) {
+          const top = thread?.snippet?.topLevelComment;
+          const sn = top?.snippet || {};
+          const commentId = String(top?.id || thread?.id || '');
+          const text = String(sn.textDisplay || sn.textOriginal || '').trim();
+          if (commentId && text) comments.push({
+            title:`YouTube şərhi — ${sn.authorDisplayName || 'istifadəçi'}`,
+            text:`Video: ${item.title || ''}
+Şərh: ${text}`,
+            url:`https://www.youtube.com/watch?v=${videoId}&lc=${encodeURIComponent(commentId)}`,
+            published_at:sn.publishedAt || null,
+            image:item.image || null,
+            author:sn.authorDisplayName || null,
+            raw:{
+              kind:'youtube_comment',
+              video_id:videoId,
+              comment_id:commentId,
+              video_title:item.title || '',
+              like_count:sn.likeCount ?? null,
+              reply_count:thread?.snippet?.totalReplyCount ?? 0,
+              author_channel_url:sn.authorChannelUrl || null,
+              author_channel_id:sn.authorChannelId?.value || null
+            }
+          });
+
+          for (const reply of thread?.replies?.comments || []) {
+            const rs = reply?.snippet || {};
+            const replyId = String(reply?.id || '');
+            const replyText = String(rs.textDisplay || rs.textOriginal || '').trim();
+            if (!replyId || !replyText) continue;
+            comments.push({
+              title:`YouTube cavabı — ${rs.authorDisplayName || 'istifadəçi'}`,
+              text:`Video: ${item.title || ''}
+Cavab: ${replyText}`,
+              url:`https://www.youtube.com/watch?v=${videoId}&lc=${encodeURIComponent(replyId)}`,
+              published_at:rs.publishedAt || null,
+              image:item.image || null,
+              author:rs.authorDisplayName || null,
+              raw:{
+                kind:'youtube_comment_reply',
+                video_id:videoId,
+                comment_id:replyId,
+                parent_id:rs.parentId || commentId || null,
+                video_title:item.title || '',
+                like_count:rs.likeCount ?? null,
+                author_channel_url:rs.authorChannelUrl || null,
+                author_channel_id:rs.authorChannelId?.value || null
+              }
+            });
           }
-        });
+        }
+        pageCount++;
+        pageToken = String(data?.nextPageToken || '');
+        if (!pageToken) break;
       }
     } catch (e) {
       console.error('youtube-comments',videoId,e);
     }
   }
 
-  return { items, comments, queries };
+  return { items, comments:dedupeItems(comments), queries };
 }
 
 async function fetchJsonWithRetry(
@@ -837,10 +877,11 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // Mövzu sözləri kənd/rayon adı ilə birlikdə qəbul edilir. Beləliklə
   // "Bərdə yol qəzası" kimi sistemə aid olmayan materiallar bazaya düşmür.
   const builtinTopics = [
-    'suvarma','kanal','arx','kollektor','drenaj','meliorasiya','subartezian',
+    'suvarma','suvarma kanali','suvarma arxi','suvarma sebekesi','suvarma suyu',
+    'kanal','arx','kollektor','drenaj','meliorasiya','subartezian','subartezan','artezian','artezan',
     'su quyusu','nasos stansiyasi','hidrotexniki','su catismamazligi','susuz',
     'su verilmir','su gelmir','su teminati','su verilisi','su itkisi','ekin sahesi',
-    'fermer','lilden temizlen','berpa','temir','suvarma sebekesi'
+    'fermer su','lilden temizlen','su sistemi','su teserrufati'
   ].map(normalizeForMatch);
   const keywordTopics = normalizedKeywords.filter(term=>{
     if (!term) return false;
@@ -857,8 +898,15 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const trustedDiscovery = ['google_news','gdelt_article'].includes(String(raw.kind || '')) &&
     (direct.some(term=>term && discoveryQuery.includes(term)) || (queryDistrictHit && queryTopicHit));
 
+  const foreignDistricts = [
+    'agcabedi','agdam','agdas','agsu','astara','balaken','beyleqan','bilesuvar','celilabad','daskesen',
+    'fuzuli','gedebey','goranboy','goycay','goygol','haciqabul','imisli','ismayilli','kurdemir','lerik',
+    'masalli','neftcala','oguz','qebele','qax','qazax','qusar','saatli','sabirabad','salyan','samaxi',
+    'samkir','siyazan','terter','ucar','yardimli','yevlax','zerdab'
+  ];
+  const foreignHit = foreignDistricts.some(name=>` ${normalized} `.includes(` ${name} `)) && !districtHit && villageHits.length === 0;
   const districtWide = org.show_district_wide !== false;
-  const accepted = directMatches.length > 0 || (districtWide && locationHit && topicHits.length > 0) || trustedDiscovery;
+  const accepted = !foreignHit && (directMatches.length > 0 || (districtWide && locationHit && topicHits.length > 0) || trustedDiscovery);
   const matches = [...new Set([
     ...directMatches,
     ...(districtHit && topicHits.length ? topicHits.map(t=>`${district}+${t}`) : []),
@@ -876,7 +924,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
         : (districtHit && topicHits.length) ? 'rayon-mövzu-uyğunluğu'
         : (villageHits.length && topicHits.length) ? 'kənd-mövzu-uyğunluğu'
         : 'mənbə-axtarış-uyğunluğu')
-      : (locationHit ? 'ərazi-var-mövzu-yoxdur' : 'ərazi-və-mövzu-uyğunluğu-yoxdur')
+      : (foreignHit ? 'başqa-rayon-məlumatıdır' : (locationHit ? 'ərazi-var-mövzu-yoxdur' : 'ərazi-və-mövzu-uyğunluğu-yoxdur'))
   };
 }
 function normalizeForMatch(value:string):string {

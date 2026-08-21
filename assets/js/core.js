@@ -8,7 +8,15 @@ export const supabase = createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabase
 export const $ = (s, root = document) => root.querySelector(s);
 export const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 export const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-export const fmtDate = value => value ? new Intl.DateTimeFormat('az-AZ',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value)) : '—';
+export const fmtDate = value => {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  const parts = new Intl.DateTimeFormat('az-AZ', {
+    year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false
+  }).formatToParts(d).reduce((acc, part) => { acc[part.type] = part.value; return acc; }, {});
+  return `${parts.day}.${parts.month}.${parts.year} ${parts.hour}:${parts.minute}`;
+};
 export const money = value => `${Number(value || 0).toFixed(2)} AZN`;
 
 export function friendlyError(value) {
