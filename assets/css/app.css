@@ -821,3 +821,25 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .dashboard-comment-chip{font-size:8px;padding:2px 6px}
   .dashboard-notification time{font-size:8px!important}
 }
+
+
+/* v15 — canlı rəy keçidi və axtarılmamalı sözlər paneli */
+.comment-action{
+  background:linear-gradient(180deg,#f4d98f,#d9ad4f)!important;
+  color:#07111f!important;
+  border-color:rgba(255,236,174,.88)!important;
+  box-shadow:0 8px 22px rgba(218,174,78,.14);
+}
+.dashboard-head .page-actions{display:flex!important;gap:8px!important;flex-wrap:wrap!important}
+.monitor-rule-divider{height:1px;background:var(--line);margin:16px 0}
+.monitor-exclusion-head{margin-bottom:10px!important;align-items:flex-start!important}
+.monitor-exclusion-head h3{margin:0 0 3px;font-size:15px}
+.monitor-exclusion-head p{margin:0;font-size:10px;color:var(--muted)}
+.exclusion-list{margin-top:10px}
+.exclusion-group summary{border-color:rgba(241,202,103,.18)}
+.exclusion-item{grid-template-columns:minmax(0,1fr) auto!important}
+.exclusion-delete{width:30px!important;height:30px!important;color:#f3cf73!important}
+@media(max-width:700px){
+  .dashboard-head .page-actions{display:grid!important;grid-template-columns:1fr 1fr!important;width:100%!important}
+  .dashboard-head .page-actions .btn{width:100%!important;min-width:0!important;padding-left:8px!important;padding-right:8px!important}
+}

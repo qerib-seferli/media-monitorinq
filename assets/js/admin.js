@@ -53,7 +53,7 @@ async function refresh() {
     supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
-    supabase.from('keywords').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(200),
+    supabase.from('keywords').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(500),
     supabase.from('sources').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(120),
     supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100)
   ]);
@@ -178,28 +178,56 @@ function renderCatalogs() {
 
 function renderKeywords() {
   const el = document.querySelector('#keyword-list');
+  const excludeEl = document.querySelector('#exclude-list');
   if (!el) return;
-  if (!keywords.length) {
+
+  const positive = keywords.filter(x => String(x.kind || '').toLowerCase() !== 'exclude');
+  const excluded = keywords.filter(x => String(x.kind || '').toLowerCase() === 'exclude');
+
+  if (!positive.length) {
     el.innerHTML = '<div class="empty compact">Açar söz yoxdur.</div>';
-    return;
+  } else {
+    const groups = new Map();
+    for (const item of positive) {
+      const name = item.organizations?.short_name || 'Təşkilatsız';
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(item);
+    }
+
+    el.innerHTML = [...groups.entries()].map(([name, items]) => {
+      const activeCount = items.filter(x => x.is_active !== false).length;
+      const rows = items
+        .slice()
+        .sort((a,b)=>String(a.kind||'').localeCompare(String(b.kind||''),'az') || String(a.value||'').localeCompare(String(b.value||''),'az'))
+        .map(x => `<div class="keyword-item"><span>${escapeHtml(x.value)}</span><span class="badge info">${escapeHtml(x.kind || 'phrase')}</span></div>`)
+        .join('');
+      return `<details class="keyword-group"><summary><span><strong>${escapeHtml(name)}</strong><small>${activeCount} aktiv açar söz</small></span><span class="keyword-count">${items.length}</span></summary><div class="keyword-group-body">${rows}</div></details>`;
+    }).join('');
   }
 
-  const groups = new Map();
-  for (const item of keywords) {
-    const name = item.organizations?.short_name || 'Təşkilatsız';
-    if (!groups.has(name)) groups.set(name, []);
-    groups.get(name).push(item);
+  if (excludeEl) {
+    if (!excluded.length) {
+      excludeEl.innerHTML = '<div class="empty compact">Axtarılmamalı söz təyin edilməyib.</div>';
+    } else {
+      const groups = new Map();
+      for (const item of excluded) {
+        const name = item.organizations?.short_name || 'Qlobal';
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(item);
+      }
+      excludeEl.innerHTML = [...groups.entries()].map(([name, items]) => `
+        <details class="keyword-group exclusion-group">
+          <summary><span><strong>${escapeHtml(name)}</strong><small>${items.filter(x=>x.is_active!==false).length} aktiv filtr</small></span><span class="keyword-count">${items.length}</span></summary>
+          <div class="keyword-group-body">
+            ${items.slice().sort((a,b)=>String(a.value||'').localeCompare(String(b.value||''),'az')).map(x=>`
+              <div class="keyword-item exclusion-item">
+                <span>${escapeHtml(x.value)}</span>
+                <button class="icon-btn exclusion-delete" type="button" title="Filtri sil" aria-label="${escapeHtml(x.value)} filtrini sil" data-exclude-delete="${x.id}">×</button>
+              </div>`).join('')}
+          </div>
+        </details>`).join('');
+    }
   }
-
-  el.innerHTML = [...groups.entries()].map(([name, items]) => {
-    const activeCount = items.filter(x => x.is_active !== false).length;
-    const rows = items
-      .slice()
-      .sort((a,b)=>String(a.kind||'').localeCompare(String(b.kind||''),'az') || String(a.value||'').localeCompare(String(b.value||''),'az'))
-      .map(x => `<div class="keyword-item"><span>${escapeHtml(x.value)}</span><span class="badge info">${escapeHtml(x.kind || 'phrase')}</span></div>`)
-      .join('');
-    return `<details class="keyword-group"><summary><span><strong>${escapeHtml(name)}</strong><small>${activeCount} aktiv açar söz</small></span><span class="keyword-count">${items.length}</span></summary><div class="keyword-group-body">${rows}</div></details>`;
-  }).join('');
 }
 
 function renderSources() {
@@ -303,6 +331,17 @@ function renderAudit() {
 }
 
 function bindDynamicActions() {
+  document.querySelectorAll('[data-exclude-delete]').forEach(btn=>{
+    if (btn.dataset.bound) return;
+    btn.dataset.bound='1';
+    btn.addEventListener('click', async ()=>{
+      if (!confirm('Bu axtarılmamalı sözü filtrdən silmək istəyirsiniz?')) return;
+      const { error } = await supabase.from('keywords').delete().eq('id',btn.dataset.excludeDelete);
+      toast(error ? error.message : 'Filtr silindi', error ? 'error' : 'success');
+      if (!error) await refresh();
+    });
+  });
+
   document.querySelectorAll('[data-org-toggle]').forEach(b => b.onclick = () => toggleOrg(b.dataset.orgToggle));
   document.querySelectorAll('[data-org-edit]').forEach(b => b.onclick = () => modal('org', { organization_id:b.dataset.orgEdit }));
   document.querySelectorAll('[data-user-edit]').forEach(b => b.onclick = () => modal('user', { user_id:b.dataset.userEdit }));
@@ -524,6 +563,17 @@ document.querySelector('#position-form').onsubmit = async e => { e.preventDefaul
 document.querySelector('#district-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('districts').insert({name:document.querySelector('#district-name').value.trim()}); toast(error?error.message:'Rayon əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
 document.querySelector('#village-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('villages').insert({district_id:document.querySelector('#village-district').value,name:document.querySelector('#village-name').value.trim()}); toast(error?error.message:'Kənd əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
 document.querySelector('#keyword-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('keywords').insert({organization_id:document.querySelector('#keyword-org').value,value:document.querySelector('#keyword-value').value.trim(),kind:'phrase',is_active:true}); toast(error?error.message:'Açar söz əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
+document.querySelector('#exclude-form').onsubmit = async e => {
+  e.preventDefault();
+  const organization_id = document.querySelector('#exclude-org').value;
+  const value = document.querySelector('#exclude-value').value.trim();
+  if (!value) return;
+  const duplicate = keywords.some(k => k.organization_id === organization_id && String(k.kind||'').toLowerCase()==='exclude' && String(k.value||'').trim().toLocaleLowerCase('az-AZ') === value.toLocaleLowerCase('az-AZ'));
+  if (duplicate) return toast('Bu filtr artıq mövcuddur.','error');
+  const { error } = await supabase.from('keywords').insert({organization_id,value,kind:'exclude',is_active:true});
+  toast(error ? error.message : 'Axtarılmamalı söz əlavə edildi', error ? 'error' : 'success');
+  if (!error) { e.target.reset(); await refresh(); }
+};
 document.querySelector('#source-form').onsubmit = async e => {
   e.preventDefault();
   const organization_id = document.querySelector('#source-org').value;

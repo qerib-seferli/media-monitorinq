@@ -15,6 +15,7 @@ const dateTo=document.querySelector('#date-to');
 const sentinel=document.querySelector('#load-sentinel');
 const PAGE_SIZE=50;
 let rows=[], page=0, loading=false, done=false, requestToken=0;
+const commentOnly = new URLSearchParams(location.search).get('type') === 'comments';
 
 function isoDay(d,end=false){
   const x=new Date(d); x.setHours(end?23:0,end?59:0,end?59:0,end?999:0); return x.toISOString();
@@ -75,6 +76,7 @@ async function load({reset=false}={}){
       .order('published_at',{ascending:false,nullsFirst:false}).range(from,to);
     if(platform.value) q=q.ilike('source_platform',platform.value);
     if(sentiment.value) q=q.eq('sentiment',sentiment.value);
+    if(commentOnly) q=q.like('raw_payload->>kind','%comment%');
     const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
     const batch=data||[]; rows.push(...batch); done=batch.length<PAGE_SIZE; page++; render(true);
   }catch(e){ if(!rows.length) list.innerHTML=`<div class="empty">${escapeHtml(e.message||String(e))}</div>`; else toast(e,'error'); }
@@ -145,7 +147,14 @@ stage.addEventListener('touchend',()=>{pinchStart=0});
 
 const reset=()=>load({reset:true}); platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{presetDates(period.value);updateDateInputs();reset();}; dateFrom.onchange=()=>{period.value='custom';reset();};dateTo.onchange=()=>{period.value='custom';reset();};
 new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)load();},{rootMargin:'500px'}).observe(sentinel);
+if(commentOnly){
+  const h1=document.querySelector('.monitor-head h1');
+  const p=document.querySelector('.monitor-head p');
+  if(h1) h1.textContent='Aşkarlanan rəylər';
+  if(p) p.textContent='Monitorinqə düşən YouTube şərhləri və cavabları.';
+  platform.value='YouTube';
+}
 if(!period.value || period.value==='custom') period.value='month'; presetDates(period.value); updateDateInputs(); await load({reset:true});
 const openId=new URLSearchParams(location.search).get('id'); if(openId)await openDetail(openId);
 
-startLiveMonitor({organizationId:ctx.profile.organization_id,onNew:()=>load({reset:true})});
+startLiveMonitor({organizationId:ctx.profile.organization_id,fullFirst:commentOnly,onNew:()=>load({reset:true})});
