@@ -765,3 +765,46 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .report-toolbar #to{grid-column:2!important;grid-row:2!important}
   .comment-mark{top:8px;right:8px;width:26px;height:26px;font-size:14px}
 }
+
+
+/* v13 — desktop monitorinq grid + şərh nişanının simmetrik yerləşməsi */
+.mention-card.is-comment,.notification-card.is-comment,.dashboard-notification.is-comment{
+  border-color:rgba(241,202,103,.74)!important;
+  box-shadow:inset 0 0 0 1px rgba(241,202,103,.08),0 8px 24px rgba(0,0,0,.10);
+}
+.comment-mark{display:none!important}
+.comment-badge{color:#f3cf73!important;background:rgba(215,181,109,.10)!important;border:1px solid rgba(241,202,103,.30)!important}
+.notification-icon.comment-icon{color:#07111f!important;background:linear-gradient(180deg,#f4d98f,#d9ad4f)!important;border-color:rgba(255,236,174,.88)!important}
+.dashboard-notification .notification-dot{display:grid;place-items:center;min-width:10px}
+.dashboard-notification.is-comment .notification-dot{width:26px;height:26px;border-radius:8px;color:#07111f;background:linear-gradient(180deg,#f4d98f,#d9ad4f);font-size:13px;font-weight:900}
+.mention-card.is-comment>.toolbar,.dashboard-notification.is-comment,.notification-card.is-comment{padding-right:initial}
+
+@media (min-width:901px){
+  .monitor-head{display:grid!important;grid-template-columns:minmax(280px,1fr) minmax(620px,760px)!important;align-items:end!important;column-gap:24px!important}
+  .monitor-head>div:first-child{align-self:end!important}
+  .monitor-filters{
+    display:grid!important;
+    grid-template-columns:repeat(6,minmax(0,1fr))!important;
+    grid-template-areas:"period period from from to to" "platform platform platform sentiment sentiment sentiment"!important;
+    width:100%!important;max-width:760px!important;justify-self:end!important;gap:8px!important;
+  }
+  .monitor-filters>*{grid-column:auto!important;grid-row:auto!important;min-width:0!important;width:100%!important}
+  .monitor-filters #period{grid-area:period!important}
+  .monitor-filters #date-from{grid-area:from!important}
+  .monitor-filters #date-to{grid-area:to!important}
+  .monitor-filters #platform{grid-area:platform!important}
+  .monitor-filters #sentiment{grid-area:sentiment!important}
+}
+@media (max-width:900px){
+  .monitor-filters{
+    display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr))!important;
+    grid-template-areas:"period period from from to to" "platform platform platform sentiment sentiment sentiment"!important;
+    width:100%!important;max-width:none!important;gap:8px!important;
+  }
+  .monitor-filters>*{grid-column:auto!important;grid-row:auto!important;min-width:0!important;width:100%!important}
+  .monitor-filters #period{grid-area:period!important}
+  .monitor-filters #date-from{grid-area:from!important}
+  .monitor-filters #date-to{grid-area:to!important}
+  .monitor-filters #platform{grid-area:platform!important}
+  .monitor-filters #sentiment{grid-area:sentiment!important}
+}

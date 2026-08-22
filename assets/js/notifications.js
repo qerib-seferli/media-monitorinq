@@ -12,7 +12,6 @@ const list = document.querySelector('#notification-list');
 let rows = [];
 let mentionMap = new Map();
 const isComment=m=>String(m?.raw_payload?.kind||'').includes('comment');
-const commentMark=()=>'<span class="comment-mark" title="Şərh" aria-label="Şərh">✉</span>';
 
 let filter = 'all';
 
@@ -37,7 +36,7 @@ function render() {
     const href = item.mention_id ? `./monitorinq.html?id=${encodeURIComponent(item.mention_id)}` : '';
     const mention=mentionMap.get(item.mention_id);
     const comment=isComment(mention);
-    const content = `${comment?commentMark():''}<span class="notification-icon ${toneOf(item)}">${toneOf(item)==='danger'?'!':'i'}</span><span class="notification-copy"><strong>${escapeHtml(item.title || 'Bildiriş')}</strong><span>${escapeHtml(item.body || '')}</span><time>${fmtDate(mention?.published_at||item.created_at)}</time></span><span class="notification-arrow">${href?'›':''}</span>`;
+    const content = `<span class="notification-icon ${toneOf(item)}${comment?' comment-icon':''}">${comment?'✉':(toneOf(item)==='danger'?'!':'i')}</span><span class="notification-copy"><strong>${escapeHtml(item.title || 'Bildiriş')}</strong><span>${escapeHtml(item.body || '')}</span><time>${fmtDate(mention?.published_at||item.created_at)}</time></span><span class="notification-arrow">${href?'›':''}</span>`;
     return href ? `<a class="notification-card${comment?' is-comment':''}" href="${href}">${content}</a>` : `<article class="notification-card${comment?' is-comment':''}">${content}</article>`;
   }).join('') : '<div class="card empty">Bu filtr üzrə bildiriş yoxdur.</div>';
 }

@@ -93,16 +93,31 @@ Deno.serve(async (req) => {
 
           if (platform === 'youtube') {
             const last = source.last_checked_at ? new Date(source.last_checked_at).getTime() : 0;
-            // YouTube Search API quota sərf edir. Planlı iş 15 dəqiqədən bir işləsə də,
-            // YouTube lane maksimum 6 saatdan bir çağırılır.
-            if (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000) {
-              details.push({ organization:org.short_name, source:'YouTube', skipped:'quota-window' });
-              continue;
-            }
-
             const key = Deno.env.get('YOUTUBE_API_KEY');
             if (!key) {
               details.push({ organization:org.short_name, source:'YouTube', skipped:'missing-youtube-api-key' });
+              continue;
+            }
+
+            // Search API bahalıdır, ona görə yeni video axtarışı maksimum 6 saatdan bir edilir.
+            // Amma köhnə, artıq bazada tanınan uyğun videolara yeni yazılan şərhlər ayrıca
+            // yüngül lane ilə hər planlı run-da yoxlanılır. Beləliklə yeni şərh üçün 6 saat
+            // gözləmək lazım deyil və quota təhlükəsiz qalır.
+            if (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000) {
+              const liveComments = await storedYoutubeCommentItems(admin, org, key, 36, 1);
+              let liveInserted = 0;
+              for (const item of liveComments) {
+                liveInserted += await save(admin,org,source,item,lowerKeywords,villageNames);
+              }
+              inserted += liveInserted;
+              details.push({
+                organization:org.short_name,
+                source:'YouTube şərhləri — sürətli yoxlama',
+                comments_checked:liveComments.length,
+                inserted:liveInserted,
+                video_search:'quota-window',
+                ...(options.debug ? { sample_results:debugSamples(liveComments, org, lowerKeywords, villageNames, 8) } : {})
+              });
               continue;
             }
 
@@ -568,6 +583,128 @@ Cavab: ${replyText}`,
   return { items, comments:dedupeItems(comments), queries };
 }
 
+
+async function storedYoutubeCommentItems(
+  admin:any,
+  org:any,
+  key:string,
+  videoLimit=36,
+  pagesPerVideo=1
+):Promise<Item[]> {
+  const { data:videoRows, error } = await admin
+    .from('mentions')
+    .select('id,title,source_url,published_at,raw_payload,mention_media(url,media_type)')
+    .eq('organization_id', org.id)
+    .eq('source_platform', 'YouTube')
+    .eq('raw_payload->>kind', 'youtube_video')
+    .order('published_at',{ascending:false,nullsFirst:false})
+    .limit(videoLimit);
+  if (error) throw error;
+
+  const videoItems:Item[] = (videoRows || []).map((row:any)=>{
+    const raw = row.raw_payload || {};
+    const videoId = String(raw.video_id || youtubeVideoId(row.source_url || '') || '');
+    return {
+      title:row.title || '',
+      text:'',
+      url:row.source_url || (videoId ? `https://www.youtube.com/watch?v=${videoId}` : ''),
+      published_at:row.published_at || null,
+      image:(row.mention_media || [])[0]?.url || null,
+      raw:{ kind:'youtube_video', video_id:videoId }
+    } as Item;
+  }).filter((x:Item)=>Boolean((x.raw as any)?.video_id));
+
+  return await youtubeCommentsForItems(videoItems,key,pagesPerVideo,70000);
+}
+
+function youtubeVideoId(value:string):string {
+  try {
+    const u = new URL(value);
+    if (u.hostname.includes('youtu.be')) return u.pathname.replace(/^\//,'').split('/')[0] || '';
+    return u.searchParams.get('v') || '';
+  } catch { return ''; }
+}
+
+async function youtubeCommentsForItems(
+  videoItems:Item[],
+  key:string,
+  pagesPerVideo=1,
+  deadlineMs=70000
+):Promise<Item[]> {
+  const comments:Item[] = [];
+  const deadline = Date.now() + Math.max(10000,deadlineMs);
+  for (const item of videoItems) {
+    if (Date.now() > deadline) break;
+    const raw:any = item.raw || {};
+    const videoId = String(raw.video_id || youtubeVideoId(item.url || '') || '');
+    if (!videoId) continue;
+    try {
+      let pageToken = '';
+      for (let page=0; page<Math.max(1,pagesPerVideo) && Date.now()<=deadline; page++) {
+        const endpoint = new URL('https://www.googleapis.com/youtube/v3/commentThreads');
+        endpoint.searchParams.set('part','snippet,replies');
+        endpoint.searchParams.set('videoId',videoId);
+        endpoint.searchParams.set('maxResults','100');
+        endpoint.searchParams.set('order','time');
+        endpoint.searchParams.set('textFormat','plainText');
+        if (pageToken) endpoint.searchParams.set('pageToken',pageToken);
+        endpoint.searchParams.set('key',key);
+        const data = await fetchJsonWithRetry(endpoint.toString(), {}, 1);
+        if (data?.error) break;
+
+        for (const thread of data?.items || []) {
+          const top = thread?.snippet?.topLevelComment;
+          const sn = top?.snippet || {};
+          const commentId = String(top?.id || thread?.id || '');
+          const text = String(sn.textDisplay || sn.textOriginal || '').trim();
+          if (commentId && text) comments.push({
+            title:`YouTube şərhi — ${sn.authorDisplayName || 'istifadəçi'}`,
+            text:`Video: ${item.title || ''}\nŞərh: ${text}`,
+            url:`https://www.youtube.com/watch?v=${videoId}&lc=${encodeURIComponent(commentId)}`,
+            published_at:sn.publishedAt || null,
+            image:item.image || null,
+            author:sn.authorDisplayName || null,
+            raw:{
+              kind:'youtube_comment', video_id:videoId, comment_id:commentId,
+              video_title:item.title || '', like_count:sn.likeCount ?? null,
+              reply_count:thread?.snippet?.totalReplyCount ?? 0,
+              author_channel_url:sn.authorChannelUrl || null,
+              author_channel_id:sn.authorChannelId?.value || null
+            }
+          });
+
+          for (const reply of thread?.replies?.comments || []) {
+            const rs = reply?.snippet || {};
+            const replyId = String(reply?.id || '');
+            const replyText = String(rs.textDisplay || rs.textOriginal || '').trim();
+            if (!replyId || !replyText) continue;
+            comments.push({
+              title:`YouTube cavabı — ${rs.authorDisplayName || 'istifadəçi'}`,
+              text:`Video: ${item.title || ''}\nCavab: ${replyText}`,
+              url:`https://www.youtube.com/watch?v=${videoId}&lc=${encodeURIComponent(replyId)}`,
+              published_at:rs.publishedAt || null,
+              image:item.image || null,
+              author:rs.authorDisplayName || null,
+              raw:{
+                kind:'youtube_comment_reply', video_id:videoId, comment_id:replyId,
+                parent_id:rs.parentId || commentId || null, video_title:item.title || '',
+                like_count:rs.likeCount ?? null,
+                author_channel_url:rs.authorChannelUrl || null,
+                author_channel_id:rs.authorChannelId?.value || null
+              }
+            });
+          }
+        }
+        pageToken = String(data?.nextPageToken || '');
+        if (!pageToken) break;
+      }
+    } catch (e) {
+      console.error('youtube-live-comments',videoId,e);
+    }
+  }
+  return dedupeItems(comments);
+}
+
 async function fetchJsonWithRetry(
   url:string,
   init:RequestInit = {},
@@ -880,7 +1017,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'suvarma','suvarma kanali','suvarma arxi','suvarma sebekesi','suvarma suyu',
     'kanal','arx','kollektor','drenaj','meliorasiya','subartezian','subartezan','artezian','artezan',
     'su quyusu','nasos stansiyasi','hidrotexniki','su catismamazligi','susuz',
-    'su verilmir','su gelmir','su teminati','su verilisi','su itkisi','ekin sahesi',
+    'su verilmir','su gelmir','su yoxdur','icmeli su','su tapmir','su teminati','su verilisi','su itkisi','ekin sahesi',
     'fermer su','lilden temizlen','su sistemi','su teserrufati'
   ].map(normalizeForMatch);
   const keywordTopics = normalizedKeywords.filter(term=>{
