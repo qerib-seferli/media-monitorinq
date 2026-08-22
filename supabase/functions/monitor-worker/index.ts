@@ -297,7 +297,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (!options.quick_youtube_comments && options.verify_existing !== false && timeLeft(stopAt) > 9000) {
+      if (options.verify_existing !== false && timeLeft(stopAt) > 7000) {
         currentStage = 'source-verification';
         try {
           const verification = await verifyExistingMentions(admin, org, Deno.env.get('YOUTUBE_API_KEY') || '');
@@ -1566,17 +1566,44 @@ async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
     .in('source_status',['active','unavailable'])
     .not('source_url','is',null)
     .order('last_verified_at',{ascending:true,nullsFirst:true})
-    .limit(20);
+    .limit(80);
   if (error) throw error;
 
   const candidates = rows || [];
   let checked = 0, active = 0, removed = 0, unavailable = 0, unchanged = 0;
-  const youtubeRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()==='youtube');
-  const otherRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()!=='youtube');
+  const youtubeComments = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()==='youtube' && String(x?.raw_payload?.kind||'').includes('comment')).slice(0,40);
+  const youtubeVideos = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()==='youtube' && !String(x?.raw_payload?.kind||'').includes('comment')).slice(0,20);
+  const otherRows = candidates.filter((x:any)=>String(x.source_platform||'').toLowerCase()!=='youtube').slice(0,20);
   const now = new Date().toISOString();
 
-  if (youtubeRows.length && youtubeKey) {
-    const ids = youtubeRows.map((row:any)=>extractYoutubeVideoId(row)).filter(Boolean).slice(0,50);
+  if (youtubeComments.length && youtubeKey) {
+    const ids = [...new Set(youtubeComments.map((row:any)=>String(row?.raw_payload?.comment_id||'')).filter(Boolean))].slice(0,50);
+    const publicIds = new Set<string>();
+    if (ids.length) {
+      const endpoint = new URL('https://www.googleapis.com/youtube/v3/comments');
+      endpoint.searchParams.set('part','id');
+      endpoint.searchParams.set('id',ids.join(','));
+      endpoint.searchParams.set('key',youtubeKey);
+      const data = await fetchJsonWithRetry(endpoint.toString(),{},1);
+      for (const item of data?.items || []) publicIds.add(String(item.id));
+    }
+    for (const row of youtubeComments) {
+      const commentId=String(row?.raw_payload?.comment_id||'');
+      if(!commentId){unchanged++;continue;}
+      checked++;
+      if(publicIds.has(commentId)){
+        active++;
+        await admin.from('mentions').update({source_status:'active',last_verified_at:now,last_seen_at:now,unavailable_since:null,unavailable_reason:null,consecutive_misses:0}).eq('id',row.id);
+      }else{
+        removed++;
+        await markUnavailable(admin,row,'youtube-comment-not-found',now,true);
+        await notifySourceRemoval(admin,org,row,true);
+      }
+    }
+  }
+
+  if (youtubeVideos.length && youtubeKey) {
+    const ids = youtubeVideos.map((row:any)=>extractYoutubeVideoId(row)).filter(Boolean).slice(0,50);
     const uniqueIds = [...new Set(ids)];
     const publicIds = new Set<string>();
     if (uniqueIds.length) {
@@ -1587,7 +1614,7 @@ async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
       const data = await fetchJsonWithRetry(endpoint.toString(),{},1);
       for (const item of data?.items || []) publicIds.add(String(item.id));
     }
-    for (const row of youtubeRows) {
+    for (const row of youtubeVideos) {
       const videoId = extractYoutubeVideoId(row);
       if (!videoId) { unchanged++; continue; }
       checked++;
@@ -1595,8 +1622,9 @@ async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
         active++;
         await admin.from('mentions').update({source_status:'active',last_verified_at:now,last_seen_at:now,unavailable_since:null,unavailable_reason:null,consecutive_misses:0}).eq('id',row.id);
       } else {
-        unavailable++;
-        await markUnavailable(admin,row,'youtube-not-public',now,false);
+        const nextMisses=Number(row.consecutive_misses||0)+1;
+        if(nextMisses>=2){removed++;await notifySourceRemoval(admin,org,row,false)}else unavailable++;
+        await markUnavailable(admin,row,'youtube-video-not-public',now,nextMisses>=2);
       }
     }
   }
@@ -1611,8 +1639,7 @@ async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
       await admin.from('mentions').update({source_status:'active',last_verified_at:now,last_seen_at:now,unavailable_since:null,unavailable_reason:null,consecutive_misses:0}).eq('id',row.id);
     } else if (state.kind === 'removed') {
       const nextMisses = Number(row.consecutive_misses || 0) + 1;
-      if (nextMisses >= 2) removed++;
-      else unavailable++;
+      if (nextMisses >= 2) {removed++;await notifySourceRemoval(admin,org,row,false)} else unavailable++;
       await markUnavailable(admin,row,`http-${state.status}`,now,nextMisses >= 2);
     } else if (state.kind === 'restricted') {
       unavailable++;
@@ -1623,7 +1650,16 @@ async function verifyExistingMentions(admin:any, org:any, youtubeKey:string) {
     }
   }
 
-  return {checked,active,removed,unavailable,unchanged};
+  return {checked,active,removed,unavailable,unchanged,comments_checked:youtubeComments.length,videos_checked:youtubeVideos.length};
+}
+
+async function notifySourceRemoval(admin:any,org:any,row:any,isComment:boolean){
+  if(String(row?.source_status||'active')==='removed') return;
+  const title=isComment?'YouTube şərhi silinib':'Monitorinq materialı silinib';
+  const body=isComment?'Aşkarlanmış şərh artıq orijinal platformada tapılmır.':'Aşkarlanmış material artıq orijinal mənbədə tapılmır.';
+  const existing=await admin.from('notifications').select('id',{count:'exact',head:true}).eq('mention_id',row.id).eq('kind','removed');
+  if(Number(existing?.count||0)>0)return;
+  await admin.from('notifications').insert({organization_id:org.id,mention_id:row.id,title,body,kind:'removed'});
 }
 
 function extractYoutubeVideoId(row:any):string {

@@ -13,6 +13,7 @@ const list = document.querySelector('#notification-list');
 let rows = [];
 let mentionMap = new Map();
 const isComment=m=>String(m?.raw_payload?.kind||'').includes('comment');
+const sourceStatus=m=>String(m?.source_status||'active');
 
 let filter = 'all';
 
@@ -37,7 +38,7 @@ function render() {
     const href = item.mention_id ? `./monitorinq.html?id=${encodeURIComponent(item.mention_id)}` : '';
     const mention=mentionMap.get(item.mention_id);
     const comment=isComment(mention);
-    const content = `<span class="notification-icon ${toneOf(item)}${comment?' comment-icon':''}">${comment?'✉':(toneOf(item)==='danger'?'!':'i')}</span><span class="notification-copy"><strong>${escapeHtml(item.title || 'Bildiriş')}</strong><span>${escapeHtml(item.body || '')}</span><time>${fmtDate(mention?.published_at||item.created_at)}</time></span><span class="notification-arrow">${href?'›':''}</span>`;
+    const removed=sourceStatus(mention)==='removed'; const content = `<span class="notification-icon ${removed?'danger':toneOf(item)}${comment?' comment-icon':''}">${comment?'✉':(removed||toneOf(item)==='danger'?'!':'i')}</span><span class="notification-copy"><strong>${escapeHtml(item.title || 'Bildiriş')}${removed?` <span class="inline-removed">${comment?'Şərh silinib':'Material silinib'}</span>`:''}</strong><span>${escapeHtml(item.body || '')}</span><time>${fmtDate(mention?.published_at||item.created_at)}</time></span><span class="notification-arrow">${href?'›':''}</span>`;
     return href ? `<a class="notification-card${comment?' is-comment':''}" href="${href}">${content}</a>` : `<article class="notification-card${comment?' is-comment':''}">${content}</article>`;
   }).join('') : '<div class="card empty">Bu filtr üzrə bildiriş yoxdur.</div>';
 }
@@ -53,7 +54,7 @@ if (error) toast(error,'error');
 rows = data || [];
 const ids=[...new Set(rows.map(x=>x.mention_id).filter(Boolean))];
 if(ids.length){
-  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score').in('id',ids);
+  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status').in('id',ids);
   mentionMap=new Map(mentions.map(x=>[x.id,x]));
 }
 rows=rows.filter(x=>!x.mention_id||Number(mentionMap.get(x.mention_id)?.relevance_score||0)>0);

@@ -843,3 +843,6 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .dashboard-head .page-actions{display:grid!important;grid-template-columns:1fr 1fr!important;width:100%!important}
   .dashboard-head .page-actions .btn{width:100%!important;min-width:0!important;padding-left:8px!important;padding-right:8px!important}
 }
+
+/* v18 — silinmiş mənbə statusu */
+.source-removed,.inline-removed{background:rgba(239,68,68,.13)!important;color:#ff7b86!important;border:1px solid rgba(239,68,68,.48)!important;font-weight:900!important}.inline-removed{display:inline-flex;padding:2px 6px;border-radius:999px;font-size:9px;margin-left:6px;vertical-align:middle}

@@ -47,7 +47,7 @@ async function invokeQuick({full=false,refilter=false}={}){
         full_comment_sweep:full,
         refilter_existing:refilter,
         focus_video_ids:focusIds(),
-        verify_existing:false,
+        verify_existing:true,
         debug:false
       }
     });

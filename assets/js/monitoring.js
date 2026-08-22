@@ -25,10 +25,10 @@ function presetDates(v){
   const now=new Date(); let start=new Date(now);
   if(v==='today') start=new Date(now.getFullYear(),now.getMonth(),now.getDate());
   else if(v==='month') start=new Date(now.getFullYear(),now.getMonth(),1);
-  else if(v!=='custom'){
-    const m={ '3m':3,'6m':6,'9m':9,'1y':12,'2y':24,'3y':36,'4y':48,'5y':60 }[v]||1;
-    start.setMonth(start.getMonth()-m);
-  }
+  else if(v==='6m') start.setMonth(start.getMonth()-6);
+  else if(v==='1y') start.setFullYear(start.getFullYear()-1);
+  else if(v==='10y') start.setFullYear(start.getFullYear()-10);
+  else if(v==='all') start=new Date(2000,0,1);
   if(v!=='custom'){dateFrom.value=ymd(start);dateTo.value=ymd(now);}
 }
 function dateRange(){
@@ -42,15 +42,17 @@ function updateDateInputs(){
 function publishedDate(m){return m.published_at||m.detected_at||null;}
 function sourceStateBadge(m){
   const state=String(m.source_status||'active');
-  if(state==='removed')return '<span class="badge danger">Mənbədən silinib</span>';
-  if(state==='unavailable')return '<span class="badge warn">Mənbədə əlçatan deyil</span>';
-  return '<span class="badge success">Mənbədə aktivdir</span>';
+  const comment=isComment(m);
+  if(state==='removed')return `<span class="badge danger source-removed">${comment?'Şərh silinib':'Video / material silinib'}</span>`;
+  if(state==='unavailable')return `<span class="badge warn">${comment?'Şərh əlçatan deyil':'Mənbə əlçatan deyil'}</span>`;
+  return `<span class="badge success">${comment?'Şərh aktivdir':'Mənbədə aktivdir'}</span>`;
 }
 function sourceStateText(m){
   const state=String(m.source_status||'active');
-  if(state==='removed')return 'Orijinal material mənbədən silinib. Arxiv qeydi sistemdə saxlanılır.';
-  if(state==='unavailable')return 'Orijinal material hazırda açıq şəkildə əlçatan deyil.';
-  return 'Orijinal material son yoxlamada mənbədə əlçatan olub.';
+  const comment=isComment(m);
+  if(state==='removed')return comment?'Şərh orijinal platformadan silinib. Arxiv qeydi sistemdə saxlanılır.':'Orijinal video / material mənbədən silinib. Arxiv qeydi sistemdə saxlanılır.';
+  if(state==='unavailable')return comment?'Şərh hazırda platformada açıq şəkildə əlçatan deyil.':'Orijinal material hazırda açıq şəkildə əlçatan deyil.';
+  return comment?'Şərh son yoxlamada platformada mövcud olub.':'Orijinal material son yoxlamada mənbədə əlçatan olub.';
 }
 function isComment(m){return String(m.raw_payload?.kind||'').includes('comment');}
 function card(m){
@@ -76,7 +78,7 @@ async function load({reset=false}={}){
       .order('published_at',{ascending:false,nullsFirst:false}).range(from,to);
     if(platform.value) q=q.ilike('source_platform',platform.value);
     if(sentiment.value) q=q.eq('sentiment',sentiment.value);
-    if(commentOnly) q=q.or('raw_payload->>kind.eq.youtube_comment,raw_payload->>kind.eq.youtube_comment_reply');
+    if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
     const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
     const batch=data||[]; rows.push(...batch); done=batch.length<PAGE_SIZE; page++; render(true);
   }catch(e){ if(!rows.length) list.innerHTML=`<div class="empty">${escapeHtml(e.message||String(e))}</div>`; else toast(e,'error'); }
@@ -151,10 +153,10 @@ if(commentOnly){
   const h1=document.querySelector('.monitor-head h1');
   const p=document.querySelector('.monitor-head p');
   if(h1) h1.textContent='Aşkarlanan rəylər';
-  if(p) p.textContent='Monitorinqə düşən bütün uyğun YouTube şərhləri və cavabları.';
-  platform.value='YouTube';
-  period.value='custom';
-  dateFrom.value='2010-01-01';
+  if(p) p.textContent='Monitorinqə düşən bütün uyğun platforma rəyləri və cavabları.';
+  platform.value='';
+  period.value='all';
+  dateFrom.value='2000-01-01';
   dateTo.value=ymd(new Date());
 }else{
   if(!period.value || period.value==='custom') period.value='month';
