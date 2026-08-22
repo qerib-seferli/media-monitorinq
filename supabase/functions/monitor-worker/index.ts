@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
 
     currentStage = 'organizations';
     let orgQuery:any = admin.from('organizations')
-      .select('id,name,short_name,district_id,districts(name),keywords(*),sources(*)')
+      .select('id,name,short_name,district_id,districts(name),show_district_wide,sources(*)')
       .in('service_status',['active','grace']);
     if (callerOrganizationId) orgQuery = orgQuery.eq('id', callerOrganizationId);
     const orgResult:any = await orgQuery;
@@ -81,7 +81,9 @@ Deno.serve(async (req) => {
         break;
       }
 
-      const activeKeywordRows = (Array.isArray(org.keywords) ? org.keywords : []).filter((k:any)=>k?.is_active !== false);
+      // Açar söz bankı minlərlə sətrə çata bilər. Embedded relation və PostgREST
+      // limitlərinə ilişməmək üçün təşkilat üzrə səhifəli şəkildə ayrıca oxuyuruq.
+      const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
       const keywords = activeKeywordRows
         .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
         .map((k:any)=>String(k?.value || '').trim())
@@ -91,6 +93,8 @@ Deno.serve(async (req) => {
         .map((k:any)=>String(k?.value || '').trim())
         .filter(Boolean);
       org.__exclude_terms = excludeTerms;
+      org.__normalized_keywords = [...new Set(keywords.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+      org.__normalized_excludes = [...new Set(excludeTerms.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
       const sources = (Array.isArray(org.sources) ? org.sources : []).filter((s:any)=>s?.is_active !== false);
 
@@ -427,41 +431,66 @@ async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):
   return dedupeItems(batches.flat());
 }
 
+async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRows=12000):Promise<any[]> {
+  const pageSize = 1000;
+  const rows:any[] = [];
+  for (let from=0; from<maxRows; from+=pageSize) {
+    const to = Math.min(from + pageSize - 1, maxRows - 1);
+    const result:any = await admin.from('keywords')
+      .select('id,organization_id,value,kind,is_active,created_at')
+      .eq('organization_id', organizationId)
+      .eq('is_active', true)
+      .order('created_at', {ascending:true})
+      .range(from, to);
+    if (!result || result.error) throw (result?.error || new Error('Açar söz bankı oxunmadı'));
+    const batch = Array.isArray(result.data) ? result.data : [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  return rows;
+}
+
 function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [], max=8):string[] {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
-  const candidates:string[] = [];
 
-  // Search API-də bir uzun AND cümləsi əvəzinə ayrıca, real mövzu sorğuları.
-  if (shortName) candidates.push(shortName);
-  if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(fullName);
-
-  const preferredTopics = [
-    'suvarma', 'suvarma kanalı', 'kanal', 'arx',
-    'subartezian', 'kollektor drenaj', 'meliorasiya', 'fermer su'
+  const identity = [shortName, fullName].filter(Boolean);
+  const coreTopics = [
+    'suvarma','suvarma kanalı','kanal','arx','subartezian','artezian',
+    'kollektor drenaj','meliorasiya','su təsərrüfatı','fermer su','su gəlmir','su çatışmazlığı'
   ];
-  for (const topic of preferredTopics) {
-    if (district) candidates.push(`${district} ${topic}`);
+  const core = district ? coreTopics.map(topic=>`${district} ${topic}`) : [];
+
+  // Böyük açar-söz bankını hər run-da eyni ilk sətrlərlə məhdudlaşdırmırıq.
+  // Dəqiqəlik rotasiya sayəsində discovery sorğuları kvotanı partlatmadan zamanla bütün
+  // bankı dolaşır. Rayon/kənd adı olan frazalara üstünlük verilir.
+  const nd = normalizeForMatch(district);
+  const villageNorms = villages.map(normalizeForMatch).filter(Boolean);
+  const bank = keywords.filter(value=>{
+    const nk=normalizeForMatch(value);
+    if (!nk || nk.length < 5) return false;
+    if (nd && nk.includes(nd)) return true;
+    return villageNorms.some(v=>v.length>=4 && nk.includes(v));
+  });
+  const bucket = Math.floor(Date.now()/60000);
+  const rotated:string[] = [];
+  if (bank.length) {
+    const start = (bucket * Math.max(1, max-2)) % bank.length;
+    for (let i=0;i<Math.min(bank.length, Math.max(4,max*3));i++) rotated.push(bank[(start+i)%bank.length]);
   }
 
-  // Admin paneldə daxil edilmiş Bərdə-yə bağlı güclü frazalar da discovery-yə qoşulur.
-  for (const value of keywords) {
-    const k = String(value || '').trim();
-    if (!k) continue;
-    const nk = normalizeForMatch(k);
-    if (district && nk.includes(normalizeForMatch(district))) candidates.push(k);
-    else if (shortName && nk.includes(normalizeForMatch(shortName))) candidates.push(k);
-  }
-
+  const pools = [identity.slice(0,1), core.slice(bucket % Math.max(1,core.length)), rotated, identity.slice(1), core];
   const seen = new Set<string>();
   const out:string[] = [];
-  for (const candidate of candidates) {
-    const key = normalizeForMatch(candidate);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(candidate);
-    if (out.length >= max) break;
+  for (const pool of pools) {
+    for (const candidate of pool) {
+      const key = normalizeForMatch(candidate);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
+      if (out.length >= max) return out;
+    }
   }
   return out;
 }
@@ -1458,9 +1487,9 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const normalized = normalizeForMatch(`${item.title || ''} ${item.text || ''}`);
   const direct = [String(org.name||''),String(org.short_name||'')]
     .map(normalizeForMatch).filter(Boolean);
-  const normalizedKeywords = keywords.map(normalizeForMatch).filter(Boolean);
+  const normalizedKeywords = Array.isArray(org.__normalized_keywords) ? org.__normalized_keywords : keywords.map(normalizeForMatch).filter(Boolean);
   const excludeTerms = [
-    ...(Array.isArray(org.__exclude_terms)?org.__exclude_terms:[]),
+    ...(Array.isArray(org.__normalized_excludes)?org.__normalized_excludes:(Array.isArray(org.__exclude_terms)?org.__exclude_terms:[])),
     'maşın bazarı','avtomobil bazarı','ikinci əl maşın','toy','gəlin','bəy','nişan mərasimi',
     'futbol','idman yarışı','konsert','şou','serial','film treyleri','restoran','otel',
     'it','pişik','heyvan bazarı','daşınmaz əmlak','ev satılır','kirayə ev','iş elanları',
@@ -1495,6 +1524,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     if(!term || !district || !term.includes(district)) return false;
     return contains(normalized,term);
   }).slice(0,8);
+  const bankKeywordHits = normalizedKeywords.filter(term=>{
+    if(!term || term.length < 6) return false;
+    return contains(normalized,term);
+  }).slice(0,12);
 
   const raw:any = item.raw || {};
   const kind=String(raw.kind||'');
@@ -1503,7 +1536,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
 
   // Aidiyyəti video təşkilat filtrlərindən artıq keçibsə, onun bütün rəyləri saxlanılır.
   // Rəyin özündə "Bərdə" və ya "suvarma" sözünün təkrarlanmaması vacib məlumatı itirməsin.
-  const positiveTopic = strongHits.length>0 || scopedKeywordHits.length>0;
+  const positiveTopic = strongHits.length>0 || scopedKeywordHits.length>0 || bankKeywordHits.length>0;
 
   const exclusionHits = excludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
   const negativeOnly = exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
@@ -1529,6 +1562,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     ...directMatches,
     ...strongHits.map(t=>(districtHit?`${district}+${t}`:t)),
     ...scopedKeywordHits,
+    ...bankKeywordHits,
     ...(!districtHit && villageHits.length && strongHits.length ? villageHits.flatMap(v=>strongHits.slice(0,2).map(t=>`${v}+${t}`)) : [])
   ])];
 
