@@ -1333,14 +1333,23 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     .maybeSingle();
   if (existingError) throw existingError;
   if (existing?.id) {
-    await admin.from('mentions').update({
+    // Mövcud material/rəy yenidən görünəndə yalnız statusu deyil, dəyişə bilən
+    // platforma metadatasını da təzələyirik. Xüsusilə YouTube şərhlərində
+    // like_count sonradan dəyişə bildiyi üçün köhnə 0 dəyəri saxlanmamalıdır.
+    const refresh:any = {
       source_status:'active',
       last_seen_at:new Date().toISOString(),
       last_verified_at:new Date().toISOString(),
       unavailable_since:null,
       unavailable_reason:null,
-      consecutive_misses:0
-    }).eq('id',existing.id);
+      consecutive_misses:0,
+      raw_payload:item.raw || item
+    };
+    if (item.author) refresh.author_name=item.author;
+    if (item.published_at) refresh.published_at=item.published_at;
+    if (item.text) refresh.original_text=item.text;
+    if (item.title) refresh.title=item.title;
+    await admin.from('mentions').update(refresh).eq('id',existing.id);
     return 0;
   }
 

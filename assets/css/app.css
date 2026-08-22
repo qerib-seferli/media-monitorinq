@@ -846,3 +846,46 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 
 /* v18 — silinmiş mənbə statusu */
 .source-removed,.inline-removed{background:rgba(239,68,68,.13)!important;color:#ff7b86!important;border:1px solid rgba(239,68,68,.48)!important;font-weight:900!important}.inline-removed{display:inline-flex;padding:2px 6px;border-radius:999px;font-size:9px;margin-left:6px;vertical-align:middle}
+
+/* v19 — əsas kart klik sahəsi, bildiriş simmetriyası və mobil status çipləri */
+.dashboard-mention-card{cursor:pointer;grid-template-columns:110px minmax(0,1fr) 26px!important;transition:border-color .16s ease,transform .16s ease,background .16s ease}
+.dashboard-mention-card:hover{border-color:rgba(241,202,103,.42);background:rgba(255,255,255,.038);transform:translateY(-1px)}
+.dashboard-mention-card:focus-visible{outline:2px solid rgba(241,202,103,.75);outline-offset:2px}
+.card-open-cue{display:grid;place-items:center;width:26px;height:34px;color:var(--gold2);font-size:25px;font-weight:800;align-self:center}
+
+.dashboard-notification{grid-template-columns:8px minmax(0,1fr) auto 14px!important;align-items:center!important;column-gap:9px!important}
+.dashboard-notification-arrow{color:var(--gold2);font-size:18px;line-height:1;font-weight:800;align-self:center}
+.dashboard-notification-copy strong{line-height:1.25!important}
+.dashboard-status-chip{display:inline-flex;align-items:center;max-width:100%;padding:2px 7px;border-radius:999px;font-size:8px;line-height:1.2;font-weight:900;white-space:nowrap}
+.dashboard-status-chip.removed{color:#ff7b86;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.42)}
+.dashboard-status-chip.unavailable{color:#f3cf73;background:rgba(215,181,109,.10);border:1px solid rgba(215,181,109,.28)}
+.notification-dot.removed{background:#ef4444!important}
+
+.notification-card{grid-template-columns:42px minmax(0,1fr) 18px!important;align-items:center!important}
+.notification-copy{min-width:0}
+.notification-title-row{display:flex!important;align-items:center;gap:8px;flex-wrap:wrap;margin:0!important;color:inherit!important}
+.notification-title-row strong{min-width:0}
+.notification-status-chip{display:inline-flex!important;align-items:center!important;width:auto!important;max-width:100%!important;padding:3px 8px!important;border-radius:999px!important;font-size:9px!important;line-height:1.1!important;font-weight:900!important;margin:0!important;white-space:nowrap!important}
+.notification-status-chip.removed{color:#ff7b86!important;background:rgba(239,68,68,.12)!important;border:1px solid rgba(239,68,68,.42)!important}
+.notification-status-chip.unavailable{color:#f3cf73!important;background:rgba(215,181,109,.10)!important;border:1px solid rgba(215,181,109,.28)!important}
+.notification-copy .notification-body{display:block!important;color:var(--muted)!important;font-size:12px!important;line-height:1.45!important;margin-top:4px!important}
+.notification-meta-row{display:flex!important;align-items:center;gap:7px;flex-wrap:wrap;margin-top:7px!important;color:inherit!important}
+.notification-meta-row time{margin:0!important}
+.mini-type-chip{display:inline-flex!important;width:auto!important;padding:2px 6px!important;border-radius:999px!important;border:1px solid rgba(241,202,103,.28)!important;background:rgba(215,181,109,.08)!important;color:#f3cf73!important;font-size:8px!important;line-height:1!important;margin:0!important;white-space:nowrap!important}
+.notification-arrow{font-size:22px!important;align-self:center}
+
+@media(max-width:700px){
+  .dashboard-mention-card{grid-template-columns:78px minmax(0,1fr) 18px!important;gap:9px!important}
+  .card-open-cue{width:18px;height:26px;font-size:20px}
+  .dashboard-notification{grid-template-columns:7px minmax(0,1fr) 56px 10px!important;gap:7px!important;padding:9px 0!important}
+  .dashboard-notification time{white-space:normal!important;text-align:right;line-height:1.25!important}
+  .dashboard-notification-arrow{font-size:15px}
+  .dashboard-status-chip{font-size:7px;padding:2px 5px}
+  .notification-card{grid-template-columns:34px minmax(0,1fr) 14px!important;padding:11px!important;gap:9px!important}
+  .notification-title-row{gap:6px}
+  .notification-status-chip{font-size:8px!important;padding:2px 6px!important}
+  .notification-copy .notification-body{font-size:10px!important;line-height:1.35!important}
+  .notification-meta-row{gap:5px;margin-top:5px!important}
+  .mini-type-chip{font-size:7px!important;padding:2px 5px!important}
+  .notification-arrow{font-size:18px!important}
+}

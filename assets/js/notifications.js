@@ -38,7 +38,10 @@ function render() {
     const href = item.mention_id ? `./monitorinq.html?id=${encodeURIComponent(item.mention_id)}` : '';
     const mention=mentionMap.get(item.mention_id);
     const comment=isComment(mention);
-    const removed=sourceStatus(mention)==='removed'; const content = `<span class="notification-icon ${removed?'danger':toneOf(item)}${comment?' comment-icon':''}">${comment?'✉':(removed||toneOf(item)==='danger'?'!':'i')}</span><span class="notification-copy"><strong>${escapeHtml(item.title || 'Bildiriş')}${removed?` <span class="inline-removed">${comment?'Şərh silinib':'Material silinib'}</span>`:''}</strong><span>${escapeHtml(item.body || '')}</span><time>${fmtDate(mention?.published_at||item.created_at)}</time></span><span class="notification-arrow">${href?'›':''}</span>`;
+    const removed=sourceStatus(mention)==='removed';
+    const unavailable=sourceStatus(mention)==='unavailable';
+    const statusChip=removed?`<span class="notification-status-chip removed">${comment?'Şərh silinib':'Material silinib'}</span>`:unavailable?'<span class="notification-status-chip unavailable">Əlçatan deyil</span>':'';
+    const content = `<span class="notification-icon ${removed?'danger':toneOf(item)}${comment?' comment-icon':''}">${comment?'✉':(removed||toneOf(item)==='danger'?'!':'i')}</span><span class="notification-copy"><span class="notification-title-row"><strong>${escapeHtml(item.title || 'Bildiriş')}</strong>${statusChip}</span><span class="notification-body">${escapeHtml(item.body || '')}</span><span class="notification-meta-row"><time>${fmtDate(mention?.published_at||item.created_at)}</time>${comment?'<span class="mini-type-chip">YouTube rəyi</span>':''}</span></span><span class="notification-arrow">${href?'›':''}</span>`;
     return href ? `<a class="notification-card${comment?' is-comment':''}" href="${href}">${content}</a>` : `<article class="notification-card${comment?' is-comment':''}">${content}</article>`;
   }).join('') : '<div class="card empty">Bu filtr üzrə bildiriş yoxdur.</div>';
 }
@@ -54,7 +57,7 @@ if (error) toast(error,'error');
 rows = data || [];
 const ids=[...new Set(rows.map(x=>x.mention_id).filter(Boolean))];
 if(ids.length){
-  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status').in('id',ids);
+  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,author_name').in('id',ids);
   mentionMap=new Map(mentions.map(x=>[x.id,x]));
 }
 rows=rows.filter(x=>!x.mention_id||Number(mentionMap.get(x.mention_id)?.relevance_score||0)>0);
