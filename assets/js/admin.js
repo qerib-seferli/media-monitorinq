@@ -11,6 +11,8 @@ let users = [];
 let positions = [];
 let districts = [];
 let keywords = [];
+let keywordStats = [];
+const KEYWORD_PAGE_SIZE = 100;
 let sources = [];
 let auditRows = [];
 
@@ -47,27 +49,35 @@ window.addEventListener('hashchange', route);
 route();
 hidePageLoader();
 
-async function fetchAllKeywords() {
-  const pageSize = 1000;
-  const rows = [];
+async function loadKeywordStats() {
+  const targets = [
+    ...orgs.map(o => ({ organization_id:o.id, name:o.short_name || o.name || 'Təşkilat' })),
+    { organization_id:null, name:'Qlobal' }
+  ];
 
-  for (let from = 0; ; from += pageSize) {
-    const to = from + pageSize - 1;
-    const { data, error } = await supabase
-      .from('keywords')
-      .select('*,organizations(short_name)')
-      .order('created_at', { ascending: false })
-      .range(from, to);
-
-    if (error) return { data: rows, error };
-
-    const page = data || [];
-    rows.push(...page);
-
-    if (page.length < pageSize) break;
+  const jobs = [];
+  for (const target of targets) {
+    let positive = supabase.from('keywords').select('id', { count:'exact', head:true }).neq('kind','exclude');
+    let excluded = supabase.from('keywords').select('id', { count:'exact', head:true }).eq('kind','exclude');
+    if (target.organization_id) {
+      positive = positive.eq('organization_id', target.organization_id);
+      excluded = excluded.eq('organization_id', target.organization_id);
+    } else {
+      positive = positive.is('organization_id', null);
+      excluded = excluded.is('organization_id', null);
+    }
+    jobs.push(Promise.all([positive, excluded]).then(([p,e]) => ({
+      ...target,
+      positive_count: p.error ? 0 : (p.count || 0),
+      excluded_count: e.error ? 0 : (e.count || 0),
+      error: p.error || e.error || null
+    })));
   }
 
-  return { data: rows, error: null };
+  const rows = await Promise.all(jobs);
+  const firstError = rows.find(x => x.error)?.error;
+  if (firstError) toast(firstError.message, 'error');
+  keywordStats = rows;
 }
 
 async function refresh() {
@@ -76,22 +86,23 @@ async function refresh() {
     supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
-    fetchAllKeywords(),
     supabase.from('sources').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(120),
     supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100)
   ]);
 
-  const [o,u,p,d,k,s,a] = results;
-  const fatal = results.find(r => r?.error);
+  const [o,u,p,d,s,a] = results;
+  const fatal = results.find(r => r.error);
   if (fatal?.error) toast(fatal.error.message, 'error');
 
-  orgs = o?.data || [];
-  users = u?.data || [];
-  positions = p?.data || [];
-  districts = d?.data || [];
-  keywords = k?.data || [];
-  sources = s?.data || [];
-  auditRows = a?.data || [];
+  orgs = o.data || [];
+  users = u.data || [];
+  positions = p.data || [];
+  districts = d.data || [];
+  keywords = []; // Minlərlə açar sözü səhifə açılan kimi RAM-a yükləmirik.
+  sources = s.data || [];
+  auditRows = a.data || [];
+
+  await loadKeywordStats();
 
   renderMetrics();
   renderOrgs();
@@ -199,58 +210,97 @@ function renderCatalogs() {
     <details class="location-row location-group"><summary class="location-title"><strong>${escapeHtml(d.name)}</strong><span>${(d.villages || []).length} məntəqə</span></summary><div class="location-values location-values-grid">${(d.villages || []).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'az')).map(v => `<span>${escapeHtml(v.name)}</span>`).join('') || '<em>Kənd əlavə edilməyib</em>'}</div></details>`).join('') || '<div class="empty">Rayon yoxdur.</div>';
 }
 
+function keywordGroupSummary(stat, mode) {
+  const count = mode === 'exclude' ? stat.excluded_count : stat.positive_count;
+  if (!count) return '';
+  const orgKey = stat.organization_id || '';
+  const css = mode === 'exclude' ? 'keyword-group exclusion-group' : 'keyword-group';
+  const label = mode === 'exclude' ? 'aktiv filtr' : 'açar söz';
+  return `
+    <details class="${css}" data-keyword-group="1" data-mode="${mode}" data-org-id="${escapeHtml(orgKey)}" data-total="${count}">
+      <summary>
+        <span><strong>${escapeHtml(stat.name)}</strong><small>${count} ${label}</small></span>
+        <span class="keyword-count">${count}</span>
+      </summary>
+      <div class="keyword-group-body" data-keyword-body>
+        <div class="empty compact">Açdıqda ilk ${Math.min(KEYWORD_PAGE_SIZE,count)} qeyd yüklənəcək.</div>
+      </div>
+    </details>`;
+}
+
 function renderKeywords() {
   const el = document.querySelector('#keyword-list');
   const excludeEl = document.querySelector('#exclude-list');
   if (!el) return;
 
-  const positive = keywords.filter(x => String(x.kind || '').toLowerCase() !== 'exclude');
-  const excluded = keywords.filter(x => String(x.kind || '').toLowerCase() === 'exclude');
-
-  if (!positive.length) {
-    el.innerHTML = '<div class="empty compact">Açar söz yoxdur.</div>';
-  } else {
-    const groups = new Map();
-    for (const item of positive) {
-      const name = item.organizations?.short_name || 'Təşkilatsız';
-      if (!groups.has(name)) groups.set(name, []);
-      groups.get(name).push(item);
-    }
-
-    el.innerHTML = [...groups.entries()].map(([name, items]) => {
-      const activeCount = items.filter(x => x.is_active !== false).length;
-      const rows = items
-        .slice()
-        .sort((a,b)=>String(a.kind||'').localeCompare(String(b.kind||''),'az') || String(a.value||'').localeCompare(String(b.value||''),'az'))
-        .map(x => `<div class="keyword-item"><span>${escapeHtml(x.value)}</span><span class="badge info">${escapeHtml(x.kind || 'phrase')}</span></div>`)
-        .join('');
-      return `<details class="keyword-group"><summary><span><strong>${escapeHtml(name)}</strong><small>${activeCount} aktiv açar söz</small></span><span class="keyword-count">${items.length}</span></summary><div class="keyword-group-body">${rows}</div></details>`;
-    }).join('');
-  }
+  const positiveGroups = keywordStats.filter(x => x.positive_count > 0);
+  el.innerHTML = positiveGroups.map(x => keywordGroupSummary(x,'positive')).join('') || '<div class="empty compact">Açar söz yoxdur.</div>';
 
   if (excludeEl) {
-    if (!excluded.length) {
-      excludeEl.innerHTML = '<div class="empty compact">Axtarılmamalı söz təyin edilməyib.</div>';
-    } else {
-      const groups = new Map();
-      for (const item of excluded) {
-        const name = item.organizations?.short_name || 'Qlobal';
-        if (!groups.has(name)) groups.set(name, []);
-        groups.get(name).push(item);
-      }
-      excludeEl.innerHTML = [...groups.entries()].map(([name, items]) => `
-        <details class="keyword-group exclusion-group">
-          <summary><span><strong>${escapeHtml(name)}</strong><small>${items.filter(x=>x.is_active!==false).length} aktiv filtr</small></span><span class="keyword-count">${items.length}</span></summary>
-          <div class="keyword-group-body">
-            ${items.slice().sort((a,b)=>String(a.value||'').localeCompare(String(b.value||''),'az')).map(x=>`
-              <div class="keyword-item exclusion-item">
-                <span>${escapeHtml(x.value)}</span>
-                <button class="icon-btn exclusion-delete" type="button" title="Filtri sil" aria-label="${escapeHtml(x.value)} filtrini sil" data-exclude-delete="${x.id}">×</button>
-              </div>`).join('')}
-          </div>
-        </details>`).join('');
-    }
+    const excludeGroups = keywordStats.filter(x => x.excluded_count > 0);
+    excludeEl.innerHTML = excludeGroups.map(x => keywordGroupSummary(x,'exclude')).join('') || '<div class="empty compact">Axtarılmamalı söz təyin edilməyib.</div>';
   }
+
+  document.querySelectorAll('[data-keyword-group]').forEach(group => {
+    if (group.dataset.lazyBound) return;
+    group.dataset.lazyBound = '1';
+    group.addEventListener('toggle', () => {
+      if (group.open && group.dataset.loaded !== '1') loadKeywordGroup(group, 0, false);
+    });
+  });
+}
+
+async function loadKeywordGroup(group, offset=0, append=false) {
+  const body = group.querySelector('[data-keyword-body]');
+  if (!body || group.dataset.loading === '1') return;
+  group.dataset.loading = '1';
+  if (!append) body.innerHTML = '<div class="empty compact">Yüklənir…</div>';
+
+  const orgId = group.dataset.orgId || '';
+  const mode = group.dataset.mode || 'positive';
+  let q = supabase
+    .from('keywords')
+    .select('id,organization_id,value,kind,is_active')
+    .order('value',{ascending:true})
+    .range(offset, offset + KEYWORD_PAGE_SIZE - 1);
+
+  q = mode === 'exclude' ? q.eq('kind','exclude') : q.neq('kind','exclude');
+  q = orgId ? q.eq('organization_id',orgId) : q.is('organization_id',null);
+
+  const { data, error } = await q;
+  group.dataset.loading = '0';
+  if (error) {
+    body.innerHTML = `<div class="empty compact">${escapeHtml(error.message)}</div>`;
+    return;
+  }
+
+  const rows = data || [];
+  const html = rows.map(x => mode === 'exclude' ? `
+    <div class="keyword-item exclusion-item">
+      <span>${escapeHtml(x.value)}</span>
+      <button class="icon-btn exclusion-delete" type="button" title="Filtri sil" aria-label="${escapeHtml(x.value)} filtrini sil" data-exclude-delete="${x.id}">×</button>
+    </div>` : `
+    <div class="keyword-item">
+      <span>${escapeHtml(x.value)}</span>
+      <span class="badge info">${escapeHtml(x.kind || 'phrase')}</span>
+    </div>`).join('');
+
+  const total = Number(group.dataset.total || 0);
+  const nextOffset = offset + rows.length;
+  const more = nextOffset < total ? `<button class="btn ghost btn-sm keyword-load-more" type="button" data-keyword-more="${nextOffset}">Daha ${Math.min(KEYWORD_PAGE_SIZE,total-nextOffset)} göstər</button>` : '';
+
+  if (append) {
+    body.querySelector('[data-keyword-more]')?.remove();
+    body.insertAdjacentHTML('beforeend', html + more);
+  } else {
+    body.innerHTML = html + more || '<div class="empty compact">Qeyd yoxdur.</div>';
+    group.dataset.loaded = '1';
+  }
+
+  body.querySelector('[data-keyword-more]')?.addEventListener('click', e => {
+    loadKeywordGroup(group, Number(e.currentTarget.dataset.keywordMore || 0), true);
+  });
+  bindDynamicActions();
 }
 
 function renderSources() {
@@ -539,9 +589,12 @@ async function configureBarda() {
   if (pRes.error) return toast(pRes.error.message,'error');
   changed += pRes.count;
 
-  const kRes = await insertMissing('keywords', keywords, desiredKeywords.map(value=>({organization_id:org.id,value,kind:'phrase',is_active:true})), (a,b)=>a.organization_id===b.organization_id && String(a.value).toLocaleLowerCase('az-AZ')===String(b.value).toLocaleLowerCase('az-AZ'));
-  if (kRes.error) return toast(kRes.error.message,'error');
-  changed += kRes.count;
+  const stat = keywordStats.find(x => x.organization_id === org.id);
+  if (!stat?.positive_count) {
+    const { error } = await supabase.from('keywords').insert(desiredKeywords.map(value=>({organization_id:org.id,value,kind:'phrase',is_active:true})));
+    if (error && error.code !== '23505') return toast(error.message,'error');
+    if (!error) changed += desiredKeywords.length;
+  }
 
   const rssUrl = 'https://news.google.com/rss/search?q=' + encodeURIComponent('"Bərdə SMSİİ" OR "Bərdə suvarma" OR "Bərdə Suvarma İdarəsi"') + '&hl=az&gl=AZ&ceid=AZ:az';
   const hasRss = sources.some(s => s.organization_id===org.id && String(s.url||'').includes('news.google.com/rss/search'));
@@ -591,10 +644,9 @@ document.querySelector('#exclude-form').onsubmit = async e => {
   const organization_id = document.querySelector('#exclude-org').value;
   const value = document.querySelector('#exclude-value').value.trim();
   if (!value) return;
-  const duplicate = keywords.some(k => k.organization_id === organization_id && String(k.kind||'').toLowerCase()==='exclude' && String(k.value||'').trim().toLocaleLowerCase('az-AZ') === value.toLocaleLowerCase('az-AZ'));
-  if (duplicate) return toast('Bu filtr artıq mövcuddur.','error');
   const { error } = await supabase.from('keywords').insert({organization_id,value,kind:'exclude',is_active:true});
-  toast(error ? error.message : 'Axtarılmamalı söz əlavə edildi', error ? 'error' : 'success');
+  const message = error?.code === '23505' ? 'Bu filtr artıq mövcuddur.' : (error?.message || 'Axtarılmamalı söz əlavə edildi');
+  toast(message, error ? 'error' : 'success');
   if (!error) { e.target.reset(); await refresh(); }
 };
 document.querySelector('#source-form').onsubmit = async e => {
@@ -606,7 +658,7 @@ document.querySelector('#source-form').onsubmit = async e => {
   const duplicate = sources.some(s => s.organization_id === organization_id && (googleNews ? String(s.url||'').includes('news.google.com/rss/') : String(s.url||'').trim().toLowerCase() === url.toLowerCase()));
   if (duplicate) return toast(googleNews ? 'Bu təşkilat üçün Google News RSS artıq mövcuddur.' : 'Bu mənbə artıq mövcuddur.', 'error');
   const { error } = await supabase.from('sources').insert({organization_id,platform,url,is_active:true});
-  toast(error || 'Mənbə əlavə edildi',error?'error':'success');
+  toast(error ? error.message : 'Mənbə əlavə edildi',error?'error':'success');
   if(!error){e.target.reset();await refresh();}
 };
 
