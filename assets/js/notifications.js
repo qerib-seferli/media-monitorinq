@@ -10,6 +10,10 @@ hidePageLoader();
 
 const list = document.querySelector('#notification-list');
 let rows = [];
+let mentionMap = new Map();
+const isComment=m=>String(m?.raw_payload?.kind||'').includes('comment');
+const commentMark=()=>'<span class="comment-mark" title="Şərh" aria-label="Şərh">✉</span>';
+
 let filter = 'all';
 
 function toneOf(item) {
@@ -31,8 +35,10 @@ function render() {
   const visible = rows.filter(matches);
   list.innerHTML = visible.length ? visible.map(item => {
     const href = item.mention_id ? `./monitorinq.html?id=${encodeURIComponent(item.mention_id)}` : '';
-    const content = `<span class="notification-icon ${toneOf(item)}">${toneOf(item)==='danger'?'!':'i'}</span><span class="notification-copy"><strong>${escapeHtml(item.title || 'Bildiriş')}</strong><span>${escapeHtml(item.body || '')}</span><time>${fmtDate(item.created_at)}</time></span><span class="notification-arrow">${href?'›':''}</span>`;
-    return href ? `<a class="notification-card" href="${href}">${content}</a>` : `<article class="notification-card">${content}</article>`;
+    const mention=mentionMap.get(item.mention_id);
+    const comment=isComment(mention);
+    const content = `${comment?commentMark():''}<span class="notification-icon ${toneOf(item)}">${toneOf(item)==='danger'?'!':'i'}</span><span class="notification-copy"><strong>${escapeHtml(item.title || 'Bildiriş')}</strong><span>${escapeHtml(item.body || '')}</span><time>${fmtDate(mention?.published_at||item.created_at)}</time></span><span class="notification-arrow">${href?'›':''}</span>`;
+    return href ? `<a class="notification-card${comment?' is-comment':''}" href="${href}">${content}</a>` : `<article class="notification-card${comment?' is-comment':''}">${content}</article>`;
   }).join('') : '<div class="card empty">Bu filtr üzrə bildiriş yoxdur.</div>';
 }
 
@@ -45,4 +51,10 @@ document.querySelectorAll('[data-notification-filter]').forEach(btn => btn.addEv
 const { data, error } = await supabase.from('notifications').select('*').order('created_at',{ascending:false}).limit(150);
 if (error) toast(error,'error');
 rows = data || [];
+const ids=[...new Set(rows.map(x=>x.mention_id).filter(Boolean))];
+if(ids.length){
+  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload').in('id',ids);
+  mentionMap=new Map(mentions.map(x=>[x.id,x]));
+}
+rows.sort((a,b)=>new Date(mentionMap.get(b.mention_id)?.published_at||b.created_at||0)-new Date(mentionMap.get(a.mention_id)?.published_at||a.created_at||0));
 render();

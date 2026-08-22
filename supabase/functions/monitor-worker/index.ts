@@ -483,8 +483,8 @@ async function youtubeItems(
   // səhifələri ardıcıl gəzir; top-level şərhlərlə yanaşı API-nin qaytardığı cavablar
   // da ayrıca qeyd kimi saxlanılır. Uzun arxiv run-larında vaxt limiti aşılmasın deyə
   // təhlükəsiz deadline tətbiq olunur və növbəti run qalan videoları yenidən yoxlaya bilir.
-  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,12);
-  const commentDeadline = Date.now() + 70000;
+  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,24);
+  const commentDeadline = Date.now() + 85000;
   for (const item of relevantForComments) {
     if (Date.now() > commentDeadline) break;
     const raw:any = item.raw || {};
@@ -822,7 +822,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     await admin.from('mention_media').insert({mention_id:data.id,media_type:'preview',url:item.image,captured_at:new Date().toISOString()});
   }
   if (priority >= 81) {
-    await admin.from('notifications').insert({organization_id:org.id,mention_id:data.id,title:'Yüksək prioritetli yeni qeyd',body:item.title || 'Yeni material',kind:'critical'});
+    await admin.from('notifications').insert({organization_id:org.id,mention_id:data.id,title:String((item.raw as any)?.kind||'').includes('comment')?'Yüksək prioritetli yeni şərh':'Yüksək prioritetli yeni qeyd',body:item.title || 'Yeni material',kind:'critical'});
   }
   return 1;
 }

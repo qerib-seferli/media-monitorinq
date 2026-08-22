@@ -714,3 +714,54 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .report-toolbar #to{grid-column:2 !important}
   .comment-detail-grid{grid-template-columns:1fr 1fr !important}
 }
+
+/* v12 — şərh nişanı, filtr gridləri və hesabat mobil simmetriyası */
+.mention-card,.notification-card,.dashboard-notification{position:relative}
+.mention-card.is-comment,.notification-card.is-comment,.dashboard-notification.is-comment{
+  border-color:rgba(241,202,103,.72)!important;
+  box-shadow:inset 0 0 0 1px rgba(241,202,103,.08),0 8px 24px rgba(0,0,0,.10);
+}
+.comment-mark{
+  position:absolute;top:10px;right:10px;z-index:3;
+  width:28px;height:28px;border-radius:9px;display:grid;place-items:center;
+  background:linear-gradient(180deg,#f4d98f,#d9ad4f);color:#07111f;
+  border:1px solid rgba(255,236,174,.88);box-shadow:0 7px 18px rgba(218,174,78,.18);
+  font-size:15px;font-weight:900;line-height:1;
+}
+.mention-card.is-comment>.toolbar{padding-right:34px}
+.dashboard-notification.is-comment{padding-right:46px}
+.notification-card.is-comment{padding-right:48px}
+
+.monitor-filters{
+  display:grid!important;
+  grid-template-columns:repeat(6,minmax(0,1fr))!important;
+  gap:8px!important;width:min(840px,100%)!important;max-width:840px!important;
+}
+.monitor-filters #period,.monitor-filters #date-from,.monitor-filters #date-to{grid-column:span 2!important}
+.monitor-filters #platform,.monitor-filters #sentiment{grid-column:span 3!important}
+.monitor-filters .select,.monitor-filters .input{width:100%!important;min-width:0!important;height:42px!important}
+
+.report-toolbar{
+  display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;
+  gap:8px!important;width:min(480px,100%)!important;max-width:480px!important;
+}
+.report-toolbar #report-period{grid-column:1!important;grid-row:1!important}
+.report-toolbar #apply{grid-column:2!important;grid-row:1!important;width:100%!important}
+.report-toolbar #from{grid-column:1!important;grid-row:2!important}
+.report-toolbar #to{grid-column:2!important;grid-row:2!important}
+.report-toolbar .select,.report-toolbar .input,.report-toolbar .btn{width:100%!important;min-width:0!important;height:42px!important}
+
+@media(max-width:700px){
+  .monitor-head,.report-head{align-items:stretch!important}
+  .monitor-head>.toolbar,.report-head>.toolbar{width:100%!important;max-width:none!important}
+  .monitor-filters{grid-template-columns:repeat(6,minmax(0,1fr))!important;width:100%!important;max-width:none!important}
+  .monitor-filters #period,.monitor-filters #date-from,.monitor-filters #date-to{grid-column:span 2!important}
+  .monitor-filters #platform,.monitor-filters #sentiment{grid-column:span 3!important}
+  .monitor-filters .select,.monitor-filters .input{font-size:11px!important;padding-left:10px!important;padding-right:28px!important}
+  .report-toolbar{grid-template-columns:1fr 1fr!important;width:100%!important;max-width:none!important}
+  .report-toolbar #report-period{grid-column:1!important;grid-row:1!important}
+  .report-toolbar #apply{grid-column:2!important;grid-row:1!important}
+  .report-toolbar #from{grid-column:1!important;grid-row:2!important}
+  .report-toolbar #to{grid-column:2!important;grid-row:2!important}
+  .comment-mark{top:8px;right:8px;width:26px;height:26px;font-size:14px}
+}

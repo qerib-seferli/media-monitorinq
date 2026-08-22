@@ -18,23 +18,25 @@ let rows=[], page=0, loading=false, done=false, requestToken=0;
 function isoDay(d,end=false){
   const x=new Date(d); x.setHours(end?23:0,end?59:0,end?59:0,end?999:0); return x.toISOString();
 }
-function dateRange(){
-  const now=new Date(); let start=new Date(now), end=new Date(now);
-  const v=period.value;
+function ymd(d){const x=new Date(d.getTime()-d.getTimezoneOffset()*60000);return x.toISOString().slice(0,10)}
+function presetDates(v){
+  const now=new Date(); let start=new Date(now);
   if(v==='today') start=new Date(now.getFullYear(),now.getMonth(),now.getDate());
   else if(v==='month') start=new Date(now.getFullYear(),now.getMonth(),1);
-  else if(v==='custom'){
-    if(!dateFrom.value||!dateTo.value) return null;
-    return {from:isoDay(dateFrom.value),to:isoDay(dateTo.value,true)};
-  } else {
+  else if(v!=='custom'){
     const m={ '3m':3,'6m':6,'9m':9,'1y':12,'2y':24,'3y':36,'4y':48,'5y':60 }[v]||1;
     start.setMonth(start.getMonth()-m);
   }
-  return {from:isoDay(start),to:isoDay(end,true)};
+  if(v!=='custom'){dateFrom.value=ymd(start);dateTo.value=ymd(now);}
+}
+function dateRange(){
+  if(!dateFrom.value||!dateTo.value) return null;
+  return {from:isoDay(dateFrom.value),to:isoDay(dateTo.value,true)};
 }
 function updateDateInputs(){
-  const custom=period.value==='custom'; dateFrom.classList.toggle('hidden',!custom); dateTo.classList.toggle('hidden',!custom);
+  dateFrom.classList.remove('hidden'); dateTo.classList.remove('hidden');
 }
+
 function publishedDate(m){return m.published_at||m.detected_at||null;}
 function sourceStateBadge(m){
   const state=String(m.source_status||'active');
@@ -49,9 +51,10 @@ function sourceStateText(m){
   return 'Orijinal material son yoxlamada mənbədə əlçatan olub.';
 }
 function isComment(m){return String(m.raw_payload?.kind||'').includes('comment');}
+function commentMark(){return '<span class="comment-mark" title="Şərh" aria-label="Şərh">✉</span>'}
 function card(m){
   const comment=isComment(m);
-  return `<article class="mention-card"><img class="thumb" src="${m.mention_media?.[0]?.url||'./assets/img/icon.svg'}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.summary||m.original_text||'')}</p><div class="mention-meta"><span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${comment?'<span class="badge info">Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${fmtDate(publishedDate(m))}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
+  return `<article class="mention-card${comment?' is-comment':''}">${comment?commentMark():''}<img class="thumb" src="${m.mention_media?.[0]?.url||'./assets/img/icon.svg'}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.summary||m.original_text||'')}</p><div class="mention-meta"><span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${comment?'<span class="badge info">Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${fmtDate(publishedDate(m))}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
 }
 function render(append=false){
   if(!append) list.innerHTML='';
@@ -78,11 +81,23 @@ async function load({reset=false}={}){
 }
 
 function speechText(m){return [m.title,m.summary,m.original_text].filter(Boolean).join('. ');}
+function bestSpeechVoice(){
+  const voices=window.speechSynthesis?.getVoices?.()||[];
+  return voices.find(v=>/^az([-_]|$)/i.test(v.lang))
+    || voices.find(v=>/^tr([-_]|$)/i.test(v.lang))
+    || voices.find(v=>/^en([-_]|$)/i.test(v.lang))
+    || voices[0]
+    || null;
+}
 function speak(m,button){
   if(!('speechSynthesis' in window)) return toast('Bu cihazda səslə oxuma dəstəklənmir.','error');
   if(window.speechSynthesis.speaking){window.speechSynthesis.cancel();button.textContent='🔊 Dinlə';return;}
-  const u=new SpeechSynthesisUtterance(speechText(m)); u.lang='az-AZ'; u.rate=.95;
-  const voices=window.speechSynthesis.getVoices(); u.voice=voices.find(v=>String(v.lang).toLowerCase().startsWith('az'))||null;
+  const u=new SpeechSynthesisUtterance(speechText(m));
+  const voice=bestSpeechVoice();
+  if(voice) u.voice=voice;
+  u.lang=voice?.lang || 'az-AZ';
+  u.rate=.9; u.pitch=1;
+  if(!voice || !/^az([-_]|$)/i.test(voice.lang||'')) toast('Cihazda Azərbaycan dili səsi yoxdur; ən yaxın mövcud səs istifadə olunur.','info');
   u.onend=u.onerror=()=>button.textContent='🔊 Dinlə'; button.textContent='■ Dayandır'; window.speechSynthesis.speak(u);
 }
 async function fetchMentionById(id){
@@ -127,7 +142,7 @@ stage.addEventListener('touchstart',e=>{if(e.touches.length===2){pinchStart=Math
 stage.addEventListener('touchmove',e=>{if(e.touches.length===2&&pinchStart){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);scale=Math.max(.75,Math.min(4,pinchScale*(d/pinchStart)));applyTransform()}},{passive:true});
 stage.addEventListener('touchend',()=>{pinchStart=0});
 
-const reset=()=>load({reset:true}); platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{updateDateInputs();reset();}; dateFrom.onchange=reset;dateTo.onchange=reset;
+const reset=()=>load({reset:true}); platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{presetDates(period.value);updateDateInputs();reset();}; dateFrom.onchange=()=>{period.value='custom';reset();};dateTo.onchange=()=>{period.value='custom';reset();};
 new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)load();},{rootMargin:'500px'}).observe(sentinel);
-updateDateInputs(); await load({reset:true});
+if(!period.value || period.value==='custom') period.value='month'; presetDates(period.value); updateDateInputs(); await load({reset:true});
 const openId=new URLSearchParams(location.search).get('id'); if(openId)await openDetail(openId);
