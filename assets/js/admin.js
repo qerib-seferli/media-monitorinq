@@ -157,7 +157,7 @@ function renderUsers() {
 
 function fillSelects() {
   const orgOptions = '<option value="">Seçin</option>' + orgs.map(o => `<option value="${o.id}">${escapeHtml(o.short_name)}</option>`).join('');
-  ['#keyword-org','#source-org'].forEach(sel => { const el = document.querySelector(sel); if (el) el.innerHTML = orgOptions; });
+  ['#keyword-org','#exclude-org','#source-org'].forEach(sel => { const el = document.querySelector(sel); if (el) el.innerHTML = orgOptions; });
   const posOrg = document.querySelector('#position-org');
   if (posOrg) posOrg.innerHTML = '<option value="">Qlobal</option>' + orgs.map(o => `<option value="${o.id}">${escapeHtml(o.short_name)}</option>`).join('');
   const villageDistrict = document.querySelector('#village-district');

@@ -171,7 +171,7 @@ Deno.serve(async (req) => {
             if (options.quick_youtube_comments || (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000)) {
               const live = await storedYoutubeRecentCommentItems(
                 admin, org, key,
-                options.full_comment_sweep ? 240 : 16,
+                options.full_comment_sweep ? 240 : 20,
                 options.full_comment_sweep,
                 Math.min(options.full_comment_sweep ? 30000 : 18000, Math.max(7000,timeLeft(stopAt)-3500)),
                 options.focus_video_ids
@@ -190,7 +190,7 @@ Deno.serve(async (req) => {
               let backfill:any = null;
               if (!options.quick_youtube_comments && timeLeft(stopAt) > 9000) {
                 try {
-                  backfill = await storedYoutubeCommentBackfillStep(admin,org,key,2,Math.min(9000,timeLeft(stopAt)-2500));
+                  backfill = await storedYoutubeCommentBackfillStep(admin,org,key,6,Math.min(9000,timeLeft(stopAt)-2500));
                   for (const item of backfill.items) {
                     if (Date.now() >= stopAt) break;
                     totalInserted += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,'YouTube şərhi arxivi');
@@ -698,7 +698,7 @@ async function storedYoutubeRecentCommentItems(
   focusVideoIds:string[]=[]
 ):Promise<{items:Item[];videos_checked:number;comments_seen:number;candidate_videos:number;focus_videos:number}> {
   const result:any = await admin.from('mentions')
-    .select('id,title,source_url,published_at,raw_payload,mention_media(url,media_type)')
+    .select('id,title,source_url,published_at,relevance_score,raw_payload,mention_media(url,media_type)')
     .eq('organization_id',org.id)
     .ilike('source_platform','youtube')
     .gt('relevance_score',0)
@@ -752,7 +752,13 @@ async function storedYoutubeRecentCommentItems(
     url:row?.source_url||`https://www.youtube.com/watch?v=${videoId}`,
     published_at:row?.published_at||null,
     image:(row?.mention_media||[])[0]?.url||null,
-    raw:{kind:'youtube_video',video_id:videoId}
+    raw:{
+      kind:'youtube_video',
+      video_id:videoId,
+      parent_mention_id:row?.id||null,
+      parent_relevance_score:Number(row?.relevance_score||1),
+      parent_is_relevant:true
+    }
   }));
 
   const sinceMs=Date.now()-72*3600*1000;
@@ -891,7 +897,10 @@ function makeYoutubeCommentItem(videoItem:Item,videoId:string,commentId:string,s
       like_count:sn?.likeCount??null,
       reply_count:replyCount||0,
       author_channel_url:sn?.authorChannelUrl||null,
-      author_channel_id:sn?.authorChannelId?.value||null
+      author_channel_id:sn?.authorChannelId?.value||null,
+      parent_mention_id:(videoItem.raw as any)?.parent_mention_id||null,
+      parent_is_relevant:(videoItem.raw as any)?.parent_is_relevant===true,
+      parent_relevance_score:Number((videoItem.raw as any)?.parent_relevance_score||0)
     }
   };
 }
@@ -1481,9 +1490,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const raw:any = item.raw || {};
   const kind=String(raw.kind||'');
   const isComment=kind.includes('comment');
+  const trustedParentComment = isComment && raw.parent_is_relevant === true;
 
-  // Şərhlərdə video başlığı da item.text daxilindədir. Şərhin özü Bərdə + suvarma
-  // yazırsa birbaşa qəbul olunur; yalnız video mövzusu uyğun olsa da saxlanıla bilər.
+  // Aidiyyəti video təşkilat filtrlərindən artıq keçibsə, onun bütün rəyləri saxlanılır.
+  // Rəyin özündə "Bərdə" və ya "suvarma" sözünün təkrarlanmaması vacib məlumatı itirməsin.
   const positiveTopic = strongHits.length>0 || scopedKeywordHits.length>0;
 
   const exclusionHits = excludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
@@ -1500,11 +1510,11 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0 && (!villageHits.length || ambiguousVillageHit);
 
   const districtWide = org.show_district_wide !== false;
-  const accepted = !negativeOnly && !foreignHit && (
+  const accepted = trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
     (districtWide && locationHit && positiveTopic) ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
-  );
+  ));
 
   const matches=[...new Set([
     ...directMatches,
@@ -1520,7 +1530,8 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     matches,
     excluded_terms:exclusionHits,
     reason:accepted
-      ? (directMatches.length?'təşkilat-adı-uyğunluğu'
+      ? (trustedParentComment?'aidiyyəti-videonun-rəyi'
+        :directMatches.length?'təşkilat-adı-uyğunluğu'
         :(districtHit&&positiveTopic)?'rayon-mövzu-uyğunluğu'
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
         :'mövzu-uyğunluğu')

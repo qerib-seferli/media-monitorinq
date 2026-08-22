@@ -1,10 +1,10 @@
 import { supabase } from './core.js';
 
-const QUICK_INTERVAL_MS = 25_000;
+const QUICK_INTERVAL_MS = 20_000;
 const IDLE_INTERVAL_MS = 120_000;
-const BURST_MS = 6 * 60_000;
+const BURST_MS = 10 * 60_000;
 const FULL_SWEEP_COOLDOWN_MS = 2 * 60_000;
-const TAB_LOCK_MS = 25_000;
+const TAB_LOCK_MS = 18_000;
 
 let running = false;
 let timer = null;

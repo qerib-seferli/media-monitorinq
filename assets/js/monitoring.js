@@ -76,7 +76,7 @@ async function load({reset=false}={}){
       .order('published_at',{ascending:false,nullsFirst:false}).range(from,to);
     if(platform.value) q=q.ilike('source_platform',platform.value);
     if(sentiment.value) q=q.eq('sentiment',sentiment.value);
-    if(commentOnly) q=q.like('raw_payload->>kind','%comment%');
+    if(commentOnly) q=q.or('raw_payload->>kind.eq.youtube_comment,raw_payload->>kind.eq.youtube_comment_reply');
     const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
     const batch=data||[]; rows.push(...batch); done=batch.length<PAGE_SIZE; page++; render(true);
   }catch(e){ if(!rows.length) list.innerHTML=`<div class="empty">${escapeHtml(e.message||String(e))}</div>`; else toast(e,'error'); }
@@ -151,10 +151,16 @@ if(commentOnly){
   const h1=document.querySelector('.monitor-head h1');
   const p=document.querySelector('.monitor-head p');
   if(h1) h1.textContent='Aşkarlanan rəylər';
-  if(p) p.textContent='Monitorinqə düşən YouTube şərhləri və cavabları.';
+  if(p) p.textContent='Monitorinqə düşən bütün uyğun YouTube şərhləri və cavabları.';
   platform.value='YouTube';
+  period.value='custom';
+  dateFrom.value='2010-01-01';
+  dateTo.value=ymd(new Date());
+}else{
+  if(!period.value || period.value==='custom') period.value='month';
+  presetDates(period.value);
 }
-if(!period.value || period.value==='custom') period.value='month'; presetDates(period.value); updateDateInputs(); await load({reset:true});
+updateDateInputs(); await load({reset:true});
 const openId=new URLSearchParams(location.search).get('id'); if(openId)await openDetail(openId);
 
 startLiveMonitor({organizationId:ctx.profile.organization_id,fullFirst:commentOnly,onNew:()=>load({reset:true})});
