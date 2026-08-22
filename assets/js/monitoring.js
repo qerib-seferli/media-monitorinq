@@ -1,6 +1,7 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
+import { startLiveMonitor } from './live-monitor.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'monitoring'); showPageLoader();
 const ctx=await requireAuth(); if(!ctx) throw new Error('auth'); renderShell(ctx.profile,'monitoring'); hidePageLoader();
@@ -69,6 +70,7 @@ async function load({reset=false}={}){
   try{
     const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
     let q=supabase.from('mentions').select('*, districts(name), villages(name), mention_media(*)')
+      .gt('relevance_score',0)
       .gte('published_at',range.from).lte('published_at',range.to)
       .order('published_at',{ascending:false,nullsFirst:false}).range(from,to);
     if(platform.value) q=q.ilike('source_platform',platform.value);
@@ -102,7 +104,7 @@ function speak(m,button){
 async function fetchMentionById(id){
   const {data,error}=await supabase.from('mentions')
     .select('*, districts(name), villages(name), mention_media(*)')
-    .eq('id',id).maybeSingle();
+    .eq('id',id).gt('relevance_score',0).maybeSingle();
   if(error) throw error;
   return data || null;
 }
@@ -145,3 +147,5 @@ const reset=()=>load({reset:true}); platform.onchange=reset; sentiment.onchange=
 new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)load();},{rootMargin:'500px'}).observe(sentinel);
 if(!period.value || period.value==='custom') period.value='month'; presetDates(period.value); updateDateInputs(); await load({reset:true});
 const openId=new URLSearchParams(location.search).get('id'); if(openId)await openDetail(openId);
+
+startLiveMonitor({organizationId:ctx.profile.organization_id,onNew:()=>load({reset:true})});

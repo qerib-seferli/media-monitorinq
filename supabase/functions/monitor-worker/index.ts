@@ -37,6 +37,7 @@ Deno.serve(async (req) => {
 
     const admin = createClient(url, service);
     const options = await readRunOptions(req);
+    let callerOrganizationId:string|null = null;
 
     currentStage = 'authorization';
     const expected = Deno.env.get('MONITOR_SECRET') || '';
@@ -50,18 +51,24 @@ Deno.serve(async (req) => {
       const user = authResult?.data?.user || null;
       if (!user) return json({ok:false,run_id:runId,stage:currentStage,error:'İcazəsiz monitor sorğusu'},403);
 
-      const profileResult:any = await admin.from('profiles').select('system_role,is_active').eq('auth_user_id',user.id).maybeSingle();
+      const profileResult:any = await admin.from('profiles').select('system_role,is_active,organization_id').eq('auth_user_id',user.id).maybeSingle();
       if (profileResult?.error) return json({ok:false,run_id:runId,stage:currentStage,error:errorInfo(profileResult.error).message},403);
       const profile = profileResult?.data || null;
-      if (!profile?.is_active || profile.system_role !== 'super_admin') {
-        return json({ok:false,run_id:runId,stage:currentStage,error:'Yalnız Super Admin monitorinqi manual işə sala bilər'},403);
+      if (!profile?.is_active) return json({ok:false,run_id:runId,stage:currentStage,error:'Hesab aktiv deyil'},403);
+      if (profile.system_role !== 'super_admin') {
+        if (!options.quick_youtube_comments || !profile.organization_id) {
+          return json({ok:false,run_id:runId,stage:currentStage,error:'Bu monitor sorğusu üçün icazə yoxdur'},403);
+        }
+        callerOrganizationId = String(profile.organization_id);
       }
     }
 
     currentStage = 'organizations';
-    const orgResult:any = await admin.from('organizations')
+    let orgQuery:any = admin.from('organizations')
       .select('id,name,short_name,district_id,districts(name),keywords(*),sources(*)')
       .in('service_status',['active','grace']);
+    if (callerOrganizationId) orgQuery = orgQuery.eq('id', callerOrganizationId);
+    const orgResult:any = await orgQuery;
     if (!orgResult || orgResult.error) {
       const err = orgResult?.error || new Error('Təşkilat sorğusundan cavab alınmadı');
       return json({ok:false,run_id:runId,stage:currentStage,failures:1,errors:[{stage:currentStage,...errorInfo(err)}],details},200);
@@ -94,7 +101,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (!options.youtube_backfill) {
+      if (!options.youtube_backfill && !options.quick_youtube_comments) {
         if (timeLeft(stopAt) > 16000) {
           currentStage = 'google-news';
           checked++;
@@ -129,7 +136,7 @@ Deno.serve(async (req) => {
           details.push({organization:org.short_name,source:'GDELT Web / Xəbər',skipped:'time-budget'});
         }
       } else if (options.debug) {
-        details.push({ organization:org.short_name, source:'Web / Xəbər lane-ləri', skipped:'youtube-backfill-focus' });
+        details.push({ organization:org.short_name, source:'Web / Xəbər lane-ləri', skipped:options.quick_youtube_comments?'quick-youtube-comments-focus':'youtube-backfill-focus' });
       }
 
       for (const source of sources) {
@@ -142,6 +149,10 @@ Deno.serve(async (req) => {
         currentStage = `source:${String(source?.platform || 'web').toLowerCase()}`;
         try {
           const platform = String(source?.platform || 'Web').toLowerCase();
+          if (options.quick_youtube_comments && platform !== 'youtube') {
+            if (options.debug) details.push({organization:org.short_name,source:sourceLabel,skipped:'quick-youtube-comments-focus'});
+            continue;
+          }
 
           if (platform === 'youtube') {
             const last = source?.last_checked_at ? new Date(source.last_checked_at).getTime() : 0;
@@ -151,23 +162,59 @@ Deno.serve(async (req) => {
               continue;
             }
 
-            if (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000) {
-              const liveComments = await storedYoutubeCommentItems(admin, org, key, 8, 1, Math.min(14000, Math.max(6000,timeLeft(stopAt)-3000)));
+            if (options.quick_youtube_comments || (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000)) {
+              const live = await storedYoutubeRecentCommentItems(
+                admin, org, key,
+                options.full_comment_sweep ? 240 : 12,
+                options.full_comment_sweep,
+                Math.min(options.full_comment_sweep ? 30000 : 15000, Math.max(7000,timeLeft(stopAt)-3500))
+              );
               let liveInserted = 0;
-              for (const item of liveComments) {
+              let accepted = 0;
+              let rejected = 0;
+              for (const item of live.items) {
                 if (Date.now() >= stopAt) break;
+                const match = evaluateMatch(org,item,lowerKeywords,villageNames);
+                if (match.accepted) accepted++; else rejected++;
                 liveInserted += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,'YouTube şərhi');
               }
-              inserted += liveInserted;
+              let totalInserted = liveInserted;
+
+              let backfill:any = null;
+              if (!options.quick_youtube_comments && timeLeft(stopAt) > 9000) {
+                try {
+                  backfill = await storedYoutubeCommentBackfillStep(admin,org,key,2,Math.min(9000,timeLeft(stopAt)-2500));
+                  for (const item of backfill.items) {
+                    if (Date.now() >= stopAt) break;
+                    totalInserted += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,'YouTube şərhi arxivi');
+                  }
+                  inserted += totalInserted;
+                } catch (e) { fail('youtube-comment-backfill',e,org.short_name,'YouTube şərh arxivi'); }
+              }
+
+              if (!backfill) inserted += totalInserted;
+
+              if (options.refilter_existing && timeLeft(stopAt) > 5000) {
+                try {
+                  const refilter = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,250);
+                  if (options.debug || refilter.filtered_out) details.push({organization:org.short_name,source:'Mövcud qeydlərin aidiyyət yoxlaması',...refilter});
+                } catch (e) { fail('refilter-existing',e,org.short_name,'Aidiyyət yoxlaması'); }
+              }
+
               details.push({
                 organization:org.short_name,
-                source:'YouTube şərhləri — sürətli yoxlama',
-                comments_checked:liveComments.length,
-                inserted:liveInserted,
+                source:options.full_comment_sweep?'YouTube şərhləri — tam sürətli sweep':'YouTube şərhləri — sürətli yoxlama',
+                videos_checked:live.videos_checked,
+                comments_seen:live.comments_seen,
+                comments_checked:live.items.length,
+                comments_accepted:accepted,
+                comments_rejected:rejected,
+                inserted:totalInserted,
                 video_search:'quota-window',
-                ...(options.debug ? { sample_results:debugSamples(liveComments, org, lowerKeywords, villageNames, 8) } : {})
+                ...(backfill ? { backfill_videos:backfill.videos_checked, backfill_comments:backfill.items.length } : {}),
+                ...(options.debug ? { sample_results:debugSamples(live.items, org, lowerKeywords, villageNames, 10) } : {})
               });
-              await safeSourceTouch(admin,source?.id,errors,org.short_name,sourceLabel);
+              // last_checked_at yalnız video discovery baş verəndə yenilənir; şərh poll-u onu dəyişmir.
               continue;
             }
 
@@ -241,7 +288,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (options.verify_existing !== false && timeLeft(stopAt) > 9000) {
+      if (!options.quick_youtube_comments && options.verify_existing !== false && timeLeft(stopAt) > 9000) {
         currentStage = 'source-verification';
         try {
           const verification = await verifyExistingMentions(admin, org, Deno.env.get('YOUTUBE_API_KEY') || '');
@@ -630,6 +677,267 @@ Cavab: ${replyText}`,
   return { items, comments:dedupeItems(comments), queries };
 }
 
+
+
+async function storedYoutubeRecentCommentItems(
+  admin:any,
+  org:any,
+  key:string,
+  videoLimit=12,
+  fullSweep=false,
+  deadlineMs=15000
+):Promise<{items:Item[];videos_checked:number;comments_seen:number}> {
+  const base = admin.from('mentions')
+    .select('id,title,source_url,published_at,raw_payload,mention_media(url,media_type)')
+    .eq('organization_id',org.id)
+    .ilike('source_platform','youtube')
+    .eq('raw_payload->>kind','youtube_video')
+    .gt('relevance_score',0)
+    .order('published_at',{ascending:false,nullsFirst:false});
+
+  let rows:any[] = [];
+  if (fullSweep) {
+    const result:any = await base.limit(Math.max(1,Math.min(videoLimit,240)));
+    if (result?.error) throw result.error;
+    rows = Array.isArray(result?.data) ? result.data : [];
+  } else {
+    const countResult:any = await admin.from('mentions')
+      .select('id',{count:'exact',head:true})
+      .eq('organization_id',org.id)
+      .ilike('source_platform','youtube')
+      .eq('raw_payload->>kind','youtube_video')
+      .gt('relevance_score',0);
+    if (countResult?.error) throw countResult.error;
+    const total = Math.max(0,Number(countResult?.count || 0));
+    if (!total) return {items:[],videos_checked:0,comments_seen:0};
+    const size = Math.max(1,Math.min(videoLimit,total));
+    const windows = Math.max(1,Math.ceil(total/size));
+    const slot = Math.floor(Date.now()/300000); // 5 dəqiqəlik dövr
+    const windowIndex = slot % windows;
+    const from = windowIndex*size;
+    const to = Math.min(total-1,from+size-1);
+    const result:any = await base.range(from,to);
+    if (result?.error) throw result.error;
+    rows = Array.isArray(result?.data) ? result.data : [];
+  }
+
+  const videoItems:Item[] = rows.map((row:any)=>{
+    const raw = row?.raw_payload || {};
+    const videoId = String(raw?.video_id || youtubeVideoId(row?.source_url || '') || '');
+    return {
+      title:row?.title || '',
+      text:'',
+      url:row?.source_url || (videoId?`https://www.youtube.com/watch?v=${videoId}`:''),
+      published_at:row?.published_at || null,
+      image:(row?.mention_media || [])[0]?.url || null,
+      raw:{kind:'youtube_video',video_id:videoId}
+    } as Item;
+  }).filter((x:Item)=>Boolean((x.raw as any)?.video_id));
+
+  const sinceMs = Date.now() - 48*3600*1000;
+  const result = await youtubeRecentCommentsForItems(videoItems,key,fullSweep?20:40,sinceMs,deadlineMs);
+  return {items:result.items,videos_checked:result.videos_checked,comments_seen:result.comments_seen};
+}
+
+async function youtubeRecentCommentsForItems(
+  videoItems:Item[],
+  key:string,
+  maxResults=40,
+  sinceMs=0,
+  deadlineMs=15000
+):Promise<{items:Item[];videos_checked:number;comments_seen:number}> {
+  const deadline = Date.now()+Math.max(6000,deadlineMs);
+  const out:Item[]=[];
+  let videosChecked=0;
+  let commentsSeen=0;
+  const concurrency = 8;
+
+  for (let i=0;i<videoItems.length && Date.now()<deadline;i+=concurrency) {
+    const batch=videoItems.slice(i,i+concurrency);
+    const results = await Promise.all(batch.map(async item=>{
+      if (Date.now()>=deadline) return {items:[] as Item[],seen:0,checked:0};
+      const raw:any=item.raw||{};
+      const videoId=String(raw.video_id||youtubeVideoId(item.url||'')||'');
+      if(!videoId) return {items:[] as Item[],seen:0,checked:0};
+      try{
+        const endpoint=new URL('https://www.googleapis.com/youtube/v3/commentThreads');
+        endpoint.searchParams.set('part','snippet,replies');
+        endpoint.searchParams.set('videoId',videoId);
+        endpoint.searchParams.set('maxResults',String(Math.max(1,Math.min(100,maxResults))));
+        endpoint.searchParams.set('order','time');
+        endpoint.searchParams.set('textFormat','plainText');
+        endpoint.searchParams.set('key',key);
+        const data=await fetchJsonWithRetry(endpoint.toString(),{},1,6500);
+        const extracted=await commentItemsFromThreadData(data,item,videoId,key,deadline,sinceMs,true);
+        return {items:extracted.items,seen:extracted.seen,checked:1};
+      }catch(e){
+        console.error('youtube-recent-comments',videoId,errorInfo(e));
+        return {items:[] as Item[],seen:0,checked:1};
+      }
+    }));
+    for(const r of results){out.push(...r.items);commentsSeen+=r.seen;videosChecked+=r.checked;}
+  }
+  return {items:dedupeItems(out),videos_checked:videosChecked,comments_seen:commentsSeen};
+}
+
+async function commentItemsFromThreadData(
+  data:any,
+  videoItem:Item,
+  videoId:string,
+  key:string,
+  deadline:number,
+  sinceMs=0,
+  fetchAllReplies=false
+):Promise<{items:Item[];seen:number}> {
+  const out:Item[]=[];
+  let seen=0;
+  for(const thread of data?.items || []){
+    if(Date.now()>=deadline) break;
+    const top=thread?.snippet?.topLevelComment;
+    const sn=top?.snippet||{};
+    const commentId=String(top?.id||thread?.id||'');
+    const text=String(sn.textDisplay||sn.textOriginal||'').trim();
+    const published=sn.publishedAt||null;
+    seen++;
+    if(commentId&&text&&(!sinceMs || !published || new Date(published).getTime()>=sinceMs)){
+      out.push(makeYoutubeCommentItem(videoItem,videoId,commentId,sn,null,Number(thread?.snippet?.totalReplyCount||0)));
+    }
+
+    const included=Array.isArray(thread?.replies?.comments)?thread.replies.comments:[];
+    for(const reply of included){
+      const rs=reply?.snippet||{};
+      const replyId=String(reply?.id||'');
+      const replyPublished=rs.publishedAt||null;
+      seen++;
+      if(replyId&&String(rs.textDisplay||rs.textOriginal||'').trim()&&(!sinceMs || !replyPublished || new Date(replyPublished).getTime()>=sinceMs)){
+        out.push(makeYoutubeCommentItem(videoItem,videoId,replyId,rs,rs.parentId||commentId,0));
+      }
+    }
+
+    const totalReplies=Number(thread?.snippet?.totalReplyCount||0);
+    if(fetchAllReplies && commentId && totalReplies>included.length && Date.now()<deadline-1200){
+      let pageToken='';
+      do{
+        if(Date.now()>=deadline-700) break;
+        const ep=new URL('https://www.googleapis.com/youtube/v3/comments');
+        ep.searchParams.set('part','snippet');
+        ep.searchParams.set('parentId',commentId);
+        ep.searchParams.set('maxResults','100');
+        ep.searchParams.set('textFormat','plainText');
+        ep.searchParams.set('key',key);
+        if(pageToken)ep.searchParams.set('pageToken',pageToken);
+        try{
+          const replies=await fetchJsonWithRetry(ep.toString(),{},1,5500);
+          for(const reply of replies?.items||[]){
+            const rs=reply?.snippet||{};
+            const replyId=String(reply?.id||'');
+            const replyPublished=rs.publishedAt||null;
+            seen++;
+            if(replyId&&String(rs.textDisplay||rs.textOriginal||'').trim()&&(!sinceMs || !replyPublished || new Date(replyPublished).getTime()>=sinceMs)){
+              out.push(makeYoutubeCommentItem(videoItem,videoId,replyId,rs,rs.parentId||commentId,0));
+            }
+          }
+          pageToken=String(replies?.nextPageToken||'');
+        }catch(e){console.error('youtube-replies',commentId,errorInfo(e));break;}
+      }while(pageToken);
+    }
+  }
+  return {items:dedupeItems(out),seen};
+}
+
+function makeYoutubeCommentItem(videoItem:Item,videoId:string,commentId:string,sn:any,parentId:string|null,replyCount=0):Item{
+  const text=String(sn?.textDisplay||sn?.textOriginal||'').trim();
+  const isReply=Boolean(parentId);
+  return {
+    title:`YouTube ${isReply?'cavabı':'şərhi'} — ${sn?.authorDisplayName||'istifadəçi'}`,
+    text:`Video: ${videoItem.title||''}\n${isReply?'Cavab':'Şərh'}: ${text}`,
+    url:`https://www.youtube.com/watch?v=${videoId}&lc=${encodeURIComponent(commentId)}`,
+    published_at:sn?.publishedAt||null,
+    image:videoItem.image||null,
+    author:sn?.authorDisplayName||null,
+    raw:{
+      kind:isReply?'youtube_comment_reply':'youtube_comment',
+      video_id:videoId,
+      comment_id:commentId,
+      parent_id:parentId||null,
+      video_title:videoItem.title||'',
+      like_count:sn?.likeCount??null,
+      reply_count:replyCount||0,
+      author_channel_url:sn?.authorChannelUrl||null,
+      author_channel_id:sn?.authorChannelId?.value||null
+    }
+  };
+}
+
+async function storedYoutubeCommentBackfillStep(
+  admin:any,
+  org:any,
+  key:string,
+  videoLimit=2,
+  deadlineMs=9000
+):Promise<{items:Item[];videos_checked:number;inserted_hint:number}> {
+  const deadline=Date.now()+Math.max(5000,deadlineMs);
+  const result:any=await admin.from('mentions')
+    .select('id,title,source_url,published_at,raw_payload,mention_media(url,media_type)')
+    .eq('organization_id',org.id)
+    .ilike('source_platform','youtube')
+    .eq('raw_payload->>kind','youtube_video')
+    .gt('relevance_score',0)
+    .order('published_at',{ascending:false,nullsFirst:false})
+    .limit(240);
+  if(result?.error)throw result.error;
+  const rows=(Array.isArray(result?.data)?result.data:[]).filter((r:any)=>r?.raw_payload?.comments_backfill_done!==true).slice(0,Math.max(1,videoLimit));
+  const out:Item[]=[];
+  let checked=0;
+  for(const row of rows){
+    if(Date.now()>=deadline-900)break;
+    const raw={...(row?.raw_payload||{})};
+    const videoId=String(raw.video_id||youtubeVideoId(row?.source_url||'')||'');
+    if(!videoId)continue;
+    const item:Item={title:row?.title||'',url:row?.source_url||`https://www.youtube.com/watch?v=${videoId}`,published_at:row?.published_at||null,image:(row?.mention_media||[])[0]?.url||null,raw:{kind:'youtube_video',video_id:videoId}};
+    const endpoint=new URL('https://www.googleapis.com/youtube/v3/commentThreads');
+    endpoint.searchParams.set('part','snippet,replies');
+    endpoint.searchParams.set('videoId',videoId);
+    endpoint.searchParams.set('maxResults','100');
+    endpoint.searchParams.set('order','time');
+    endpoint.searchParams.set('textFormat','plainText');
+    endpoint.searchParams.set('key',key);
+    if(raw.comments_next_page_token)endpoint.searchParams.set('pageToken',String(raw.comments_next_page_token));
+    try{
+      const data=await fetchJsonWithRetry(endpoint.toString(),{},1,6000);
+      const extracted=await commentItemsFromThreadData(data,item,videoId,key,deadline,0,true);
+      out.push(...extracted.items);
+      raw.comments_next_page_token=String(data?.nextPageToken||'')||null;
+      raw.comments_backfill_done=!data?.nextPageToken;
+      raw.comments_backfill_updated_at=new Date().toISOString();
+      const update:any=await admin.from('mentions').update({raw_payload:raw}).eq('id',row.id);
+      if(update?.error)throw update.error;
+      checked++;
+    }catch(e){console.error('youtube-comment-backfill',videoId,errorInfo(e));}
+  }
+  return {items:dedupeItems(out),videos_checked:checked,inserted_hint:0};
+}
+
+async function refilterExistingMentions(admin:any,org:any,keywords:string[],villages:string[],limit=250){
+  const result:any=await admin.from('mentions')
+    .select('id,title,original_text,source_url,published_at,author_name,raw_payload,relevance_score')
+    .eq('organization_id',org.id)
+    .gt('relevance_score',0)
+    .order('published_at',{ascending:false,nullsFirst:false})
+    .limit(Math.max(1,limit));
+  if(result?.error)throw result.error;
+  let checked=0,filteredOut=0;
+  for(const row of result?.data||[]){
+    const item:Item={title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',published_at:row?.published_at||null,author:row?.author_name||null,raw:row?.raw_payload||{}};
+    const match=evaluateMatch(org,item,keywords,villages);
+    checked++;
+    if(!match.accepted){
+      const update:any=await admin.from('mentions').update({relevance_score:0}).eq('id',row.id);
+      if(!update?.error)filteredOut++;
+    }
+  }
+  return {checked,filtered_out:filteredOut};
+}
 
 async function storedYoutubeCommentItems(
   admin:any,
@@ -1051,28 +1359,38 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   if (item.image) {
     await admin.from('mention_media').insert({mention_id:data.id,media_type:'preview',url:item.image,captured_at:new Date().toISOString()});
   }
-  if (priority >= 81) {
-    await admin.from('notifications').insert({organization_id:org.id,mention_id:data.id,title:String((item.raw as any)?.kind||'').includes('comment')?'Yüksək prioritetli yeni şərh':'Yüksək prioritetli yeni qeyd',body:item.title || 'Yeni material',kind:'critical'});
+  const isCommentItem = String((item.raw as any)?.kind || '').includes('comment');
+  if (priority >= 81 || isCommentItem) {
+    await admin.from('notifications').insert({
+      organization_id:org.id,
+      mention_id:data.id,
+      title:isCommentItem ? (priority>=81?'Yüksək prioritetli yeni şərh':'Yeni YouTube şərhi') : 'Yüksək prioritetli yeni qeyd',
+      body:item.title || 'Yeni material',
+      kind:priority>=81?'critical':'comment'
+    });
   }
   return 1;
 }
 
-type RunOptions = { debug:boolean; force_youtube:boolean; verify_existing:boolean; youtube_backfill:boolean };
+type RunOptions = { debug:boolean; force_youtube:boolean; verify_existing:boolean; youtube_backfill:boolean; quick_youtube_comments:boolean; full_comment_sweep:boolean; refilter_existing:boolean };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
-  if (req.method !== 'POST') return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false};
+  if (req.method !== 'POST') return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false,quick_youtube_comments:false,full_comment_sweep:false,refilter_existing:false};
   try {
     const text = await req.clone().text();
-    if (!text.trim()) return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false};
+    if (!text.trim()) return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false,quick_youtube_comments:false,full_comment_sweep:false,refilter_existing:false};
     const body = JSON.parse(text);
     return {
       debug:body?.debug === true,
       force_youtube:body?.force_youtube === true,
       verify_existing:body?.verify_existing !== false,
-      youtube_backfill:body?.youtube_backfill === true || body?.force_youtube === true
+      youtube_backfill:body?.youtube_backfill === true || body?.force_youtube === true,
+      quick_youtube_comments:body?.quick_youtube_comments === true,
+      full_comment_sweep:body?.full_comment_sweep === true,
+      refilter_existing:body?.refilter_existing === true
     };
   } catch {
-    return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false};
+    return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false,quick_youtube_comments:false,full_comment_sweep:false,refilter_existing:false};
   }
 }
 
@@ -1134,7 +1452,9 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'masalli','neftcala','oguz','qebele','qax','qazax','qusar','saatli','sabirabad','salyan','samaxi',
     'samkir','siyazan','terter','ucar','yardimli','yevlax','zerdab'
   ];
-  const foreignHit = foreignDistricts.some(name=>` ${normalized} `.includes(` ${name} `)) && !districtHit && villageHits.length === 0;
+  const foreignNamesHit = foreignDistricts.filter(name=>` ${normalized} `.includes(` ${name} `));
+  const ambiguousVillageHit = foreignNamesHit.some(name=>villageTerms.includes(name));
+  const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0 && (!villageHits.length || ambiguousVillageHit);
   const districtWide = org.show_district_wide !== false;
   const accepted = !foreignHit && (directMatches.length > 0 || (districtWide && locationHit && topicHits.length > 0) || trustedDiscovery);
   const matches = [...new Set([

@@ -11,7 +11,7 @@ async function load(){
   showPageLoader();
   try{
     const start=new Date(from.value+'T00:00:00');const end=new Date(to.value+'T23:59:59.999');
-    const {data=[],error}=await supabase.from('mentions').select('source_platform,sentiment,priority_score,published_at').gte('published_at',start.toISOString()).lte('published_at',end.toISOString());
+    const {data=[],error}=await supabase.from('mentions').select('source_platform,sentiment,priority_score,published_at').gt('relevance_score',0).gte('published_at',start.toISOString()).lte('published_at',end.toISOString());
     if(error)throw error;
     const total=data.length,neg=data.filter(x=>x.sentiment==='negative').length,pos=data.filter(x=>x.sentiment==='positive').length,critical=data.filter(x=>Number(x.priority_score)>=81).length;
     document.querySelector('#metrics').innerHTML=[['Ümumi',total],['Mənfi',neg],['Müsbət',pos],['Kritik',critical]].map(([l,n])=>`<div class="card metric"><div class="label">${l}</div><div class="num">${n}</div></div>`).join('');

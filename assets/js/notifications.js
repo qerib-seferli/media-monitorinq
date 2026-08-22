@@ -1,6 +1,7 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
+import { startLiveMonitor } from './live-monitor.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'notifications'); showPageLoader();
 const ctx = await requireAuth();
@@ -52,8 +53,11 @@ if (error) toast(error,'error');
 rows = data || [];
 const ids=[...new Set(rows.map(x=>x.mention_id).filter(Boolean))];
 if(ids.length){
-  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload').in('id',ids);
+  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score').in('id',ids);
   mentionMap=new Map(mentions.map(x=>[x.id,x]));
 }
+rows=rows.filter(x=>!x.mention_id||Number(mentionMap.get(x.mention_id)?.relevance_score||0)>0);
 rows.sort((a,b)=>new Date(mentionMap.get(b.mention_id)?.published_at||b.created_at||0)-new Date(mentionMap.get(a.mention_id)?.published_at||a.created_at||0));
 render();
+
+startLiveMonitor({organizationId:ctx.profile.organization_id,onNew:()=>location.reload()});
