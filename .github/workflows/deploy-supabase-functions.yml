@@ -30,7 +30,7 @@ jobs:
       - uses: supabase/setup-cli@v1
         if: steps.preflight.outputs.ready == 'true'
         with:
-          version: latest
+          version: 2.111.0
       - name: Configure function secrets
         if: steps.preflight.outputs.ready == 'true'
         env:
