@@ -808,3 +808,16 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .monitor-filters #platform{grid-area:platform!important}
   .monitor-filters #sentiment{grid-area:sentiment!important}
 }
+
+
+/* v14 — əsas səhifə bildirişlərində şərh nişanı simmetriyası */
+.dashboard-notification{grid-template-columns:8px minmax(0,1fr) auto!important;align-items:start!important}
+.dashboard-notification.is-comment .notification-dot{width:7px!important;height:7px!important;min-width:7px!important;border-radius:50%!important;margin-top:5px!important;background:#fb7185!important;color:transparent!important;font-size:0!important;box-shadow:none!important}
+.dashboard-notification-copy{min-width:0}
+.dashboard-notification-copy strong{display:flex!important;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
+.dashboard-comment-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border-radius:999px;border:1px solid rgba(241,202,103,.34);background:rgba(215,181,109,.10);color:#f3cf73;font-size:9px;line-height:1.1;font-weight:800;white-space:nowrap}
+@media(max-width:700px){
+  .dashboard-notification{grid-template-columns:7px minmax(0,1fr) auto!important;gap:8px!important;padding:10px 0!important}
+  .dashboard-comment-chip{font-size:8px;padding:2px 6px}
+  .dashboard-notification time{font-size:8px!important}
+}

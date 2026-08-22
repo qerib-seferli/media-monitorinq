@@ -104,7 +104,7 @@ Deno.serve(async (req) => {
             // yüngül lane ilə hər planlı run-da yoxlanılır. Beləliklə yeni şərh üçün 6 saat
             // gözləmək lazım deyil və quota təhlükəsiz qalır.
             if (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000) {
-              const liveComments = await storedYoutubeCommentItems(admin, org, key, 36, 1);
+              const liveComments = await storedYoutubeCommentItems(admin, org, key, 20, 1);
               let liveInserted = 0;
               for (const item of liveComments) {
                 liveInserted += await save(admin,org,source,item,lowerKeywords,villageNames);
@@ -498,8 +498,8 @@ async function youtubeItems(
   // səhifələri ardıcıl gəzir; top-level şərhlərlə yanaşı API-nin qaytardığı cavablar
   // da ayrıca qeyd kimi saxlanılır. Uzun arxiv run-larında vaxt limiti aşılmasın deyə
   // təhlükəsiz deadline tətbiq olunur və növbəti run qalan videoları yenidən yoxlaya bilir.
-  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,24);
-  const commentDeadline = Date.now() + 85000;
+  const relevantForComments = items.filter(item=>evaluateMatch(org,item,keywords,villages).accepted).slice(0,12);
+  const commentDeadline = Date.now() + 35000;
   for (const item of relevantForComments) {
     if (Date.now() > commentDeadline) break;
     const raw:any = item.raw || {};
@@ -588,9 +588,30 @@ async function storedYoutubeCommentItems(
   admin:any,
   org:any,
   key:string,
-  videoLimit=36,
+  videoLimit=20,
   pagesPerVideo=1
 ):Promise<Item[]> {
+  // Hər 10 dəqiqəlik run-da eyni 20 videonu təkrar yoxlamaq əvəzinə
+  // tanınmış YouTube videoları arasında pəncərəni dövr etdiririk. Bu həm
+  // yeni şərhləri sürətli tutur, həm də Edge Function vaxt limitinə düşmür.
+  const { count:videoCount, error:countError } = await admin
+    .from('mentions')
+    .select('id',{count:'exact',head:true})
+    .eq('organization_id', org.id)
+    .eq('source_platform', 'YouTube')
+    .eq('raw_payload->>kind', 'youtube_video');
+  if (countError) throw countError;
+
+  const total = Math.max(0, Number(videoCount || 0));
+  const windowSize = Math.max(1, videoLimit);
+  const windows = Math.max(1, Math.ceil(total / windowSize));
+  const tenMinuteSlot = Math.floor(Date.now() / 600000);
+  const windowIndex = tenMinuteSlot % windows;
+  const from = windowIndex * windowSize;
+  const to = Math.min(Math.max(0,total - 1), from + windowSize - 1);
+
+  if (!total) return [];
+
   const { data:videoRows, error } = await admin
     .from('mentions')
     .select('id,title,source_url,published_at,raw_payload,mention_media(url,media_type)')
@@ -598,7 +619,7 @@ async function storedYoutubeCommentItems(
     .eq('source_platform', 'YouTube')
     .eq('raw_payload->>kind', 'youtube_video')
     .order('published_at',{ascending:false,nullsFirst:false})
-    .limit(videoLimit);
+    .range(from,to);
   if (error) throw error;
 
   const videoItems:Item[] = (videoRows || []).map((row:any)=>{
@@ -614,7 +635,7 @@ async function storedYoutubeCommentItems(
     } as Item;
   }).filter((x:Item)=>Boolean((x.raw as any)?.video_id));
 
-  return await youtubeCommentsForItems(videoItems,key,pagesPerVideo,70000);
+  return await youtubeCommentsForItems(videoItems,key,pagesPerVideo,25000);
 }
 
 function youtubeVideoId(value:string):string {
@@ -906,13 +927,35 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   const priority = Math.min(100, relevance + (neg?15:0));
   const sentiment = neg ? 'negative' : pos ? 'positive' : 'neutral';
 
+  const hash = await sha256(`${org.id}|${item.url}|${item.title||''}`);
+
+  // Eyni material hər 10 dəqiqədə yenidən aşkarlana bilər. Əvvəlcə bazada
+  // olub-olmadığını yoxlayırıq; mövcud qeydi Gemini-yə yenidən göndərmirik.
+  // Bu xüsusilə yüzlərlə YouTube şərhində timeout/500 problemini aradan qaldırır.
+  const { data:existing, error:existingError } = await admin.from('mentions')
+    .select('id')
+    .eq('organization_id',org.id)
+    .eq('content_hash',hash)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing?.id) {
+    await admin.from('mentions').update({
+      source_status:'active',
+      last_seen_at:new Date().toISOString(),
+      last_verified_at:new Date().toISOString(),
+      unavailable_since:null,
+      unavailable_reason:null,
+      consecutive_misses:0
+    }).eq('id',existing.id);
+    return 0;
+  }
+
   let summary = clean(item.text || '').slice(0,520);
   let topic = neg ? 'Potensial problem / şikayət' : 'Media qeydi';
   const ai = await optionalAiAnalysis(org,item,relevance,sentiment);
   if (ai?.summary) summary = String(ai.summary).slice(0,700);
   if (ai?.topic) topic = String(ai.topic).slice(0,160);
 
-  const hash = await sha256(`${org.id}|${item.url}|${item.title||''}`);
   const row:any = {
     organization_id:org.id,
     district_id:org.district_id || null,
