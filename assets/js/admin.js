@@ -47,28 +47,51 @@ window.addEventListener('hashchange', route);
 route();
 hidePageLoader();
 
+async function fetchAllKeywords() {
+  const pageSize = 1000;
+  const rows = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabase
+      .from('keywords')
+      .select('*,organizations(short_name)')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) return { data: rows, error };
+
+    const page = data || [];
+    rows.push(...page);
+
+    if (page.length < pageSize) break;
+  }
+
+  return { data: rows, error: null };
+}
+
 async function refresh() {
   const results = await Promise.all([
     supabase.from('organizations').select('*,districts(name)').order('created_at'),
     supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
-    supabase.from('keywords').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(500),
+    fetchAllKeywords(),
     supabase.from('sources').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(120),
     supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100)
   ]);
 
   const [o,u,p,d,k,s,a] = results;
-  const fatal = results.find(r => r.error);
+  const fatal = results.find(r => r?.error);
   if (fatal?.error) toast(fatal.error.message, 'error');
 
-  orgs = o.data || [];
-  users = u.data || [];
-  positions = p.data || [];
-  districts = d.data || [];
-  keywords = k.data || [];
-  sources = s.data || [];
-  auditRows = a.data || [];
+  orgs = o?.data || [];
+  users = u?.data || [];
+  positions = p?.data || [];
+  districts = d?.data || [];
+  keywords = k?.data || [];
+  sources = s?.data || [];
+  auditRows = a?.data || [];
 
   renderMetrics();
   renderOrgs();
