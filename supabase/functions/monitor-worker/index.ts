@@ -2,112 +2,161 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 
 type Item = { title?:string; text?:string; url?:string; published_at?:string|null; image?:string|null; author?:string|null; raw?:unknown };
+type DiagnosticError = { stage:string; organization?:string|null; source?:string|null; message:string; code?:string|null; status?:number|null };
+
+const RUN_BUDGET_MS = 48000;
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok',{headers:corsHeaders});
+
+  const startedAt = Date.now();
+  const stopAt = startedAt + RUN_BUDGET_MS;
+  const runId = crypto.randomUUID();
+  const details:any[] = [];
+  const errors:DiagnosticError[] = [];
+  let checked = 0;
+  let inserted = 0;
+  let failures = 0;
+  let currentStage = 'bootstrap';
+
+  const fail = (stage:string, e:unknown, organization?:string|null, source?:string|null) => {
+    failures++;
+    const info = errorInfo(e);
+    const row:DiagnosticError = { stage, organization:organization || null, source:source || null, ...info };
+    errors.push(row);
+    console.error(`[monitor-worker:${runId}]`, row);
+  };
+
   try {
-    const url = Deno.env.get('SUPABASE_URL')!;
-    const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    currentStage = 'environment';
+    const url = Deno.env.get('SUPABASE_URL') || '';
+    const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+    if (!url || !service) {
+      return json({ok:false,run_id:runId,stage:currentStage,failures:1,errors:[{stage:currentStage,message:'Supabase environment dəyişənləri tapılmadı'}],details},200);
+    }
+
     const admin = createClient(url, service);
     const options = await readRunOptions(req);
-    const expected = Deno.env.get('MONITOR_SECRET');
+
+    currentStage = 'authorization';
+    const expected = Deno.env.get('MONITOR_SECRET') || '';
     const secretOk = Boolean(expected && req.headers.get('x-monitor-secret') === expected);
     if (!secretOk) {
       const authHeader = req.headers.get('Authorization') || '';
-      const anon = Deno.env.get('SUPABASE_ANON_KEY')!;
+      const anon = Deno.env.get('SUPABASE_ANON_KEY') || '';
+      if (!anon) return json({ok:false,run_id:runId,stage:currentStage,error:'SUPABASE_ANON_KEY tapılmadı'},403);
       const caller = createClient(url, anon, { global:{ headers:{ Authorization:authHeader } } });
-      const { data:{ user } } = await caller.auth.getUser();
-      if (!user) throw new Error('İcazəsiz monitor sorğusu');
-      const { data:profile } = await admin.from('profiles').select('system_role,is_active').eq('auth_user_id',user.id).maybeSingle();
-      if (!profile?.is_active || profile.system_role !== 'super_admin') throw new Error('Yalnız Super Admin monitorinqi manual işə sala bilər');
+      const authResult:any = await caller.auth.getUser().catch((e:unknown)=>({data:null,error:e}));
+      const user = authResult?.data?.user || null;
+      if (!user) return json({ok:false,run_id:runId,stage:currentStage,error:'İcazəsiz monitor sorğusu'},403);
+
+      const profileResult:any = await admin.from('profiles').select('system_role,is_active').eq('auth_user_id',user.id).maybeSingle();
+      if (profileResult?.error) return json({ok:false,run_id:runId,stage:currentStage,error:errorInfo(profileResult.error).message},403);
+      const profile = profileResult?.data || null;
+      if (!profile?.is_active || profile.system_role !== 'super_admin') {
+        return json({ok:false,run_id:runId,stage:currentStage,error:'Yalnız Super Admin monitorinqi manual işə sala bilər'},403);
+      }
     }
-    const { data:orgs, error } = await admin.from('organizations')
+
+    currentStage = 'organizations';
+    const orgResult:any = await admin.from('organizations')
       .select('id,name,short_name,district_id,districts(name),keywords(*),sources(*)')
       .in('service_status',['active','grace']);
-    if (error) throw error;
+    if (!orgResult || orgResult.error) {
+      const err = orgResult?.error || new Error('Təşkilat sorğusundan cavab alınmadı');
+      return json({ok:false,run_id:runId,stage:currentStage,failures:1,errors:[{stage:currentStage,...errorInfo(err)}],details},200);
+    }
+    const orgs = Array.isArray(orgResult.data) ? orgResult.data : [];
 
-    let checked = 0, inserted = 0, failures = 0;
-    const details:any[] = [];
+    for (const org of orgs) {
+      if (Date.now() >= stopAt) {
+        details.push({organization:org.short_name,source:'Run büdcəsi',skipped:'time-budget'});
+        break;
+      }
 
-    for (const org of orgs || []) {
-      const keywords = (org.keywords || []).filter((k:any)=>k.is_active !== false).map((k:any)=>String(k.value || '').trim()).filter(Boolean);
+      const keywords = (Array.isArray(org.keywords) ? org.keywords : [])
+        .filter((k:any)=>k?.is_active !== false)
+        .map((k:any)=>String(k?.value || '').trim())
+        .filter(Boolean);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
-      const sources = (org.sources || []).filter((s:any)=>s.is_active !== false);
+      const sources = (Array.isArray(org.sources) ? org.sources : []).filter((s:any)=>s?.is_active !== false);
+
       let villageNames:string[] = [];
-      if (org.district_id) {
-        const { data:villageRows, error:villageError } = await admin
-          .from('villages')
-          .select('name')
-          .eq('district_id', org.district_id)
-          .order('name');
-        if (villageError) console.error('villages', org.short_name, villageError);
-        else villageNames = (villageRows || []).map((x:any)=>String(x.name || '').trim()).filter(Boolean);
-      }
-
-      // YouTube arxiv yığımı zamanı Edge Function vaxt limitinə düşməmək üçün
-      // web/news lane-ləri həmin xüsusi run-da saxlanılır. Normal run-da hamısı işləyir.
-      if (!options.youtube_backfill) {
-      // Zero-cost discovery lane: Google News RSS. No API key is required.
-      try {
-        checked++;
-        const rssItems = await googleNewsItems(org, keywords, villageNames);
-        let newsCount = 0;
-        for (const item of rssItems.slice(0,30)) newsCount += await save(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords,villageNames);
-        inserted += newsCount;
-        details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, ...(options.debug ? { sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 5) } : {}) });
-      } catch (e) {
-        failures++;
-        console.error('google-news',org.short_name,e);
-      }
-
-
-      // API-siz real web/xəbər discovery: GDELT DOC 2.0.
-      // Bing RSS-in qeyri-dəqiq nəticələri production axınından çıxarılıb.
-      try {
-        checked++;
-        const webItems = await gdeltNewsItems(org, keywords, villageNames);
-        let webCount = 0;
-        for (const item of webItems.slice(0,60)) {
-          webCount += await save(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords,villageNames);
+      if (org.district_id && Date.now() < stopAt) {
+        currentStage = 'villages';
+        try {
+          const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
+          if (villageResult?.error) throw villageResult.error;
+          villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : [])
+            .map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
+        } catch (e) {
+          fail(currentStage,e,org.short_name,'villages');
         }
-        inserted += webCount;
-        details.push({
-          organization:org.short_name,
-          source:'GDELT Web / Xəbər',
-          found:webItems.length,
-          inserted:webCount,
-          ...(options.debug ? { sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 10) } : {})
-        });
-      } catch (e) {
-        failures++;
-        console.error('gdelt-web-news',org.short_name,e);
       }
+
+      if (!options.youtube_backfill) {
+        if (timeLeft(stopAt) > 16000) {
+          currentStage = 'google-news';
+          checked++;
+          try {
+            const rssItems = await googleNewsItems(org, keywords, villageNames);
+            let newsCount = 0;
+            for (const item of rssItems.slice(0,20)) {
+              if (Date.now() >= stopAt) break;
+              newsCount += await safeSave(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords,villageNames,errors,org.short_name,'Google News');
+            }
+            inserted += newsCount;
+            details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, ...(options.debug ? { sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 5) } : {}) });
+          } catch (e) { fail(currentStage,e,org.short_name,'Google News RSS'); }
+        } else if (options.debug) {
+          details.push({organization:org.short_name,source:'Google News RSS',skipped:'time-budget'});
+        }
+
+        if (timeLeft(stopAt) > 14000) {
+          currentStage = 'gdelt-web-news';
+          checked++;
+          try {
+            const webItems = await gdeltNewsItems(org, keywords, villageNames);
+            let webCount = 0;
+            for (const item of webItems.slice(0,30)) {
+              if (Date.now() >= stopAt) break;
+              webCount += await safeSave(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords,villageNames,errors,org.short_name,'GDELT');
+            }
+            inserted += webCount;
+            details.push({ organization:org.short_name, source:'GDELT Web / Xəbər', found:webItems.length, inserted:webCount, ...(options.debug ? { sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 8) } : {}) });
+          } catch (e) { fail(currentStage,e,org.short_name,'GDELT'); }
+        } else if (options.debug) {
+          details.push({organization:org.short_name,source:'GDELT Web / Xəbər',skipped:'time-budget'});
+        }
       } else if (options.debug) {
         details.push({ organization:org.short_name, source:'Web / Xəbər lane-ləri', skipped:'youtube-backfill-focus' });
       }
 
       for (const source of sources) {
+        if (Date.now() >= stopAt) {
+          details.push({organization:org.short_name,source:source?.url || source?.platform || 'Mənbə',skipped:'time-budget'});
+          break;
+        }
         checked++;
+        const sourceLabel = String(source?.url || source?.platform || 'Mənbə');
+        currentStage = `source:${String(source?.platform || 'web').toLowerCase()}`;
         try {
-          const platform = String(source.platform || 'Web').toLowerCase();
+          const platform = String(source?.platform || 'Web').toLowerCase();
 
           if (platform === 'youtube') {
-            const last = source.last_checked_at ? new Date(source.last_checked_at).getTime() : 0;
-            const key = Deno.env.get('YOUTUBE_API_KEY');
+            const last = source?.last_checked_at ? new Date(source.last_checked_at).getTime() : 0;
+            const key = Deno.env.get('YOUTUBE_API_KEY') || '';
             if (!key) {
               details.push({ organization:org.short_name, source:'YouTube', skipped:'missing-youtube-api-key' });
               continue;
             }
 
-            // Search API bahalıdır, ona görə yeni video axtarışı maksimum 6 saatdan bir edilir.
-            // Amma köhnə, artıq bazada tanınan uyğun videolara yeni yazılan şərhlər ayrıca
-            // yüngül lane ilə hər planlı run-da yoxlanılır. Beləliklə yeni şərh üçün 6 saat
-            // gözləmək lazım deyil və quota təhlükəsiz qalır.
             if (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000) {
-              const liveComments = await storedYoutubeCommentItems(admin, org, key, 20, 1);
+              const liveComments = await storedYoutubeCommentItems(admin, org, key, 8, 1, Math.min(14000, Math.max(6000,timeLeft(stopAt)-3000)));
               let liveInserted = 0;
               for (const item of liveComments) {
-                liveInserted += await save(admin,org,source,item,lowerKeywords,villageNames);
+                if (Date.now() >= stopAt) break;
+                liveInserted += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,'YouTube şərhi');
               }
               inserted += liveInserted;
               details.push({
@@ -118,35 +167,31 @@ Deno.serve(async (req) => {
                 video_search:'quota-window',
                 ...(options.debug ? { sample_results:debugSamples(liveComments, org, lowerKeywords, villageNames, 8) } : {})
               });
+              await safeSourceTouch(admin,source?.id,errors,org.short_name,sourceLabel);
               continue;
             }
 
-            // Əgər bu təşkilat üçün hələ YouTube qeydi yoxdursa, ilk real işə düşmədə
-            // ilk işə düşmədə son 12 ayı geri oxuyuruq. Sonrakı işlər isə yalnız yeni intervalı yoxlayır.
-            const { count: existingYoutubeCount } = await admin
-              .from('mentions')
+            const countResult:any = await admin.from('mentions')
               .select('id', { count:'exact', head:true })
               .eq('organization_id', org.id)
-              .eq('source_platform', 'YouTube');
+              .ilike('source_platform', 'youtube');
+            if (countResult?.error) throw countResult.error;
+            const existingYoutubeCount = Number(countResult?.count || 0);
 
             const discovery = await youtubeItems(
-              org,
-              keywords,
-              villageNames,
-              key,
-              options.youtube_backfill ? null : (existingYoutubeCount ? source.last_checked_at : null),
+              org, keywords, villageNames, key,
+              options.youtube_backfill ? null : (existingYoutubeCount ? source?.last_checked_at : null),
               1
             );
 
             let count = 0;
             for (const item of discovery.items) {
-              count += await save(admin,org,source,item,lowerKeywords,villageNames);
+              if (Date.now() >= stopAt) break;
+              count += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,'YouTube video');
             }
-
-            // Aşkarlanmış videoların son açıq şərhlərini də yoxlayırıq.
-            // save() yalnız təşkilat/açar söz uyğunluğu olan şərhləri bazaya buraxır.
             for (const item of discovery.comments) {
-              count += await save(admin,org,source,item,lowerKeywords,villageNames);
+              if (Date.now() >= stopAt) break;
+              count += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,'YouTube şərhi');
             }
 
             inserted += count;
@@ -157,156 +202,156 @@ Deno.serve(async (req) => {
               videos_found:discovery.items.length,
               comments_checked:discovery.comments.length,
               inserted:count,
-              ...(options.debug ? {
-                sample_results:debugSamples([...discovery.items, ...discovery.comments], org, lowerKeywords, villageNames, 12)
-              } : {})
+              ...(options.debug ? { sample_results:debugSamples([...discovery.items, ...discovery.comments], org, lowerKeywords, villageNames, 12) } : {})
             });
-} else if (
-  platform === 'rss' ||
-  source.url?.match(/(\.xml|\.rss)(\?|$)/i) ||
-  String(source.url || '').includes('/rss')
-) {
-  const sourceUrl = String(source.url || '').trim();
-
-  // Google News RSS artıq yuxarıdakı discovery lane-də yoxlanılır.
-  // Eyni mənbəni ikinci dəfə çağırmır.
-  if (sourceUrl.includes('news.google.com/rss/')) {
-    details.push({
-      organization: org.short_name,
-      source: sourceUrl,
-      skipped: 'duplicate-google-news-source'
-    });
-
-    await admin
-      .from('sources')
-      .update({ last_checked_at: new Date().toISOString() })
-      .eq('id', source.id);
-
-    continue;
-  }
-
-  const xml = await fetchTextWithRetry(sourceUrl, {
-    headers: {
-      'user-agent': 'Mozilla/5.0 MediaMonitorinq/3.0',
-      'accept': 'application/rss+xml, application/xml, text/xml, */*'
-    }
-  });
-
-  const items = parseRss(xml);
-
-  let count = 0;
-  for (const item of items.slice(0, 30)) {
-    count += await save(admin, org, source, item, lowerKeywords, villageNames);
-  }
-
-  inserted += count;
-
-  details.push({
-    organization: org.short_name,
-    source: sourceUrl,
-    found: items.length,
-    inserted: count
-  });
-} else {
-            // Açıq web mənbəsi: səhifənin özünü və varsa elan etdiyi RSS/Atom feed-ləri
-            // API açarı olmadan yoxlanılır.
-            const web = await webSourceItems(source.url, source.name || source.url);
+          } else if (
+            platform === 'rss' ||
+            source?.url?.match(/(\.xml|\.rss)(\?|$)/i) ||
+            String(source?.url || '').includes('/rss')
+          ) {
+            const sourceUrl = String(source?.url || '').trim();
+            if (sourceUrl.includes('news.google.com/rss/')) {
+              details.push({ organization:org.short_name, source:sourceUrl, skipped:'duplicate-google-news-source' });
+              await safeSourceTouch(admin,source?.id,errors,org.short_name,sourceLabel);
+              continue;
+            }
+            const xml = await fetchTextWithRetry(sourceUrl, {headers:{'user-agent':'Mozilla/5.0 MediaMonitorinq/4.0','accept':'application/rss+xml, application/xml, text/xml, */*'}}, 1);
+            const items = parseRss(xml);
             let count = 0;
-            for (const item of web.items) {
-              count += await save(admin,org,source,item,lowerKeywords,villageNames);
+            for (const item of items.slice(0,20)) {
+              if (Date.now() >= stopAt) break;
+              count += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,sourceUrl);
             }
             inserted += count;
-            details.push({
-              organization:org.short_name,
-              source:source.url,
-              web_items:web.items.length,
-              discovered_feeds:web.feeds,
-              inserted:count
-            });
+            details.push({ organization:org.short_name, source:sourceUrl, found:items.length, inserted:count });
+          } else {
+            const web = await webSourceItems(source?.url, source?.name || source?.url);
+            let count = 0;
+            for (const item of web.items.slice(0,20)) {
+              if (Date.now() >= stopAt) break;
+              count += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,sourceLabel);
+            }
+            inserted += count;
+            details.push({ organization:org.short_name, source:source?.url, web_items:web.items.length, discovered_feeds:web.feeds, inserted:count });
           }
 
-          await admin.from('sources').update({last_checked_at:new Date().toISOString()}).eq('id',source.id);
+          await safeSourceTouch(admin,source?.id,errors,org.short_name,sourceLabel);
         } catch (e) {
-          failures++;
-          console.error('source',source.url,e);
+          fail(currentStage,e,org.short_name,sourceLabel);
         }
       }
 
-      if (options.verify_existing !== false) {
+      if (options.verify_existing !== false && timeLeft(stopAt) > 9000) {
+        currentStage = 'source-verification';
         try {
           const verification = await verifyExistingMentions(admin, org, Deno.env.get('YOUTUBE_API_KEY') || '');
-          if (verification.checked || options.debug) {
-            details.push({ organization:org.short_name, source:'Mənbə mövcudluğu yoxlaması', ...verification });
-          }
-        } catch (e) {
-          failures++;
-          console.error('source-verification', org.short_name, e);
-        }
+          if (verification.checked || options.debug) details.push({ organization:org.short_name, source:'Mənbə mövcudluğu yoxlaması', ...verification });
+        } catch (e) { fail(currentStage,e,org.short_name,'Mənbə mövcudluğu yoxlaması'); }
       }
     }
 
-    return json({ok:true,checked_sources:checked,new_mentions:inserted,failures,details});
+    return json({
+      ok:failures === 0,
+      run_id:runId,
+      checked_sources:checked,
+      new_mentions:inserted,
+      failures,
+      elapsed_ms:Date.now()-startedAt,
+      stopped_by_budget:Date.now() >= stopAt,
+      details,
+      errors:options.debug ? errors.slice(0,40) : errors.slice(0,10)
+    },200);
   } catch (e) {
-    return json({ok:false,error:e instanceof Error ? e.message : String(e ?? 'Naməlum xəta')},400);
+    fail(currentStage,e,null,null);
+    return json({
+      ok:false,
+      run_id:runId,
+      stage:currentStage,
+      checked_sources:checked,
+      new_mentions:inserted,
+      failures,
+      elapsed_ms:Date.now()-startedAt,
+      details,
+      errors:errors.slice(0,40)
+    },200);
   }
 });
 
+function timeLeft(stopAt:number) { return Math.max(0, stopAt - Date.now()); }
+
+function errorInfo(e:unknown):{message:string;code?:string|null;status?:number|null} {
+  if (e instanceof Error) return {message:e.message || 'Naməlum xəta',code:(e as any)?.code || null,status:Number((e as any)?.status || 0) || null};
+  if (e && typeof e === 'object') {
+    const x:any = e;
+    return {message:String(x?.message || x?.error_description || x?.details || x?.hint || JSON.stringify(x) || 'Naməlum xəta'),code:x?.code || null,status:Number(x?.status || x?.statusCode || 0) || null};
+  }
+  return {message:String(e ?? 'Naməlum xəta'),code:null,status:null};
+}
+
+async function safeSave(admin:any,org:any,source:any,item:Item,keywords:string[],villages:string[],errors:DiagnosticError[],organization:string,sourceLabel:string) {
+  try { return await save(admin,org,source,item,keywords,villages); }
+  catch (e) {
+    if (errors.length < 40) errors.push({stage:'save',organization,source:sourceLabel,...errorInfo(e)});
+    console.error('save',organization,sourceLabel,errorInfo(e));
+    return 0;
+  }
+}
+
+async function safeSourceTouch(admin:any,sourceId:any,errors:DiagnosticError[],organization:string,sourceLabel:string) {
+  if (!sourceId) return;
+  try {
+    const result:any = await admin.from('sources').update({last_checked_at:new Date().toISOString()}).eq('id',sourceId);
+    if (result?.error && errors.length < 40) errors.push({stage:'source-touch',organization,source:sourceLabel,...errorInfo(result.error)});
+  } catch (e) {
+    if (errors.length < 40) errors.push({stage:'source-touch',organization,source:sourceLabel,...errorInfo(e)});
+  }
+}
+
 async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<Item[]> {
-  const queries = buildDiscoveryQueries(org, keywords, villages, 5);
-  const all:Item[] = [];
-
-  for (const query of queries) {
-    const googleUrl =
-      `https://news.google.com/rss/search` +
-      `?q=${encodeURIComponent(query)}` +
-      `&hl=az&gl=AZ&ceid=AZ:az`;
-
+  const queries = buildDiscoveryQueries(org, keywords, villages, 3);
+  const jobs = queries.map(async (query)=>{
+    const googleUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=az&gl=AZ&ceid=AZ:az`;
     try {
       const xml = await fetchTextWithRetry(googleUrl, {
-        headers: {
-          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/4.0)',
+        headers:{
+          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/5.0)',
           'accept':'application/rss+xml, application/xml, text/xml, */*',
           'accept-language':'az,en;q=0.8'
         }
-      }, 2);
-      all.push(...parseRss(xml).map(item=>({
+      },1,7000);
+      return parseRss(xml).map(item=>({
         ...item,
         raw:{...((item.raw as any) || {}), kind:'google_news', discovery_query:query}
-      })));
+      }));
     } catch (e) {
       console.error('google-news-query', query, e);
+      return [] as Item[];
     }
-  }
-
-  return dedupeItems(all);
+  });
+  const batches = await Promise.all(jobs);
+  return dedupeItems(batches.flat());
 }
 
 async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<Item[]> {
-  const queries = buildDiscoveryQueries(org, keywords, villages, 5);
-  const all:Item[] = [];
-
-  for (const query of queries) {
+  const queries = buildDiscoveryQueries(org, keywords, villages, 3);
+  const jobs = queries.map(async (query)=>{
     try {
       const endpoint = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
       endpoint.searchParams.set('query', query);
       endpoint.searchParams.set('mode', 'ArtList');
-      endpoint.searchParams.set('maxrecords', '25');
+      endpoint.searchParams.set('maxrecords', '20');
       endpoint.searchParams.set('format', 'json');
       endpoint.searchParams.set('sort', 'DateDesc');
       endpoint.searchParams.set('timespan', '3months');
-
       const data = await fetchJsonWithRetry(endpoint.toString(), {
-        headers:{
-          'user-agent':'MediaMonitorinq/4.0 (+public-news-monitoring)',
-          'accept':'application/json'
-        }
-      }, 2);
-
+        headers:{'user-agent':'MediaMonitorinq/5.0 (+public-news-monitoring)','accept':'application/json'}
+      },1,7000);
+      const out:Item[] = [];
       for (const article of data?.articles || []) {
         const url = String(article?.url || '').trim();
         const title = String(article?.title || '').trim();
         if (!url || !title) continue;
-        all.push({
+        out.push({
           title,
           text:`${article?.domain || ''} ${article?.language || ''} ${article?.sourcecountry || ''}`.trim(),
           url,
@@ -316,12 +361,14 @@ async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):
           raw:{kind:'gdelt_article', discovery_query:query, ...article}
         });
       }
+      return out;
     } catch (e) {
       console.error('gdelt-query', query, e);
+      return [] as Item[];
     }
-  }
-
-  return dedupeItems(all);
+  });
+  const batches = await Promise.all(jobs);
+  return dedupeItems(batches.flat());
 }
 
 function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [], max=8):string[] {
@@ -589,7 +636,8 @@ async function storedYoutubeCommentItems(
   org:any,
   key:string,
   videoLimit=20,
-  pagesPerVideo=1
+  pagesPerVideo=1,
+  deadlineMs=14000
 ):Promise<Item[]> {
   // Hər 10 dəqiqəlik run-da eyni 20 videonu təkrar yoxlamaq əvəzinə
   // tanınmış YouTube videoları arasında pəncərəni dövr etdiririk. Bu həm
@@ -598,7 +646,7 @@ async function storedYoutubeCommentItems(
     .from('mentions')
     .select('id',{count:'exact',head:true})
     .eq('organization_id', org.id)
-    .eq('source_platform', 'YouTube')
+    .ilike('source_platform', 'youtube')
     .eq('raw_payload->>kind', 'youtube_video');
   if (countError) throw countError;
 
@@ -616,7 +664,7 @@ async function storedYoutubeCommentItems(
     .from('mentions')
     .select('id,title,source_url,published_at,raw_payload,mention_media(url,media_type)')
     .eq('organization_id', org.id)
-    .eq('source_platform', 'YouTube')
+    .ilike('source_platform', 'youtube')
     .eq('raw_payload->>kind', 'youtube_video')
     .order('published_at',{ascending:false,nullsFirst:false})
     .range(from,to);
@@ -635,7 +683,7 @@ async function storedYoutubeCommentItems(
     } as Item;
   }).filter((x:Item)=>Boolean((x.raw as any)?.video_id));
 
-  return await youtubeCommentsForItems(videoItems,key,pagesPerVideo,25000);
+  return await youtubeCommentsForItems(videoItems,key,pagesPerVideo,deadlineMs);
 }
 
 function youtubeVideoId(value:string):string {
@@ -729,13 +777,14 @@ async function youtubeCommentsForItems(
 async function fetchJsonWithRetry(
   url:string,
   init:RequestInit = {},
-  maxAttempts = 2
+  maxAttempts = 2,
+  timeoutMs = 8000
 ):Promise<any> {
   let lastError:Error|null = null;
   for (let attempt=1; attempt<=maxAttempts; attempt++) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(()=>controller.abort(),12000);
+      const timeout = setTimeout(()=>controller.abort(),timeoutMs);
       const response = await fetch(url,{...init,signal:controller.signal,redirect:'follow'});
       clearTimeout(timeout);
       const data = await response.json().catch(()=>null);
@@ -843,7 +892,8 @@ function resolveUrl(value:string,base:string):string|null {
 async function fetchTextWithRetry(
   url: string,
   init: RequestInit = {},
-  maxAttempts = 3
+  maxAttempts = 3,
+  timeoutMs = 8000
 ): Promise<string> {
   let lastError: Error | null = null;
 
@@ -852,7 +902,7 @@ async function fetchTextWithRetry(
       const controller = new AbortController();
       const timeout = setTimeout(
         () => controller.abort(),
-        12000
+        timeoutMs
       );
 
       const response = await fetch(url, {
@@ -1244,9 +1294,12 @@ async function optionalAiAnalysis(org:any,item:Item,relevance:number,sentiment:s
   const model = Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash-lite';
   const prompt = `Sən Azərbaycan dilində media monitorinq analitikisən. Təşkilat: ${org.name} (${org.short_name}). Aşağıdakı materialı yalnız bu təşkilata aidiyyət baxımından qısa analiz et. JSON qaytar: {"summary":"...","topic":"...","relevance_score":0-100}. Fakt uydurma. Başlıq: ${item.title||''}\nMətn: ${(item.text||'').slice(0,4000)}`;
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(()=>controller.abort(),6500);
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,{
-      method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.1,responseMimeType:'application/json'}})
+      method:'POST',headers:{'content-type':'application/json'},signal:controller.signal,body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.1,responseMimeType:'application/json'}})
     });
+    clearTimeout(timeout);
     if (!response.ok) return null;
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
