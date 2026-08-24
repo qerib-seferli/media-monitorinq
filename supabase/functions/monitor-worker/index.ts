@@ -116,14 +116,15 @@ Deno.serve(async (req) => {
           currentStage = 'google-news';
           checked++;
           try {
-            const rssItems = await googleNewsItems(org, keywords, villageNames);
+            const rssBatch = await googleNewsItems(org, keywords, villageNames);
+            const rssItems = rssBatch.items;
             let newsCount = 0;
-            for (const item of rssItems.slice(0,60)) {
+            for (const item of rssItems.slice(0,80)) {
               if (Date.now() >= stopAt) break;
               newsCount += await safeSave(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords,villageNames,errors,org.short_name,'Google News');
             }
             inserted += newsCount;
-            details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, ...(options.debug ? { sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 5) } : {}) });
+            details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, query_count:rssBatch.queries.length, query_failures:rssBatch.failures.length, ...((options.debug || rssItems.length===0) ? { queries:rssBatch.queries, fetch_errors:rssBatch.failures.slice(0,6), sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 8) } : {}) });
           } catch (e) { fail(currentStage,e,org.short_name,'Google News RSS'); }
         } else if (options.debug) {
           details.push({organization:org.short_name,source:'Google News RSS',skipped:'time-budget'});
@@ -133,14 +134,15 @@ Deno.serve(async (req) => {
           currentStage = 'gdelt-web-news';
           checked++;
           try {
-            const webItems = await gdeltNewsItems(org, keywords, villageNames);
+            const webBatch = await gdeltNewsItems(org, keywords, villageNames);
+            const webItems = webBatch.items;
             let webCount = 0;
-            for (const item of webItems.slice(0,80)) {
+            for (const item of webItems.slice(0,100)) {
               if (Date.now() >= stopAt) break;
               webCount += await safeSave(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords,villageNames,errors,org.short_name,'GDELT');
             }
             inserted += webCount;
-            details.push({ organization:org.short_name, source:'GDELT Web / Xəbər', found:webItems.length, inserted:webCount, ...(options.debug ? { sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 8) } : {}) });
+            details.push({ organization:org.short_name, source:'GDELT Web / Xəbər', found:webItems.length, inserted:webCount, query_count:webBatch.queries.length, query_failures:webBatch.failures.length, ...((options.debug || webItems.length===0) ? { queries:webBatch.queries, fetch_errors:webBatch.failures.slice(0,6), sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 10) } : {}) });
           } catch (e) { fail(currentStage,e,org.short_name,'GDELT'); }
         } else if (options.debug) {
           details.push({organization:org.short_name,source:'GDELT Web / Xəbər',skipped:'time-budget'});
@@ -367,44 +369,49 @@ async function safeSourceTouch(admin:any,sourceId:any,errors:DiagnosticError[],o
   }
 }
 
-async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<Item[]> {
+async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[]}> {
   const queries = buildGoogleNewsQueries(org, keywords, villages);
+  const failures:any[] = [];
   const jobs = queries.map(async (query)=>{
     const googleUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=az&gl=AZ&ceid=AZ:az`;
     try {
       const xml = await fetchTextWithRetry(googleUrl, {
         headers:{
-          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/5.0)',
+          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/5.2)',
           'accept':'application/rss+xml, application/xml, text/xml, */*',
           'accept-language':'az,en;q=0.8'
         }
       },1,7000);
-      return parseRss(xml).map(item=>({
+      const parsed = parseRss(xml).map(item=>({
         ...item,
         raw:{...((item.raw as any) || {}), kind:'google_news', discovery_query:query}
       }));
+      return parsed;
     } catch (e) {
-      console.error('google-news-query', query, e);
+      const info = errorInfo(e);
+      failures.push({query,...info});
+      console.error('google-news-query', query, info);
       return [] as Item[];
     }
   });
   const batches = await Promise.all(jobs);
-  return dedupeItems(batches.flat());
+  return {items:dedupeItems(batches.flat()),queries,failures};
 }
 
-async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<Item[]> {
-  const queries = buildDiscoveryQueries(org, keywords, villages, 6);
+async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[]}> {
+  const queries = buildGdeltQueries(org, keywords, villages, 6);
+  const failures:any[] = [];
   const jobs = queries.map(async (query)=>{
     try {
       const endpoint = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
       endpoint.searchParams.set('query', query);
       endpoint.searchParams.set('mode', 'ArtList');
-      endpoint.searchParams.set('maxrecords', '50');
+      endpoint.searchParams.set('maxrecords', '75');
       endpoint.searchParams.set('format', 'json');
       endpoint.searchParams.set('sort', 'DateDesc');
       endpoint.searchParams.set('timespan', '3months');
       const data = await fetchJsonWithRetry(endpoint.toString(), {
-        headers:{'user-agent':'MediaMonitorinq/5.0 (+public-news-monitoring)','accept':'application/json'}
+        headers:{'user-agent':'MediaMonitorinq/5.2 (+public-news-monitoring)','accept':'application/json'}
       },1,7000);
       const out:Item[] = [];
       for (const article of data?.articles || []) {
@@ -423,12 +430,14 @@ async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):
       }
       return out;
     } catch (e) {
-      console.error('gdelt-query', query, e);
+      const info = errorInfo(e);
+      failures.push({query,...info});
+      console.error('gdelt-query', query, info);
       return [] as Item[];
     }
   });
   const batches = await Promise.all(jobs);
-  return dedupeItems(batches.flat());
+  return {items:dedupeItems(batches.flat()),queries,failures};
 }
 
 async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRows=12000):Promise<any[]> {
@@ -494,42 +503,76 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
   }
   return out;
 }
-function buildGoogleNewsQueries(org:any, keywords:string[], villages:string[]=[]):string[] {
-  const live = buildDiscoveryQueries(org, keywords, villages, 6);
+function buildGdeltQueries(org:any, keywords:string[], villages:string[] = [], max=6):string[] {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
-  const now = new Date();
-  const firstYear = 2000;
-  const currentYear = now.getUTCFullYear();
-  const yearCount = Math.max(1, currentYear - firstYear + 1);
+  const candidates:string[] = [];
+  if (shortName) candidates.push(`"${shortName}"`);
+  if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
+  if (district) {
+    candidates.push(`"${district}" suvarma`);
+    candidates.push(`"${district}" meliorasiya`);
+    candidates.push(`"${district}" (kanal OR arx OR subartezian OR artezian)`);
+    candidates.push(`"${district}" ("su gəlmir" OR "su çatışmazlığı" OR fermer)`);
+  }
+  const bank = buildDiscoveryQueries(org, keywords, villages, Math.max(2,max));
+  candidates.push(...bank);
+  const seen=new Set<string>();
+  const out:string[]=[];
+  for (const q of candidates) {
+    const key=normalizeForMatch(q);
+    if(!key || seen.has(key)) continue;
+    seen.add(key); out.push(q);
+    if(out.length>=max) break;
+  }
+  return out;
+}
 
-  // Hər 5 dəqiqəlik run başqa tarixi ili yoxlayır. Beləliklə canlı nəticələri
-  // itirmədən Google News indeksində mövcud olan köhnə materiallar da zamanla
-  // 2000-ci ildən bu günə qədər backfill olunur. API açarı tələb etmir.
+function buildGoogleNewsQueries(org:any, keywords:string[], villages:string[]=[]):string[] {
+  const district = String(org.districts?.name || '').trim();
+  const shortName = String(org.short_name || '').trim();
+  const fullName = String(org.name || '').trim();
+  const candidates:string[] = [];
+
+  // Əvvəlcə ən etibarlı identifikasiya və mövzu sorğuları. Bunlar böyük açar-söz
+  // bankının təsadüfi frazaları ilə əvəz edilmir və hər run-da mütləq yoxlanır.
+  if (shortName) candidates.push(`"${shortName}"`);
+  if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
+  if (district) {
+    candidates.push(`"${district}" suvarma`);
+    candidates.push(`"${district}" meliorasiya`);
+    candidates.push(`"${district}" kanal arx`);
+    candidates.push(`"${district}" subartezian artezian`);
+    candidates.push(`"${district}" "su gəlmir"`);
+    candidates.push(`"${district}" "su çatışmazlığı" fermer`);
+  }
+
+  // Böyük bankdan yalnız bir neçə rotasiyalı, ərazi ilə bağlı əlavə sorğu götürürük.
+  // Məqsəd 5-6 min açar sözü bir RSS sorğusuna doldurmaq yox, zamanla əhatəni genişləndirməkdir.
+  const rotated = buildDiscoveryQueries(org, keywords, villages, 4);
+  candidates.push(...rotated);
+
+  // Tarixi backfill: hər run başqa ili yoxlayır. Canlı geniş sorğular yuxarıda həmişə qalır.
+  const firstYear = 2000;
+  const currentYear = new Date().getUTCFullYear();
+  const yearCount = Math.max(1, currentYear - firstYear + 1);
   const slot = Math.floor(Date.now() / (5 * 60 * 1000));
   const archiveYear = firstYear + (slot % yearCount);
   const after = `${archiveYear}-01-01`;
   const before = `${archiveYear + 1}-01-01`;
-  const archive:string[] = [];
+  if (shortName) candidates.push(`"${shortName}" after:${after} before:${before}`);
+  if (district) candidates.push(`"${district}" suvarma after:${after} before:${before}`);
 
-  if (shortName) archive.push(`\"${shortName}\" after:${after} before:${before}`);
-  else if (fullName) archive.push(`\"${fullName}\" after:${after} before:${before}`);
-
-  if (district) {
-    const topics = ['suvarma','meliorasiya','su təsərrüfatı','su kanalı','subartezian','fermer su','su çatışmazlığı'];
-    const topic = topics[slot % topics.length];
-    archive.push(`\"${district}\" ${topic} after:${after} before:${before}`);
-  }
-
-  const out:string[]=[];
   const seen=new Set<string>();
-  for (const q of [...live,...archive]) {
+  const out:string[]=[];
+  for (const q of candidates) {
     const key=normalizeForMatch(q);
     if(!key || seen.has(key)) continue;
     seen.add(key); out.push(q);
+    if(out.length>=10) break;
   }
-  return out.slice(0,8);
+  return out;
 }
 
 function dedupeItems(items:Item[]):Item[] {

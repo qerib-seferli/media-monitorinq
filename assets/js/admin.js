@@ -278,11 +278,11 @@ async function loadKeywordGroup(group, offset=0, append=false) {
   const html = rows.map(x => mode === 'exclude' ? `
     <div class="keyword-item exclusion-item">
       <span>${escapeHtml(x.value)}</span>
-      <button class="icon-btn exclusion-delete" type="button" title="Filtri sil" aria-label="${escapeHtml(x.value)} filtrini sil" data-exclude-delete="${x.id}">×</button>
+      <button class="icon-btn keyword-delete exclusion-delete" type="button" title="Filtri sil" aria-label="${escapeHtml(x.value)} filtrini sil" data-keyword-delete="${x.id}" data-keyword-delete-mode="exclude">×</button>
     </div>` : `
     <div class="keyword-item">
       <span>${escapeHtml(x.value)}</span>
-      <span class="badge info">${escapeHtml(x.kind || 'phrase')}</span>
+      <span class="keyword-item-actions"><span class="badge info">${escapeHtml(x.kind || 'phrase')}</span><button class="icon-btn keyword-delete" type="button" title="Açar sözü sil" aria-label="${escapeHtml(x.value)} açar sözünü sil" data-keyword-delete="${x.id}" data-keyword-delete-mode="positive">×</button></span>
     </div>`).join('');
 
   const total = Number(group.dataset.total || 0);
@@ -319,7 +319,7 @@ function renderSources() {
   el.innerHTML = visible.map(x => {
     const rawUrl = String(x.url || '');
     const platform = rawUrl.includes('news.google.com/rss/') ? 'Google News RSS' : (x.platform || 'Web');
-    return `<div class="list-row source-row"><div><strong>${escapeHtml(platform)}</strong><small>${escapeHtml(x.organizations?.short_name || '')}</small><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl)}</a></div><span class="badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span></div>`;
+    return `<div class="list-row source-row"><div><strong>${escapeHtml(platform)}</strong><small>${escapeHtml(x.organizations?.short_name || '')}</small><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl)}</a></div><span class="badge source-status-badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span></div>`;
   }).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
 }
 
@@ -404,13 +404,18 @@ function renderAudit() {
 }
 
 function bindDynamicActions() {
-  document.querySelectorAll('[data-exclude-delete]').forEach(btn=>{
+  document.querySelectorAll('[data-keyword-delete]').forEach(btn=>{
     if (btn.dataset.bound) return;
     btn.dataset.bound='1';
     btn.addEventListener('click', async ()=>{
-      if (!confirm('Bu axtarılmamalı sözü filtrdən silmək istəyirsiniz?')) return;
-      const { error } = await supabase.from('keywords').delete().eq('id',btn.dataset.excludeDelete);
-      toast(error ? error.message : 'Filtr silindi', error ? 'error' : 'success');
+      const mode = btn.dataset.keywordDeleteMode || 'positive';
+      const isExclude = mode === 'exclude';
+      const question = isExclude ? 'Bu axtarılmamalı sözü filtrdən silmək istəyirsiniz?' : 'Bu monitorinq açar sözünü silmək istəyirsiniz?';
+      if (!confirm(question)) return;
+      btn.disabled = true;
+      const { error } = await supabase.from('keywords').delete().eq('id',btn.dataset.keywordDelete);
+      btn.disabled = false;
+      toast(error ? error.message : (isExclude ? 'Filtr silindi' : 'Açar söz silindi'), error ? 'error' : 'success');
       if (!error) await refresh();
     });
   });

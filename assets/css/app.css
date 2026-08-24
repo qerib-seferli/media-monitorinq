@@ -889,3 +889,12 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .mini-type-chip{font-size:7px!important;padding:2px 5px!important}
   .notification-arrow{font-size:18px!important}
 }
+
+/* Admin monitorinq — status və açar-söz əməliyyatlarının simmetriyası */
+.source-row{align-items:center}
+.source-status-badge{flex:0 0 auto;white-space:nowrap;line-height:1;min-height:28px;align-self:center;justify-content:center}
+.source-status-badge::before{flex:0 0 7px}
+.keyword-item-actions{display:inline-flex;align-items:center;justify-content:flex-end;gap:7px;flex:0 0 auto}
+.keyword-delete{width:34px;height:34px;min-width:34px;border-radius:10px;display:inline-grid;place-items:center;padding:0;line-height:1;font-size:18px;color:var(--gold2)}
+.keyword-delete:hover{border-color:rgba(215,181,109,.6);background:rgba(215,181,109,.08)}
+@media(max-width:720px){.source-status-badge{min-height:26px}.keyword-item-actions{gap:5px}.keyword-delete{width:30px;height:30px;min-width:30px;font-size:16px}}
