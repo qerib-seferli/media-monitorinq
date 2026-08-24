@@ -203,6 +203,20 @@ function rotate(items, count, salt='') {
   return out;
 }
 
+function rotateSources(items, count, salt='') {
+  if (!Array.isArray(items) || !items.length || count <= 0) return [];
+  // Sürətli watch job-u eyni 5 dəqiqəlik run daxilində 3 dəfə işləyir.
+  // 5 dəqiqəlik bucket istifadə etsəydi eyni 8 saytı 3 dəfə yoxlayardı.
+  // DIRECT_ONLY rejimində 45 saniyəlik bucket ilə hər dövrədə növbəti paket seçilir.
+  const bucket = Math.floor(Date.now()/(DIRECT_ONLY ? 45000 : 300000));
+  let hash = 0;
+  for (const c of String(salt)) hash = ((hash << 5) - hash + c.charCodeAt(0)) | 0;
+  const start = Math.abs(bucket * Math.max(1,count) + hash) % items.length;
+  const out=[];
+  for (let i=0;i<Math.min(count,items.length);i++) out.push(items[(start+i)%items.length]);
+  return out;
+}
+
 async function googleNews(query) {
   // GitHub runner-də 3 locale ardıcıl sorğu vaxtı uzadır və timeout riskini artırır.
   // Azərbaycan monitorinqi üçün discovery-ni AZ feed-dən edirik; geniş rayon sorğusu
@@ -555,8 +569,12 @@ for (const org of plan.organizations) {
     } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
   }
 
-  // Admin paneldə əl ilə əlavə olunan normal RSS/Atom feed-ləri birbaşa oxu.
-  for (const source of configuredSources.slice(0,DIRECT_ONLY?8:16)) {
+  // Admin paneldə əlavə olunan yüzlərlə media mənbəsinin hamısını eyni run-da
+  // açmaq həm GitHub timeout, həm də xarici sayt limitləri yaradır. Buna görə hər
+  // run fərqli paket seçilir; beləcə bankdakı bütün saytlar mərhələli yoxlanılır.
+  const sourceBatch = rotateSources(configuredSources, DIRECT_ONLY ? 8 : 16, `sources-${org.id}`);
+  console.log(`[${org.short_name}] Birbaşa mənbə paketi: ${sourceBatch.length}/${configuredSources.length}`);
+  for (const source of sourceBatch) {
     const items = await directFeed(source,org);
     if (/google/i.test(`${source.platform||''} ${source.name||''} ${source.url||''}`)) googleItems.push(...items);
     else webItems.push(...items);

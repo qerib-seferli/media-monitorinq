@@ -86,7 +86,7 @@ async function refresh() {
     supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
-    supabase.from('sources').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(120),
+    supabase.from('sources').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(1000),
     supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100)
   ]);
 

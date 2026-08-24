@@ -101,7 +101,10 @@ Deno.serve(async (req) => {
             name:String(source?.name || source?.platform || source?.url || '')
           }))
           .filter((source:any)=>Boolean(source.url) && !/youtube\.com|youtu\.be/i.test(source.url))
-          .slice(0,30)
+          // Media portal bankı yüzlərlə mənbə ola bilər. Gateway özü onları
+          // rotasiya ilə kiçik paketlərdə yoxlayır; burada ilk 30 mənbə ilə
+          // kəsmək qalan saytların heç vaxt monitorinqə düşməsinə səbəb olurdu.
+          .slice(0,1000)
       }));
       return json({ok:true,run_id:runId,mode:'news_plan',organizations},200);
     }
