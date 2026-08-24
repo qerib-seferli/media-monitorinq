@@ -76,7 +76,7 @@ async function callMonitor(body) {
   } finally { clearTimeout(timer); }
 }
 
-function chunks(items, size = 18) {
+function chunks(items, size = 10) {
   const rows = Array.isArray(items) ? items : [];
   const out = [];
   for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
@@ -84,10 +84,10 @@ function chunks(items, size = 18) {
 }
 
 async function ingestInChunks({org, platform, label, items}) {
-  const pieces = chunks(items, 18);
+  const pieces = chunks(items, 10);
   const aggregate = {
     received: 0, accepted: 0, rejected: 0, inserted: 0,
-    sample_results: [], screenshot_targets: [], errors: [], chunk_failures: 0
+    sample_results: [], screenshot_targets: [], accepted_targets: [], errors: [], chunk_failures: 0
   };
   for (let i = 0; i < pieces.length; i++) {
     const part = pieces[i];
@@ -102,6 +102,7 @@ async function ingestInChunks({org, platform, label, items}) {
       aggregate.inserted += Number(result?.inserted || 0);
       if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
       if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
+      if (Array.isArray(result?.accepted_targets)) aggregate.accepted_targets.push(...result.accepted_targets);
       if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
       console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
     } catch (e) {
@@ -113,6 +114,7 @@ async function ingestInChunks({org, platform, label, items}) {
     }
   }
   aggregate.screenshot_targets = dedupe(aggregate.screenshot_targets.map(x=>({ ...x, url:String(x?.url||'') }))).filter(x=>x.url);
+  aggregate.accepted_targets = dedupe(aggregate.accepted_targets.map(x=>({ ...x, url:String(x?.url||'') }))).filter(x=>x.url);
   return aggregate;
 }
 
@@ -150,7 +152,7 @@ function parseFeed(xml, rawKind, discoveryQuery, provider) {
     const description = stripHtml(tag(block, atom ? 'summary' : 'description') || tag(block,'content'));
     const pub = stripHtml(tag(block,'pubDate') || tag(block,'published') || tag(block,'updated'));
     const source = stripHtml(tag(block,'source') || tag(block,'author'));
-    const enclosure = attr(block,'enclosure','url') || attr(block,'media:content','url') || null;
+    const enclosure = attr(block,'enclosure','url') || attr(block,'media:content','url') || attr(block,'media:thumbnail','url') || (tag(block, atom ? 'summary' : 'description').match(/<img[^>]+src=[\"']([^\"']+)[\"']/i)?.[1] || null);
     return {
       title,
       text: description,
@@ -162,12 +164,31 @@ function parseFeed(xml, rawKind, discoveryQuery, provider) {
     };
   }).filter(x=>x.url && x.title);
 }
+function normalizeTitleKey(value='') {
+  return stripHtml(String(value||'')).toLocaleLowerCase('az-AZ').replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim();
+}
+function canonicalUrlKey(value='') {
+  try {
+    const u=new URL(String(value||''));
+    for (const key of [...u.searchParams.keys()]) {
+      if (/^(utm_|fbclid$|gclid$|yclid$|ref$|source$)/i.test(key)) u.searchParams.delete(key);
+    }
+    u.hash='';
+    return u.toString().replace(/\/$/,'');
+  } catch { return String(value||'').trim(); }
+}
 function dedupe(items) {
-  const seen = new Set();
+  const seenUrl = new Set();
+  const seenStory = new Set();
   return items.filter(x=>{
-    const k=(x.url||`${x.title}|${x.published_at||''}`).trim();
-    if(!k||seen.has(k)) return false;
-    seen.add(k); return true;
+    const urlKey=canonicalUrlKey(x?.url||'');
+    const titleKey=normalizeTitleKey(x?.title||'');
+    const day=x?.published_at ? String(x.published_at).slice(0,10) : '';
+    const storyKey=titleKey.length>=18 ? `${titleKey}|${day}` : '';
+    if((urlKey && seenUrl.has(urlKey)) || (storyKey && seenStory.has(storyKey))) return false;
+    if(urlKey) seenUrl.add(urlKey);
+    if(storyKey) seenStory.add(storyKey);
+    return Boolean(urlKey || storyKey);
   });
 }
 function rotate(items, count, salt='') {
@@ -238,17 +259,108 @@ function firstMatch(html, patterns) {
   }
   return '';
 }
-
+function absoluteUrl(base, value='') {
+  if (!value) return '';
+  try { return new URL(decodeXml(value),base).toString(); } catch { return decodeXml(value); }
+}
+function jsonLdObjects(html='') {
+  const out=[];
+  for (const m of String(html).matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const parsed=JSON.parse(decodeXml(m[1]));
+      const queue=Array.isArray(parsed)?[...parsed]:[parsed];
+      while(queue.length){
+        const x=queue.shift();
+        if(!x||typeof x!=='object') continue;
+        out.push(x);
+        if(Array.isArray(x['@graph'])) queue.push(...x['@graph']);
+      }
+    } catch {}
+  }
+  return out;
+}
+function cleanArticleText(value='') {
+  return stripHtml(String(value||'').replace(/<br\s*\/?\s*>/gi,'\n').replace(/<\/p>/gi,'\n')).replace(/\s*\n\s*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+function paragraphText(html='') {
+  const raw=String(html||'')
+    .replace(/<script\b[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi,' ')
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi,' ')
+    .replace(/<svg\b[\s\S]*?<\/svg>/gi,' ');
+  const candidates=[];
+  const selectors=[
+    /<article\b[^>]*>([\s\S]*?)<\/article>/gi,
+    /<main\b[^>]*>([\s\S]*?)<\/main>/gi,
+    /<(?:div|section)\b[^>]*(?:class|id)=["'][^"']*(?:article|news|post|entry|story|detail|content|text|body)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|section)>/gi
+  ];
+  for(const re of selectors){
+    for(const m of raw.matchAll(re)){
+      const paras=[...m[1].matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+        .map(x=>cleanArticleText(x[1])).filter(x=>x.length>=35 && !/cookie|reklam|advert|abunə|subscribe/i.test(x));
+      if(paras.length) candidates.push(paras.join('\n\n'));
+    }
+  }
+  if(!candidates.length){
+    const paras=[...raw.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+      .map(x=>cleanArticleText(x[1])).filter(x=>x.length>=45 && !/cookie|reklam|advert|abunə|subscribe/i.test(x));
+    if(paras.length) candidates.push(paras.join('\n\n'));
+  }
+  candidates.sort((a,b)=>b.length-a.length);
+  return candidates[0]||'';
+}
+async function fetchPage(url,{timeoutMs=10000}={}) {
+  await politeWait(650);
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    const res=await fetch(url,{headers:{'user-agent':UA,'accept':'text/html,application/xhtml+xml,*/*;q=0.8','accept-language':'az-AZ,az;q=0.9,tr;q=0.7,en;q=0.5'},signal:controller.signal,redirect:'follow'});
+    if(!res.ok){const e=new Error(`HTTP ${res.status}`);e.status=res.status;throw e;}
+    return {html:await res.text(),finalUrl:res.url||url};
+  } finally {clearTimeout(timer);}
+}
 async function enrichPage(item) {
-  if (!item?.url || /news\.google\.com/i.test(item.url)) return item;
+  if (!item?.url) return item;
   try {
-    const html = await fetchText(item.url,{timeoutMs:9000,retries:0,minGapMs:650});
-    const title = firstMatch(html,[/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,/<title[^>]*>([\s\S]*?)<\/title>/i]);
-    const desc = firstMatch(html,[/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i]);
-    const image = firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i]);
-    const published = firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
-    return {...item,title:stripHtml(title)||item.title,text:stripHtml(desc)||item.text,image:image||item.image,published_at:normalizeDate(published)||item.published_at,raw:{...(item.raw||{}),enriched:true}};
+    const {html,finalUrl}=await fetchPage(item.url,{timeoutMs:10000});
+    const ld=jsonLdObjects(html);
+    const articleLd=ld.find(x=>String(x?.['@type']||'').toLowerCase().includes('article')) || ld.find(x=>x?.articleBody) || {};
+    const title = articleLd?.headline || firstMatch(html,[/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,/<title[^>]*>([\s\S]*?)<\/title>/i]);
+    const desc = articleLd?.description || firstMatch(html,[/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i]);
+    const body = cleanArticleText(articleLd?.articleBody || '') || paragraphText(html) || stripHtml(desc) || item.text || '';
+    let image = '';
+    if(typeof articleLd?.image==='string') image=articleLd.image;
+    else if(Array.isArray(articleLd?.image)) image=typeof articleLd.image[0]==='string'?articleLd.image[0]:(articleLd.image[0]?.url||'');
+    else if(articleLd?.image?.url) image=articleLd.image.url;
+    if(!image) image=firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i]);
+    const published = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
+    const author = typeof articleLd?.author==='string' ? articleLd.author : (Array.isArray(articleLd?.author)?articleLd.author.map(x=>x?.name).filter(Boolean).join(', '):(articleLd?.author?.name||item.author||null));
+    return {
+      ...item,
+      title:stripHtml(title)||item.title,
+      text:String(body||item.text||'').slice(0,40000),
+      image:absoluteUrl(finalUrl,image||item.image||'' )||null,
+      published_at:normalizeDate(published)||item.published_at,
+      author:author||item.author||null,
+      raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url}
+    };
   } catch { return item; }
+}
+
+async function fetchBinaryBase64(url) {
+  if(!url) return null;
+  await politeWait(500);
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),10000);
+  try{
+    const res=await fetch(url,{headers:{'user-agent':UA,'accept':'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8','referer':new URL(url).origin+'/'},signal:controller.signal,redirect:'follow'});
+    if(!res.ok) return null;
+    const type=(res.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+    if(!/^image\/(png|jpeg|webp)$/i.test(type)) return null;
+    const buf=Buffer.from(await res.arrayBuffer());
+    if(!buf.length || buf.length>2_500_000) return null;
+    return {base64:buf.toString('base64'),mime_type:type};
+  }catch{return null;} finally{clearTimeout(timer);}
 }
 
 function findChrome() {
@@ -289,8 +401,6 @@ async function gdeltNews(query) {
 
 async function directFeed(source, orgName) {
   if (!source?.url) return [];
-  // Google News axtarış feed-ləri ayrıca discovery lane ilə idarə olunur.
-  if (/news\.google\.com\/rss\/search/i.test(source.url)) return [];
   try {
     const xml = await fetchText(source.url,{timeoutMs:15000,retries:1,minGapMs:1200});
     return parseFeed(xml,'configured_feed',orgName,source.name || source.platform || source.url);
@@ -321,15 +431,20 @@ for (const org of plan.organizations) {
   // 1) rayonun özü (geniş discovery), 2) rayon + suvarma, 3) rayon + subartezian.
   // Qalan sorğulardan yalnız biri rotasiya olunur. Beləliklə hər manual run-da real
   // rayon xəbəri tapmaq şansı yüksəkdir və dar təşkilat adı nəticəni sıfırlamır.
-  const coreQueries = allGoogle.slice(0,3);
+  const broadDistrict = allGoogle[0] ? [allGoogle[0]] : [];
+  const topicCore = allGoogle.slice(1,3);
   const rotatingQueries = allGoogle.slice(3);
-  const selectedQueries = [...new Set([...coreQueries, ...rotate(rotatingQueries,3,org.id)])].slice(0,6);
-  console.log(`[${org.short_name}] Discovery sorğuları: ${selectedQueries.join(' || ')}`);
+  const webQueries = [...new Set([...broadDistrict,...topicCore,...rotate(rotatingQueries,3,org.id)])].slice(0,6);
+  // Google News üçün geniş tək rayon sorğusu çoxlu əlaqəsiz başlıq gətirir və feed-i
+  // tez 429-a sala bilir. Mövzu ilə scope olunmuş 2 əsas + 1 rotasiya sorğusu işlədilir.
+  const googleQueries=[...new Set([...topicCore,...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,3);
+  console.log(`[${org.short_name}] Web discovery sorğuları: ${webQueries.join(' || ')}`);
+  console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
 
   const googleItems=[];
   const webItems=[];
 
-  for (const q of selectedQueries) {
+  for (const q of googleQueries) {
     try {
       const g = await googleNews(q);
       googleItems.push(...g.items);
@@ -337,12 +452,12 @@ for (const org of plan.organizations) {
     } catch (e) {
       totalFailures++; console.log(`[${org.short_name}] Google News xəta (${q}):`, e?.message||e);
     }
-
+  }
+  for (const q of webQueries) {
     try {
       webItems.push(...await bingNews(q,0));
       webItems.push(...await bingWeb(q,0));
-      // Əsas rayon sorğularında ikinci səhifəni də oxuyuruq ki ilk 10 nəticə ilə məhdudlaşmayaq.
-      if (selectedQueries.indexOf(q) < 2) {
+      if (webQueries.indexOf(q) < 2) {
         webItems.push(...await bingNews(q,1));
         webItems.push(...await bingWeb(q,1));
       }
@@ -352,7 +467,7 @@ for (const org of plan.organizations) {
   // Admin paneldə əl ilə əlavə olunan normal RSS/Atom feed-ləri birbaşa oxu.
   for (const source of (Array.isArray(org.rss_sources)?org.rss_sources:[]).slice(0,12)) {
     const items = await directFeed(source,org.short_name);
-    if (/google/i.test(source.platform||source.name||'')) googleItems.push(...items);
+    if (/google/i.test(`${source.platform||''} ${source.name||''} ${source.url||''}`)) googleItems.push(...items);
     else webItems.push(...items);
   }
 
@@ -376,13 +491,10 @@ for (const org of plan.organizations) {
   // metadata-sını (og:title/description/image/datePublished) götürərək tarix və preview-ni dəqiqləşdiririk.
   const googleDeduped=dedupe(googleItems).slice(0,220);
   const webDeduped=dedupe(webItems).slice(0,260);
-  const enrichedWeb=[];
-  for (const item of webDeduped.slice(0,36)) enrichedWeb.push(await enrichPage(item));
-  enrichedWeb.push(...webDeduped.slice(36));
 
   const batches = [
     {platform:'Google News',label:'Google News RSS / GitHub Gateway',items:googleDeduped},
-    {platform:'Web',label:'Web / Bing News + Bing Web + RSS / GitHub Gateway',items:dedupe(enrichedWeb)}
+    {platform:'Web',label:'Web / Bing News + Bing Web + RSS / GitHub Gateway',items:webDeduped}
   ];
 
   for (const batch of batches) {
@@ -401,14 +513,43 @@ for (const org of plan.organizations) {
     console.log(`[${org.short_name}] ${batch.label}: received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
     logIngestSamples(org.short_name,batch.label,result);
 
-    // Yalnız filtrlərdən keçmiş və bazada screenshot-u olmayan xəbərlər üçün arxiv görüntüsü alırıq.
-    // Bir run-da limit saxlanılır ki GitHub Action uzanmasın.
-    const screenshotTargets=Array.isArray(result?.screenshot_targets)?result.screenshot_targets.slice(0,2):[];
-    for (const target of screenshotTargets) {
-      const shot=await captureScreenshot(target);
+    // Yalnız filtrdən keçmiş materialların öz səhifəsini açıb tam mətni, tarix/müəllif
+    // və əsas xəbər şəklini dəqiqləşdiririk. Beləliklə axtarış snippet-i orijinal mətn kimi saxlanmır.
+    const acceptedTargets=Array.isArray(result?.accepted_targets)?result.accepted_targets:[];
+    const screenshotFallback=[];
+    for (const target of acceptedTargets.slice(0,32)) {
+      const enriched=await enrichPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:target.image||null,author:target.author||null,raw:target.raw||{}});
+      try {
+        const refreshed=await callMonitor({
+          mode:'news_enrich', organization_id:org.id, source_url:target.url,
+          title:enriched.title||target.title||'', text:enriched.text||target.text||'',
+          image_url:enriched.image||'', published_at:enriched.published_at||target.published_at||null,
+          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url
+        });
+        if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);
+      } catch(e) { console.log(`[${org.short_name}] Tam mətn yeniləmə xətası: ${e?.message||e}`); }
+
+      let archivedImage=false;
+      if(enriched.image){
+        const media=await fetchBinaryBase64(enriched.image);
+        if(media){
+          try{
+            const saved=await callMonitor({mode:'news_media',organization_id:org.id,source_url:target.url,image_base64:media.base64,mime_type:media.mime_type,media_type:'preview'});
+            archivedImage=Boolean(saved?.ok && (saved?.saved || saved?.skipped==='already-exists'));
+            console.log(`[${org.short_name}] Xəbər şəkli: ${archivedImage?'SAXLANDI':'buraxıldı'} | ${String(enriched.title||target.title||'').slice(0,100)}`);
+          }catch(e){console.log(`[${org.short_name}] Xəbər şəkli upload xətası: ${e?.message||e}`);}
+        }
+      }
+      if(!archivedImage) screenshotFallback.push({...target,title:enriched.title||target.title||'',original_url:target.url,capture_url:enriched.raw?.canonical_url||target.url,url:target.url});
+    }
+
+    // Xəbər şəkli yoxdursa arxiv screenshot saxlanılır. Hər run-da limit var; növbəti run
+    // screenshot-u olmayan növbəti materialları tamamlayacaq.
+    for (const target of screenshotFallback.slice(0,6)) {
+      const shot=await captureScreenshot({...target,url:target.capture_url||target.url});
       if (!shot) { console.log(`[${org.short_name}] Screenshot alınmadı: ${String(target?.url||'').slice(0,120)}`); continue; }
       try {
-        const saved=await callMonitor({mode:'news_screenshot',organization_id:org.id,source_url:target.url,image_base64:shot.base64,mime_type:shot.mime_type});
+        const saved=await callMonitor({mode:'news_media',organization_id:org.id,source_url:target.original_url||target.url,image_base64:shot.base64,mime_type:shot.mime_type,media_type:'screenshot'});
         console.log(`[${org.short_name}] Screenshot: ${saved?.ok && saved?.saved ? 'SAXLANDI' : (saved?.skipped||saved?.error||'buraxıldı')} | ${String(target?.title||target?.url||'').slice(0,100)}`);
       } catch(e) { console.log(`[${org.short_name}] Screenshot upload xəta: ${e?.message||e}`); }
     }

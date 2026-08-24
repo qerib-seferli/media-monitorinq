@@ -898,3 +898,43 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .keyword-delete{width:34px;height:34px;min-width:34px;border-radius:10px;display:inline-grid;place-items:center;padding:0;line-height:1;font-size:18px;color:var(--gold2)}
 .keyword-delete:hover{border-color:rgba(215,181,109,.6);background:rgba(215,181,109,.08)}
 @media(max-width:720px){.source-status-badge{min-height:26px}.keyword-item-actions{gap:5px}.keyword-delete{width:30px;height:30px;min-width:30px;font-size:16px}}
+
+/* Web/Xəbər detalları: uzun orijinal mətn və arxiv mediası */
+.detail-original{
+  margin:16px 0;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:rgba(255,255,255,.018);
+  overflow:hidden;
+}
+.detail-original summary{
+  cursor:pointer;
+  list-style:none;
+  padding:12px 14px;
+  font-weight:800;
+  color:var(--text);
+  border-bottom:1px solid transparent;
+}
+.detail-original summary::-webkit-details-marker{display:none}
+.detail-original[open] summary{border-bottom-color:var(--line)}
+.detail-original summary::after{
+  content:'＋';
+  float:right;
+  color:var(--gold2);
+  font-size:16px;
+  line-height:1;
+}
+.detail-original[open] summary::after{content:'−'}
+.detail-original .detail-text{
+  margin:0;
+  padding:14px;
+  white-space:pre-wrap;
+  line-height:1.7;
+  overflow-wrap:anywhere;
+}
+.detail-media-wrap{margin:0;display:grid;gap:6px}
+.detail-media-wrap figcaption{font-size:10px;color:var(--muted);text-align:center}
+@media(max-width:700px){
+  .detail-original summary{padding:10px 11px;font-size:12px}
+  .detail-original .detail-text{padding:11px;font-size:12px;line-height:1.62}
+}

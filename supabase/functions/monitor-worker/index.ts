@@ -106,6 +106,74 @@ Deno.serve(async (req) => {
       return json({ok:true,run_id:runId,mode:'news_plan',organizations},200);
     }
 
+    if (options.mode === 'news_enrich') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'news_enrich',error:'Təşkilat tapılmadı'},200);
+      if (!options.source_url) return json({ok:false,run_id:runId,mode:'news_enrich',error:'source_url tələb olunur'},200);
+      try {
+        const current:any = await admin.from('mentions')
+          .select('id,raw_payload')
+          .eq('organization_id',org.id)
+          .eq('source_url',options.source_url)
+          .order('published_at',{ascending:false,nullsFirst:false})
+          .limit(1)
+          .maybeSingle();
+        if (current?.error) throw current.error;
+        if (!current?.data?.id) return json({ok:true,run_id:runId,mode:'news_enrich',updated:false,skipped:'mention-not-found'},200);
+        const patch:any = {last_seen_at:new Date().toISOString(),last_verified_at:new Date().toISOString(),source_status:'active'};
+        if (options.news_title) patch.title=options.news_title;
+        if (options.news_text) {
+          patch.original_text=options.news_text;
+          patch.summary=clean(options.news_text).slice(0,700);
+        }
+        if (options.news_published_at) patch.published_at=options.news_published_at;
+        if (options.news_author) patch.author_name=options.news_author;
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:true,canonical_url:options.canonical_url||options.source_url,image_url:options.image_url||undefined};
+        const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
+        if (updated?.error) throw updated.error;
+        return json({ok:true,run_id:runId,mode:'news_enrich',updated:true,mention_id:current.data.id},200);
+      } catch(e) {
+        return json({ok:false,run_id:runId,mode:'news_enrich',updated:false,error:errorInfo(e).message},200);
+      }
+    }
+
+    if (options.mode === 'news_media') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'news_media',error:'Təşkilat tapılmadı'},200);
+      if (!options.source_url || !options.image_base64) return json({ok:false,run_id:runId,mode:'news_media',error:'source_url və image_base64 tələb olunur'},200);
+      try {
+        const mentionResult:any = await admin.from('mentions')
+          .select('id,title,mention_media(id,media_type,url)')
+          .eq('organization_id',org.id)
+          .eq('source_url',options.source_url)
+          .order('published_at',{ascending:false,nullsFirst:false})
+          .limit(1)
+          .maybeSingle();
+        if (mentionResult?.error) throw mentionResult.error;
+        const mention=mentionResult?.data||null;
+        if(!mention?.id) return json({ok:true,run_id:runId,mode:'news_media',saved:false,skipped:'mention-not-found'},200);
+        const mediaType=options.media_type==='screenshot'?'screenshot':'preview';
+        const already=(Array.isArray(mention.mention_media)?mention.mention_media:[]).some((m:any)=>String(m?.media_type||'').toLowerCase()===mediaType && /supabase\.co\/storage\/v1\/object\/public\//i.test(String(m?.url||'')));
+        if(already) return json({ok:true,run_id:runId,mode:'news_media',saved:false,skipped:'already-exists'},200);
+        const mime=/^image\/(png|jpeg|webp)$/i.test(options.mime_type)?options.mime_type.toLowerCase():'image/jpeg';
+        const ext=mime.includes('png')?'png':mime.includes('webp')?'webp':'jpg';
+        const binary=decodeBase64(options.image_base64);
+        if(!binary.length||binary.length>3_000_000) return json({ok:true,run_id:runId,mode:'news_media',saved:false,skipped:'invalid-or-too-large'},200);
+        const bucket='monitor-screenshots';
+        await ensurePublicBucket(admin,bucket);
+        const now=new Date();
+        const path=`${org.id}/${now.getUTCFullYear()}/${String(now.getUTCMonth()+1).padStart(2,'0')}/${mention.id}-${mediaType}-${crypto.randomUUID().slice(0,8)}.${ext}`;
+        const upload:any=await admin.storage.from(bucket).upload(path,binary,{contentType:mime,upsert:false,cacheControl:'31536000'});
+        if(upload?.error) throw upload.error;
+        const publicResult:any=admin.storage.from(bucket).getPublicUrl(path);
+        const publicUrl=publicResult?.data?.publicUrl||'';
+        if(!publicUrl) throw new Error('Media public URL yaradılmadı');
+        const mediaInsert:any=await admin.from('mention_media').insert({mention_id:mention.id,media_type:mediaType,url:publicUrl,captured_at:new Date().toISOString()});
+        if(mediaInsert?.error) throw mediaInsert.error;
+        return json({ok:true,run_id:runId,mode:'news_media',saved:true,mention_id:mention.id,url:publicUrl,media_type:mediaType},200);
+      }catch(e){return json({ok:false,run_id:runId,mode:'news_media',saved:false,error:errorInfo(e).message},200);}
+    }
+
     if (options.mode === 'news_screenshot') {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_screenshot',error:'Təşkilat tapılmadı'},200);
@@ -188,7 +256,8 @@ Deno.serve(async (req) => {
         saved += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,options.source_label || options.source_platform || 'News Gateway');
       }
 
-      const acceptedUrls=[...new Set(acceptedItems.map((x:Item)=>String(x.url||'')).filter(Boolean))].slice(0,80);
+      const acceptedTargets=acceptedItems.map((x:Item)=>({title:x.title||'',text:x.text||'',url:x.url||'',published_at:x.published_at||null,image:x.image||null,author:x.author||null,raw:x.raw||{}})).filter((x:any)=>Boolean(x.url)).slice(0,80);
+      const acceptedUrls=[...new Set(acceptedTargets.map((x:any)=>String(x.url||'')).filter(Boolean))].slice(0,80);
       const screenshotTargets:any[]=[];
       if (acceptedUrls.length) {
         const mr:any = await admin.from('mentions')
@@ -204,7 +273,7 @@ Deno.serve(async (req) => {
           }
         }
       }
-      return json({ok:true,run_id:runId,mode:'news_ingest',organization:org.short_name,source_platform:source.platform,received:(options.news_items||[]).length,accepted,rejected,inserted:saved,sample_results:samples,screenshot_targets:screenshotTargets,errors},200);
+      return json({ok:true,run_id:runId,mode:'news_ingest',organization:org.short_name,source_platform:source.platform,received:(options.news_items||[]).length,accepted,rejected,inserted:saved,sample_results:samples,accepted_targets:acceptedTargets,screenshot_targets:screenshotTargets,errors},200);
     }
 
     for (const org of orgs) {
@@ -1734,7 +1803,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   }
 
   if (item.image) {
-    await admin.from('mention_media').insert({mention_id:data.id,media_type:'preview',url:item.image,captured_at:new Date().toISOString()});
+    await admin.from('mention_media').insert({mention_id:data.id,media_type:'preview_external',url:item.image,captured_at:new Date().toISOString()});
   }
   const isCommentItem = String((item.raw as any)?.kind || '').includes('comment');
   if (priority >= 81 || isCommentItem) {
@@ -1767,6 +1836,13 @@ type RunOptions = {
   source_url:string;
   image_base64:string;
   mime_type:string;
+  media_type:string;
+  news_title:string;
+  news_text:string;
+  news_published_at:string|null;
+  news_author:string;
+  image_url:string;
+  canonical_url:string;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -1786,7 +1862,14 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   news_items:[],
   source_url:'',
   image_base64:'',
-  mime_type:'image/jpeg'
+  mime_type:'image/jpeg',
+  media_type:'screenshot',
+  news_title:'',
+  news_text:'',
+  news_published_at:null,
+  news_author:'',
+  image_url:'',
+  canonical_url:''
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -1798,7 +1881,7 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
     const incoming = Array.isArray(body?.items) ? body.items : [];
     const newsItems:Item[] = incoming.slice(0,250).map((x:any)=>({
       title:String(x?.title || '').slice(0,500),
-      text:String(x?.text || x?.description || '').slice(0,8000),
+      text:String(x?.text || x?.description || '').slice(0,40000),
       url:String(x?.url || '').slice(0,2000),
       published_at:x?.published_at ? String(x.published_at) : null,
       image:x?.image ? String(x.image) : null,
@@ -1822,7 +1905,14 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       news_items:newsItems,
       source_url:String(body?.source_url || '').slice(0,2000),
       image_base64:String(body?.image_base64 || ''),
-      mime_type:String(body?.mime_type || 'image/jpeg').slice(0,80)
+      mime_type:String(body?.mime_type || 'image/jpeg').slice(0,80),
+      media_type:String(body?.media_type || 'screenshot').slice(0,40),
+      news_title:String(body?.title || '').slice(0,1000),
+      news_text:String(body?.text || '').slice(0,40000),
+      news_published_at:body?.published_at ? String(body.published_at) : null,
+      news_author:String(body?.author || '').slice(0,500),
+      image_url:String(body?.image_url || '').slice(0,2000),
+      canonical_url:String(body?.canonical_url || '').slice(0,2000)
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};
