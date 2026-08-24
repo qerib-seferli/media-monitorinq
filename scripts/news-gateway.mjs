@@ -434,10 +434,12 @@ for (const org of plan.organizations) {
   const broadDistrict = allGoogle[0] ? [allGoogle[0]] : [];
   const topicCore = allGoogle.slice(1,3);
   const rotatingQueries = allGoogle.slice(3);
-  const webQueries = [...new Set([...broadDistrict,...topicCore,...rotate(rotatingQueries,3,org.id)])].slice(0,6);
-  // Google News üçün geniş tək rayon sorğusu çoxlu əlaqəsiz başlıq gətirir və feed-i
-  // tez 429-a sala bilir. Mövzu ilə scope olunmuş 2 əsas + 1 rotasiya sorğusu işlədilir.
-  const googleQueries=[...new Set([...topicCore,...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,3);
+  // Hər run-da daha çox mövzu dövr etdirilir. Bununla eyni 30-40 nəticənin içində
+  // qalmırıq; 5 dəqiqəlik rotasiya ilə 28 sorğulu bank mərhələli şəkildə taranır.
+  const webQueries = [...new Set([...broadDistrict,...topicCore,...rotate(rotatingQueries,7,org.id)])].slice(0,10);
+  // Google News ayrıca istifadəçi platforması deyil, discovery provider-dir. Burada
+  // yalnız iki yüksək siqnallı sorğu saxlayırıq və tapılan nəticələri Web axınına qatırıq.
+  const googleQueries=[...new Set([...topicCore.slice(0,1),...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,2);
   console.log(`[${org.short_name}] Web discovery sorğuları: ${webQueries.join(' || ')}`);
   console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
 
@@ -455,11 +457,16 @@ for (const org of plan.organizations) {
   }
   for (const q of webQueries) {
     try {
+      const qi=webQueries.indexOf(q);
       webItems.push(...await bingNews(q,0));
       webItems.push(...await bingWeb(q,0));
-      if (webQueries.indexOf(q) < 2) {
+      if (qi < 4) {
         webItems.push(...await bingNews(q,1));
         webItems.push(...await bingWeb(q,1));
+      }
+      if (qi < 2) {
+        webItems.push(...await bingNews(q,2));
+        webItems.push(...await bingWeb(q,2));
       }
     } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
   }
@@ -489,12 +496,13 @@ for (const org of plan.organizations) {
 
   // Search nəticələrinin öz snippet-i bəzən çox zəif olur. İlk namizədlərin səhifə
   // metadata-sını (og:title/description/image/datePublished) götürərək tarix və preview-ni dəqiqləşdiririk.
-  const googleDeduped=dedupe(googleItems).slice(0,220);
-  const webDeduped=dedupe(webItems).slice(0,260);
+  // Google News burada yalnız kəşf mənbəyidir. Eyni xəbər Google News, Bing News,
+  // Bing Web və birbaşa RSS-dən eyni anda gələ bildiyi üçün bütün discovery nəticələri
+  // ingest-dən ƏVVƏL bir Web axınında birləşdirilir və başlıq+tarix/URL ilə təkrarsızlaşdırılır.
+  const unifiedWebItems=dedupe([...googleItems,...webItems]).slice(0,420);
 
   const batches = [
-    {platform:'Google News',label:'Google News RSS / GitHub Gateway',items:googleDeduped},
-    {platform:'Web',label:'Web / Bing News + Bing Web + RSS / GitHub Gateway',items:webDeduped}
+    {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}
   ];
 
   for (const batch of batches) {

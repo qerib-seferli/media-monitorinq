@@ -886,7 +886,7 @@ function gdeltDate(value:any):string|null {
 function canonicalPlatform(value:string) {
   const v = String(value || '').trim().toLowerCase();
   if (v === 'youtube') return 'YouTube';
-  if (v === 'google news' || v === 'googlenews') return 'Google News';
+  if (v === 'google news' || v === 'googlenews') return 'Web';
   if (v === 'facebook') return 'Facebook';
   if (v === 'instagram') return 'Instagram';
   if (v === 'tiktok') return 'TikTok';
@@ -1722,17 +1722,43 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   const priority = Math.min(100, relevance + (neg?15:0));
   const sentiment = neg ? 'negative' : pos ? 'positive' : 'neutral';
 
-  const hash = await sha256(`${org.id}|${item.url}|${item.title||''}`);
+  const canonicalSourcePlatform = canonicalPlatform(source.platform || inferPlatform(item.url || '') || 'Web');
+  const isWebNews = canonicalSourcePlatform === 'Web';
+  const storyTitleKey = normalizeForMatch(item.title || '');
+  const storyDay = item.published_at ? String(item.published_at).slice(0,10) : '';
+  // Web xəbərlərində eyni məqalə Google News, Bing, RSS və birbaşa sayt URL-i ilə
+  // fərqli linklərdən gələ bilər. URL əsaslı hash bu səbəbdən dublikat yaradırdı.
+  // Xəbər üçün stabil başlıq+tarix fingerprint-i, digər platformalarda əvvəlki URL hash-i işləyir.
+  const hash = await sha256(isWebNews && storyTitleKey
+    ? `${org.id}|web-story|${storyTitleKey}|${storyDay}`
+    : `${org.id}|${item.url}|${item.title||''}`);
 
-  // Eyni material hər 10 dəqiqədə yenidən aşkarlana bilər. Əvvəlcə bazada
-  // olub-olmadığını yoxlayırıq; mövcud qeydi Gemini-yə yenidən göndərmirik.
-  // Bu xüsusilə yüzlərlə YouTube şərhində timeout/500 problemini aradan qaldırır.
-  const { data:existing, error:existingError } = await admin.from('mentions')
+  // Eyni material hər run-da yenidən aşkarlana bilər. Əvvəlcə yeni content_hash ilə yoxla.
+  let { data:existing, error:existingError } = await admin.from('mentions')
     .select('id')
     .eq('organization_id',org.id)
     .eq('content_hash',hash)
     .maybeSingle();
   if (existingError) throw existingError;
+
+  // Köhnə Web qeydləri URL+başlıq hash-i ilə saxlanıb. Yeni fingerprint sisteminə keçiddə
+  // həmin köhnə materialı bir dəfə də insert etməmək üçün başlıq+tarix üzrə fallback axtarış edilir.
+  if (!existing?.id && isWebNews && item.title) {
+    let legacyQuery:any = admin.from('mentions')
+      .select('id')
+      .eq('organization_id',org.id)
+      .in('source_platform',['Web','Google News'])
+      .eq('title',item.title)
+      .order('detected_at',{ascending:false})
+      .limit(1);
+    if (storyDay) {
+      legacyQuery = legacyQuery
+        .gte('published_at',`${storyDay}T00:00:00.000Z`)
+        .lt('published_at',new Date(new Date(`${storyDay}T00:00:00.000Z`).getTime()+86400000).toISOString());
+    }
+    const legacyResult:any = await legacyQuery.maybeSingle();
+    if (!legacyResult?.error && legacyResult?.data?.id) existing = legacyResult.data;
+  }
   if (existing?.id) {
     // Mövcud material/rəy yenidən görünəndə yalnız statusu deyil, dəyişə bilən
     // platforma metadatasını da təzələyirik. Xüsusilə YouTube şərhlərində
@@ -1763,7 +1789,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   const row:any = {
     organization_id:org.id,
     district_id:org.district_id || null,
-    source_platform:canonicalPlatform(source.platform || inferPlatform(item.url || '') || 'Web'),
+    source_platform:canonicalSourcePlatform,
     source_url:item.url,
     author_name:item.author || null,
     title:item.title || 'Monitorinq qeydi',
