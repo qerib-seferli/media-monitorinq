@@ -572,6 +572,25 @@ async function insertMissing(table, existingRows, rows, match) {
   return { count: error ? 0 : missing.length, error };
 }
 
+async function loadOrganizationKeywordValues(organizationId) {
+  const values = [];
+  const pageSize = 1000;
+  for (let from = 0; from < 12000; from += pageSize) {
+    const { data, error } = await supabase
+      .from('keywords')
+      .select('value,kind')
+      .eq('organization_id', organizationId)
+      .neq('kind', 'exclude')
+      .order('created_at', { ascending:true })
+      .range(from, from + pageSize - 1);
+    if (error) return { values:[], error };
+    const batch = data || [];
+    values.push(...batch.map(x => String(x.value || '')));
+    if (batch.length < pageSize) break;
+  }
+  return { values, error:null };
+}
+
 async function configureBarda() {
   const org = orgs.find(o => ['bərdə smsii','bərdə smsİİ','bərdə smsii'].includes(String(o.short_name||'').toLocaleLowerCase('az-AZ')) || String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
   const district = districts.find(d => String(d.name||'').toLocaleLowerCase('az-AZ') === 'bərdə');
@@ -594,11 +613,18 @@ async function configureBarda() {
   if (pRes.error) return toast(pRes.error.message,'error');
   changed += pRes.count;
 
-  const stat = keywordStats.find(x => x.organization_id === org.id);
-  if (!stat?.positive_count) {
-    const { error } = await supabase.from('keywords').insert(desiredKeywords.map(value=>({organization_id:org.id,value,kind:'phrase',is_active:true})));
+  // Konfiqurasiya düyməsi mövcud açar sözləri yenidən POST etməməlidir.
+  // Unique index lower(trim(value)) olduğuna görə təşkilatın mövcud dəyərlərini yalnız
+  // bu düymə basılanda səhifəli oxuyuruq və eyni normalizə olunmuş sözə POST etmirik.
+  // Beləliklə Network/Console-da 409 duplicate sorğusu yaranmır.
+  const existingKeywordResult = await loadOrganizationKeywordValues(org.id);
+  if (existingKeywordResult.error) return toast(existingKeywordResult.error.message,'error');
+  const existingNormalized = new Set(existingKeywordResult.values.map(value => String(value || '').trim().toLocaleLowerCase('az-AZ')));
+  const missingKeywords = desiredKeywords.filter(value => !existingNormalized.has(value.trim().toLocaleLowerCase('az-AZ')));
+  for (const value of missingKeywords) {
+    const { error } = await supabase.from('keywords').insert({organization_id:org.id,value,kind:'phrase',is_active:true});
     if (error && error.code !== '23505') return toast(error.message,'error');
-    if (!error) changed += desiredKeywords.length;
+    if (!error) changed++;
   }
 
   const rssUrl = 'https://news.google.com/rss/search?q=' + encodeURIComponent('"Bərdə SMSİİ" OR "Bərdə suvarma" OR "Bərdə Suvarma İdarəsi"') + '&hl=az&gl=AZ&ceid=AZ:az';

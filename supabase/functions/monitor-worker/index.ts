@@ -340,6 +340,7 @@ Deno.serve(async (req) => {
 });
 
 function timeLeft(stopAt:number) { return Math.max(0, stopAt - Date.now()); }
+function sleep(ms:number) { return new Promise(resolve=>setTimeout(resolve,ms)); }
 
 function errorInfo(e:unknown):{message:string;code?:string|null;status?:number|null} {
   if (e instanceof Error) return {message:e.message || 'Naməlum xəta',code:(e as any)?.code || null,status:Number((e as any)?.status || 0) || null};
@@ -370,55 +371,68 @@ async function safeSourceTouch(admin:any,sourceId:any,errors:DiagnosticError[],o
 }
 
 async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[]}> {
-  const queries = buildGoogleNewsQueries(org, keywords, villages);
+  // Google News RSS eyni IP-dən paralel sorğulara tez 503 qaytara bilir.
+  // Buna görə yalnız yüksək siqnallı sorğuları ardıcıl və qısa fasilə ilə işləyirik.
+  const queries = buildGoogleNewsQueries(org, keywords, villages).slice(0,2);
   const failures:any[] = [];
-  const jobs = queries.map(async (query)=>{
+  const items:Item[] = [];
+
+  for (let i=0; i<queries.length; i++) {
+    const query = queries[i];
     const googleUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=az&gl=AZ&ceid=AZ:az`;
     try {
       const xml = await fetchTextWithRetry(googleUrl, {
         headers:{
-          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/5.2)',
-          'accept':'application/rss+xml, application/xml, text/xml, */*',
-          'accept-language':'az,en;q=0.8'
+          'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+          'accept':'application/rss+xml,application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
+          'accept-language':'az-AZ,az;q=0.9,en;q=0.7',
+          'cache-control':'no-cache'
         }
-      },1,7000);
-      const parsed = parseRss(xml).map(item=>({
+      },2,9000);
+      items.push(...parseRss(xml).map(item=>({
         ...item,
         raw:{...((item.raw as any) || {}), kind:'google_news', discovery_query:query}
-      }));
-      return parsed;
+      })));
     } catch (e) {
       const info = errorInfo(e);
       failures.push({query,...info});
       console.error('google-news-query', query, info);
-      return [] as Item[];
     }
-  });
-  const batches = await Promise.all(jobs);
-  return {items:dedupeItems(batches.flat()),queries,failures};
+    // Google-un anti-burst limitinə düşməmək üçün sorğuları ardıcıl saxla.
+    if (i < queries.length - 1) await sleep(350);
+  }
+
+  return {items:dedupeItems(items),queries,failures};
 }
 
 async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[]}> {
-  const queries = buildGdeltQueries(org, keywords, villages, 6);
+  // GDELT API Supabase Edge-dən 6 paralel ağır query-də tez timeout olur.
+  // İki kompakt query ardıcıl işləyir; nəticə sonra lokaldakı aidiyyət filtrlərindən keçir.
+  const queries = buildGdeltQueries(org, keywords, villages, 1);
   const failures:any[] = [];
-  const jobs = queries.map(async (query)=>{
+  const items:Item[] = [];
+
+  for (let i=0; i<queries.length; i++) {
+    const query = queries[i];
     try {
       const endpoint = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
       endpoint.searchParams.set('query', query);
       endpoint.searchParams.set('mode', 'ArtList');
-      endpoint.searchParams.set('maxrecords', '75');
+      endpoint.searchParams.set('maxrecords', '50');
       endpoint.searchParams.set('format', 'json');
       endpoint.searchParams.set('sort', 'DateDesc');
       endpoint.searchParams.set('timespan', '3months');
       const data = await fetchJsonWithRetry(endpoint.toString(), {
-        headers:{'user-agent':'MediaMonitorinq/5.2 (+public-news-monitoring)','accept':'application/json'}
-      },1,7000);
-      const out:Item[] = [];
+        headers:{
+          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/5.3; +public-news-monitoring)',
+          'accept':'application/json,text/plain;q=0.9,*/*;q=0.8'
+        }
+      },2,11000);
       for (const article of data?.articles || []) {
         const url = String(article?.url || '').trim();
         const title = String(article?.title || '').trim();
         if (!url || !title) continue;
-        out.push({
+        items.push({
           title,
           text:`${article?.domain || ''} ${article?.language || ''} ${article?.sourcecountry || ''}`.trim(),
           url,
@@ -428,16 +442,15 @@ async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):
           raw:{kind:'gdelt_article', discovery_query:query, ...article}
         });
       }
-      return out;
     } catch (e) {
       const info = errorInfo(e);
       failures.push({query,...info});
       console.error('gdelt-query', query, info);
-      return [] as Item[];
     }
-  });
-  const batches = await Promise.all(jobs);
-  return {items:dedupeItems(batches.flat()),queries,failures};
+    if (i < queries.length - 1) await sleep(250);
+  }
+
+  return {items:dedupeItems(items),queries,failures};
 }
 
 async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRows=12000):Promise<any[]> {
@@ -503,28 +516,30 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
   }
   return out;
 }
-function buildGdeltQueries(org:any, keywords:string[], villages:string[] = [], max=6):string[] {
+function buildGdeltQueries(org:any, keywords:string[], villages:string[] = [], max=1):string[] {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
   const candidates:string[] = [];
+
+  // GDELT üçün birinci sorğu geniş, amma aidiyyətli rayon+mövzu sorğusudur.
+  // DOC API mötərizə daxilində OR bloklarını dəstəkləyir; boşluq terminlərin birlikdə
+  // axtarılmasını təmin edir. Rayon yoxdursa təşkilat adı ilə fallback edirik.
+  if (district) {
+    candidates.push(`"${district}" (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR fermer)`);
+    candidates.push(`"${district}" ("su gəlmir" OR "su çatışmazlığı")`);
+  }
   if (shortName) candidates.push(`"${shortName}"`);
   if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
-  if (district) {
-    candidates.push(`"${district}" suvarma`);
-    candidates.push(`"${district}" meliorasiya`);
-    candidates.push(`"${district}" (kanal OR arx OR subartezian OR artezian)`);
-    candidates.push(`"${district}" ("su gəlmir" OR "su çatışmazlığı" OR fermer)`);
-  }
-  const bank = buildDiscoveryQueries(org, keywords, villages, Math.max(2,max));
-  candidates.push(...bank);
+
   const seen=new Set<string>();
   const out:string[]=[];
   for (const q of candidates) {
     const key=normalizeForMatch(q);
     if(!key || seen.has(key)) continue;
-    seen.add(key); out.push(q);
-    if(out.length>=max) break;
+    seen.add(key);
+    out.push(q);
+    if(out.length>=Math.max(1,max)) break;
   }
   return out;
 }
@@ -535,42 +550,26 @@ function buildGoogleNewsQueries(org:any, keywords:string[], villages:string[]=[]
   const fullName = String(org.name || '').trim();
   const candidates:string[] = [];
 
-  // Əvvəlcə ən etibarlı identifikasiya və mövzu sorğuları. Bunlar böyük açar-söz
-  // bankının təsadüfi frazaları ilə əvəz edilmir və hər run-da mütləq yoxlanır.
-  if (shortName) candidates.push(`"${shortName}"`);
-  if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
-  if (district) {
-    candidates.push(`"${district}" suvarma`);
-    candidates.push(`"${district}" meliorasiya`);
-    candidates.push(`"${district}" kanal arx`);
-    candidates.push(`"${district}" subartezian artezian`);
-    candidates.push(`"${district}" "su gəlmir"`);
-    candidates.push(`"${district}" "su çatışmazlığı" fermer`);
-  }
+  // Google News üçün iki yüksək siqnallı sorğu kifayətdir. Minlərlə açar sözü
+  // ayrıca HTTP sorğusuna çevirmək Supabase egress-dən Google-a burst yaradıb 503 verirdi.
+  const identityParts = [shortName, fullName]
+    .filter(Boolean)
+    .filter((value,index,arr)=>arr.findIndex(x=>normalizeForMatch(x)===normalizeForMatch(value))===index)
+    .map(value=>`"${value}"`);
+  if (identityParts.length) candidates.push(identityParts.join(' OR '));
+  if (district) candidates.push(`"${district}" (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR fermer OR "su gəlmir" OR "su çatışmazlığı")`);
 
-  // Böyük bankdan yalnız bir neçə rotasiyalı, ərazi ilə bağlı əlavə sorğu götürürük.
-  // Məqsəd 5-6 min açar sözü bir RSS sorğusuna doldurmaq yox, zamanla əhatəni genişləndirməkdir.
-  const rotated = buildDiscoveryQueries(org, keywords, villages, 4);
-  candidates.push(...rotated);
-
-  // Tarixi backfill: hər run başqa ili yoxlayır. Canlı geniş sorğular yuxarıda həmişə qalır.
-  const firstYear = 2000;
-  const currentYear = new Date().getUTCFullYear();
-  const yearCount = Math.max(1, currentYear - firstYear + 1);
-  const slot = Math.floor(Date.now() / (5 * 60 * 1000));
-  const archiveYear = firstYear + (slot % yearCount);
-  const after = `${archiveYear}-01-01`;
-  const before = `${archiveYear + 1}-01-01`;
-  if (shortName) candidates.push(`"${shortName}" after:${after} before:${before}`);
-  if (district) candidates.push(`"${district}" suvarma after:${after} before:${before}`);
+  // Rayon/təşkilat məlumatı natamamdırsa böyük bankdan yalnız bir fallback sorğu götür.
+  if (candidates.length < 2) candidates.push(...buildDiscoveryQueries(org, keywords, villages, 1));
 
   const seen=new Set<string>();
   const out:string[]=[];
   for (const q of candidates) {
     const key=normalizeForMatch(q);
     if(!key || seen.has(key)) continue;
-    seen.add(key); out.push(q);
-    if(out.length>=10) break;
+    seen.add(key);
+    out.push(q);
+    if(out.length>=2) break;
   }
   return out;
 }
