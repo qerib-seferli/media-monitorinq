@@ -75,6 +75,61 @@ Deno.serve(async (req) => {
     }
     const orgs = Array.isArray(orgResult.data) ? orgResult.data : [];
 
+    // Web/Xəbər xarici şəbəkə sorğuları Supabase Edge datacenter-lərində Google News
+    // və GDELT tərəfindən abort/503 ala bilir. Production discovery GitHub Actions
+    // gateway-dən aparılır; Edge Function isə yalnız planı verir və tapılan materialları
+    // mövcud eyni filtr/saxlama məntiqi ilə qəbul edir. Beləliklə tenant məntiqi və
+    // aidiyyət filtri iki yerdə təkrarlanmır.
+    if (options.mode === 'news_plan') {
+      const organizations = orgs.map((org:any)=>({
+        id:String(org.id),
+        name:String(org.name || ''),
+        short_name:String(org.short_name || ''),
+        district:String(org.districts?.name || ''),
+        google_queries:buildGoogleNewsQueries(org, [], []),
+        gdelt_queries:buildGdeltQueries(org, [], [], 2)
+      }));
+      return json({ok:true,run_id:runId,mode:'news_plan',organizations},200);
+    }
+
+    if (options.mode === 'news_ingest') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'news_ingest',error:'Təşkilat tapılmadı'},200);
+
+      const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
+      const keywords = activeKeywordRows
+        .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
+        .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
+      const excludeTerms = activeKeywordRows
+        .filter((k:any)=>String(k?.kind || '').toLowerCase() === 'exclude')
+        .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
+      org.__exclude_terms = excludeTerms;
+      org.__normalized_keywords = [...new Set(keywords.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+      org.__normalized_excludes = [...new Set(excludeTerms.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+      const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
+
+      let villageNames:string[] = [];
+      if (org.district_id) {
+        const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
+        if (villageResult?.error) throw villageResult.error;
+        villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
+      }
+
+      const source = {platform:canonicalPlatform(options.source_platform || 'Web'),url:options.source_label || 'GitHub News Gateway'};
+      let accepted = 0;
+      let rejected = 0;
+      let saved = 0;
+      const samples:any[] = [];
+      for (const item of dedupeItems(options.news_items || []).slice(0,250)) {
+        const match = evaluateMatch(org,item,lowerKeywords,villageNames);
+        if (match.accepted) accepted++; else rejected++;
+        if (samples.length < 10) samples.push({title:item.title || '',url:item.url || '',accepted:match.accepted,reason:match.reason,matched_terms:match.matches});
+        if (!match.accepted) continue;
+        saved += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,options.source_label || options.source_platform || 'News Gateway');
+      }
+      return json({ok:true,run_id:runId,mode:'news_ingest',organization:org.short_name,source_platform:source.platform,received:(options.news_items||[]).length,accepted,rejected,inserted:saved,sample_results:samples,errors},200);
+    }
+
     for (const org of orgs) {
       if (Date.now() >= stopAt) {
         details.push({organization:org.short_name,source:'Run büdcəsi',skipped:'time-budget'});
@@ -111,8 +166,9 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (!options.youtube_backfill && !options.quick_youtube_comments) {
-        // Xəbər lane-ləri paralel işləyir ki, bir xarici servis ləngiyəndə bütün run büdcəsini yeməsin.
+      if (!options.youtube_backfill && !options.quick_youtube_comments && options.edge_news_probe) {
+        // Yalnız diaqnostik edge_news_probe=true olduqda Supabase datacenter-dən birbaşa
+        // Google/GDELT sorğusu edilir. Production Web/Xəbər discovery GitHub gateway-dədir.
         if (timeLeft(stopAt) > 10000) {
           checked += 2;
           const [rssSettled, webSettled] = await Promise.allSettled([
@@ -150,7 +206,16 @@ Deno.serve(async (req) => {
           details.push({organization:org.short_name,source:'GDELT Web / Xəbər',skipped:'time-budget'});
         }
       } else if (options.debug) {
-        details.push({ organization:org.short_name, source:'Web / Xəbər lane-ləri', skipped:options.quick_youtube_comments?'quick-youtube-comments-focus':'youtube-backfill-focus' });
+        details.push({
+          organization:org.short_name,
+          source:'Web / Xəbər lane-ləri',
+          skipped:options.quick_youtube_comments
+            ? 'quick-youtube-comments-focus'
+            : options.youtube_backfill
+              ? 'youtube-backfill-focus'
+              : 'github-news-gateway',
+          gateway:'GitHub Actions / scripts/news-gateway.mjs'
+        });
       }
 
       for (const source of sources) {
@@ -1546,14 +1611,56 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   return 1;
 }
 
-type RunOptions = { debug:boolean; force_youtube:boolean; verify_existing:boolean; youtube_backfill:boolean; quick_youtube_comments:boolean; full_comment_sweep:boolean; refilter_existing:boolean; focus_video_ids:string[] };
+type RunOptions = {
+  debug:boolean;
+  force_youtube:boolean;
+  verify_existing:boolean;
+  youtube_backfill:boolean;
+  quick_youtube_comments:boolean;
+  full_comment_sweep:boolean;
+  refilter_existing:boolean;
+  focus_video_ids:string[];
+  mode:string;
+  edge_news_probe:boolean;
+  organization_id:string|null;
+  source_platform:string;
+  source_label:string;
+  news_items:Item[];
+};
+
+const DEFAULT_RUN_OPTIONS:RunOptions = {
+  debug:false,
+  force_youtube:false,
+  verify_existing:true,
+  youtube_backfill:false,
+  quick_youtube_comments:false,
+  full_comment_sweep:false,
+  refilter_existing:false,
+  focus_video_ids:[],
+  mode:'scheduled',
+  edge_news_probe:false,
+  organization_id:null,
+  source_platform:'Web',
+  source_label:'',
+  news_items:[]
+};
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
-  if (req.method !== 'POST') return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false,quick_youtube_comments:false,full_comment_sweep:false,refilter_existing:false,focus_video_ids:[]};
+  if (req.method !== 'POST') return {...DEFAULT_RUN_OPTIONS};
   try {
     const text = await req.clone().text();
-    if (!text.trim()) return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false,quick_youtube_comments:false,full_comment_sweep:false,refilter_existing:false,focus_video_ids:[]};
+    if (!text.trim()) return {...DEFAULT_RUN_OPTIONS};
     const body = JSON.parse(text);
+    const incoming = Array.isArray(body?.items) ? body.items : [];
+    const newsItems:Item[] = incoming.slice(0,250).map((x:any)=>({
+      title:String(x?.title || '').slice(0,500),
+      text:String(x?.text || x?.description || '').slice(0,8000),
+      url:String(x?.url || '').slice(0,2000),
+      published_at:x?.published_at ? String(x.published_at) : null,
+      image:x?.image ? String(x.image) : null,
+      author:x?.author ? String(x.author) : null,
+      raw:x?.raw && typeof x.raw === 'object' ? x.raw : {kind:'news_gateway'}
+    })).filter((x:Item)=>Boolean(x.url));
     return {
       debug:body?.debug === true,
       force_youtube:body?.force_youtube === true,
@@ -1562,10 +1669,16 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       quick_youtube_comments:body?.quick_youtube_comments === true,
       full_comment_sweep:body?.full_comment_sweep === true,
       refilter_existing:body?.refilter_existing === true,
-      focus_video_ids:[...new Set((Array.isArray(body?.focus_video_ids)?body.focus_video_ids:[]).map((x:any)=>String(x||'').trim()).filter((x:string)=>/^[A-Za-z0-9_-]{11}$/.test(x)))].slice(0,8)
+      focus_video_ids:[...new Set((Array.isArray(body?.focus_video_ids)?body.focus_video_ids:[]).map((x:any)=>String(x||'').trim()).filter((x:string)=>/^[A-Za-z0-9_-]{11}$/.test(x)))].slice(0,8),
+      mode:String(body?.mode || 'scheduled'),
+      edge_news_probe:body?.edge_news_probe === true,
+      organization_id:body?.organization_id ? String(body.organization_id) : null,
+      source_platform:String(body?.source_platform || 'Web'),
+      source_label:String(body?.source_label || ''),
+      news_items:newsItems
     };
   } catch {
-    return {debug:false,force_youtube:false,verify_existing:true,youtube_backfill:false,quick_youtube_comments:false,full_comment_sweep:false,refilter_existing:false,focus_video_ids:[]};
+    return {...DEFAULT_RUN_OPTIONS};
   }
 }
 
