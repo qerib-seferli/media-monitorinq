@@ -11,19 +11,34 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Run monitor worker
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check monitor secret
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
           if [ -z "$MONITOR_SECRET" ]; then
-            echo "Monitor secret hələ təyin edilməyib; monitor işi uğursuz sayılmadan buraxılır."
+            echo "MONITOR_SECRET təyin edilməyib; monitor işi buraxılır."
             exit 0
           fi
+
+      - name: Web and news gateway
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+        run: node scripts/news-gateway.mjs
+
+      - name: YouTube and internal monitor worker
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
           curl --fail-with-body --silent --show-error \
+            --max-time 55 \
             -X POST \
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d '{"mode":"scheduled"}' \
+            -d '{"mode":"scheduled","debug":false}' \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
