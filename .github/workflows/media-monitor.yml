@@ -42,3 +42,34 @@ jobs:
             -H "x-monitor-secret: $MONITOR_SECRET" \
             -d '{"mode":"scheduled","debug":false}' \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
+  web-fast-watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    concurrency:
+      group: media-monitor-web-fast-watch
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check monitor secret
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          if [ -z "$MONITOR_SECRET" ]; then
+            echo "MONITOR_SECRET təyin edilməyib; sürətli web yoxlaması buraxılır."
+            exit 0
+          fi
+
+      - name: Configured websites fast watch
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_DIRECT_ONLY: '1'
+        run: |
+          for i in 1 2 3; do
+            echo "Sürətli web yoxlaması $i/3"
+            node scripts/news-gateway.mjs || true
+            if [ "$i" != "3" ]; then sleep 50; fi
+          done
+
