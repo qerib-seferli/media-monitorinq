@@ -138,9 +138,10 @@ function rotate(items, count, salt='') {
 }
 
 async function googleNews(query) {
-  const locales = [
-    ['az','AZ','AZ:az'], ['ru','RU','RU:ru'], ['en-US','US','US:en']
-  ];
+  // GitHub runner-də 3 locale ardıcıl sorğu vaxtı uzadır və timeout riskini artırır.
+  // Azərbaycan monitorinqi üçün discovery-ni AZ feed-dən edirik; geniş rayon sorğusu
+  // nəticələri gətirir, aidiyyət filtri isə monitor-worker-də qalır.
+  const locales = [ ['az','AZ','AZ:az'] ];
   const out=[]; const errors=[];
   for (const [hl,gl,ceid] of locales) {
     const u = new URL('https://news.google.com/rss/search');
@@ -221,12 +222,14 @@ let gdeltUsedThisRun=false;
 
 for (const org of plan.organizations) {
   const allGoogle = Array.isArray(org.google_queries) ? org.google_queries.filter(Boolean) : [];
-  const identityQueries = allGoogle.slice(0,2);
-  const topicalQueries = allGoogle.slice(2);
-  const selectedQueries = dedupe([
-    ...identityQueries.slice(0,1).map(q=>({url:q,title:q})),
-    ...rotate(topicalQueries,2,org.id).map(q=>({url:q,title:q}))
-  ]).map(x=>x.url);
+  // Planın ilk 3 sorğusu həmişəlik əsas discovery sorğularıdır:
+  // 1) rayonun özü (geniş discovery), 2) rayon + suvarma, 3) rayon + subartezian.
+  // Qalan sorğulardan yalnız biri rotasiya olunur. Beləliklə hər manual run-da real
+  // rayon xəbəri tapmaq şansı yüksəkdir və dar təşkilat adı nəticəni sıfırlamır.
+  const coreQueries = allGoogle.slice(0,3);
+  const rotatingQueries = allGoogle.slice(3);
+  const selectedQueries = [...new Set([...coreQueries, ...rotate(rotatingQueries,1,org.id)])].slice(0,4);
+  console.log(`[${org.short_name}] Discovery sorğuları: ${selectedQueries.join(' || ')}`);
 
   const googleItems=[];
   const webItems=[];
@@ -253,7 +256,7 @@ for (const org of plan.organizations) {
 
   // GDELT shared public endpoint-i GitHub runner-lərdə 429 verə bilir. Bir run-da
   // yalnız bir təşkilat üçün, başqa lane-lər az material verəndə ehtiyat kimi sınanır.
-  if (!gdeltUsedThisRun && (googleItems.length + webItems.length) < 12) {
+  if (false && !gdeltUsedThisRun && (googleItems.length + webItems.length) < 12) {
     const q = rotate(org.gdelt_queries || [],1,`gdelt-${org.id}`)[0];
     if (q) {
       gdeltUsedThisRun=true;

@@ -601,22 +601,32 @@ function buildGoogleNewsGatewayQueries(org:any):string[] {
   const fullName = String(org.name || '').trim();
   const candidates:string[] = [];
 
+  // Əsas problem: dar təşkilat adı ilə RSS çox vaxt 0 qaytarır. İlk sorğular geniş
+  // rayon discovery-sidir; news_ingest mərhələsində mövcud aidiyyət filtri lazımsız
+  // materialları onsuz da rədd edir. Bu üç sorğu hər run-da işləyir.
+  if (district) {
+    candidates.push(`"${district}"`);
+    candidates.push(`"${district}" suvarma`);
+    candidates.push(`"${district}" subartezian`);
+  }
+
+  // 2026-cı ildə işlənən aktual adlandırmanı da ayrıca nəzərə alırıq. Bazadakı köhnə
+  // "Suvarma Sistemlərinin..." adı saxlanılsa belə discovery yeni "Su Meliorasiya..."
+  // formasını da yoxlayır; bazadakı məlumatı dəyişmirik.
   if (shortName) candidates.push(`"${shortName}"`);
-  if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
+  if (fullName) {
+    candidates.push(`"${fullName}"`);
+    const currentName = fullName.replace(/Suvarma Sistemlərinin/gi,'Su Meliorasiya Sistemlərinin');
+    if (normalizeForMatch(currentName) !== normalizeForMatch(fullName)) candidates.push(`"${currentName}"`);
+  }
 
   if (district) {
-    // Google News RSS üçün qısa, sadə sorğular kompleks mötərizə/OR bloklarından
-    // daha stabil nəticə verir. Gateway bunları rotasiya ilə işlədəcək.
     const topicQueries = [
-      'suvarma','meliorasiya','suvarma suyu','su problemi','su gəlmir','su çatışmazlığı',
-      'kanal','arx','drenaj','kollektor','subartezian','artezian','su quyusu',
-      'nasos stansiyası','əkin sahəsi su','fermer su','lildən təmizlənir','şoranlaşma'
+      'meliorasiya','suvarma suyu','su problemi','su gəlmir','su çatışmazlığı',
+      'kanal','arx','drenaj','kollektor','artezian','su quyusu','nasos stansiyası',
+      'əkin sahəsi','fermer','lildən təmizlənir','şoranlaşma'
     ];
     for (const topic of topicQueries) candidates.push(`"${district}" "${topic}"`);
-    for (const alias of districtAliases(district).slice(1,2)) {
-      candidates.push(`"${alias}" suvarma`);
-      candidates.push(`"${alias}" meliorasiya`);
-    }
   }
 
   const seen=new Set<string>();
