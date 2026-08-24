@@ -15,6 +15,16 @@ const dateTo=document.querySelector('#date-to');
 const sentinel=document.querySelector('#load-sentinel');
 const PAGE_SIZE=50;
 let rows=[], page=0, loading=false, done=false, requestToken=0;
+function normalizeStoryTitle(v=''){return String(v||'').toLocaleLowerCase('az-AZ').normalize('NFKD').replace(/[əƏ]/g,'e').replace(/[ıİ]/g,'i').replace(/[şŞ]/g,'s').replace(/[çÇ]/g,'c').replace(/[öÖ]/g,'o').replace(/[üÜ]/g,'u').replace(/[ğĞ]/g,'g').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();}
+function storyKey(m){
+  const platformName=String(m?.source_platform||'').toLowerCase();
+  if(platformName==='web'||platformName==='google news'){
+    const title=normalizeStoryTitle(m?.title||''); const day=String(m?.published_at||m?.detected_at||'').slice(0,10);
+    if(title.length>=18)return `web|${title}|${day}`;
+  }
+  return `id|${m?.id||m?.content_hash||m?.source_url||Math.random()}`;
+}
+function mergeUnique(existing,incoming){const seen=new Set(existing.map(storyKey));const out=[...existing];for(const row of incoming){const key=storyKey(row);if(seen.has(key))continue;seen.add(key);out.push(row);}return out;}
 const commentOnly = new URLSearchParams(location.search).get('type') === 'comments';
 
 function isoDay(d,end=false){
@@ -77,16 +87,22 @@ async function load({reset=false}={}){
   const token=requestToken; const range=dateRange(); if(!range) return;
   loading=true; sentinel.classList.add('loading');
   try{
-    const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
-    let q=supabase.from('mentions').select('*, districts(name), villages(name), mention_media(*)')
-      .gt('relevance_score',0)
-      .gte('published_at',range.from).lte('published_at',range.to)
-      .order('published_at',{ascending:false,nullsFirst:false}).range(from,to);
-    if(platform.value) q=q.ilike('source_platform',platform.value);
-    if(sentiment.value) q=q.eq('sentiment',sentiment.value);
-    if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
-    const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
-    const batch=data||[]; rows.push(...batch); done=batch.length<PAGE_SIZE; page++; render(true);
+    const before=rows.length;
+    let safety=0;
+    while(!done && rows.length-before<PAGE_SIZE && safety<6){
+      const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
+      let q=supabase.from('mentions').select('*, districts(name), villages(name), mention_media(*)')
+        .gt('relevance_score',0)
+        .gte('published_at',range.from).lte('published_at',range.to)
+        .order('published_at',{ascending:false,nullsFirst:false}).range(from,to);
+      if(platform.value) q=q.ilike('source_platform',platform.value);
+      if(sentiment.value) q=q.eq('sentiment',sentiment.value);
+      if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
+      const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
+      const batch=data||[]; rows=mergeUnique(rows,batch); done=batch.length<PAGE_SIZE; page++; safety++;
+      if(!batch.length)break;
+    }
+    render(true);
   }catch(e){ if(!rows.length) list.innerHTML=`<div class="empty">${escapeHtml(e.message||String(e))}</div>`; else toast(e,'error'); }
   finally{loading=false;sentinel.classList.remove('loading');}
 }

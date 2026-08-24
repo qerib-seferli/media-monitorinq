@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 let lastExternalFetchAt = 0;
 let gdeltBlockedUntil = 0;
+const DIRECT_ONLY = ['1','true','yes'].includes(String(process.env.NEWS_DIRECT_ONLY || '').toLowerCase());
 
 async function politeWait(minGapMs = 1200) {
   const elapsed = Date.now() - lastExternalFetchAt;
@@ -399,8 +400,78 @@ async function gdeltNews(query) {
   }
 }
 
-async function directFeed(source, orgName) {
+function isFeedLikeUrl(value='') {
+  return /(?:\/feed\/?$|\/rss\/?$|\.xml(?:$|\?)|news\.google\.com\/rss\/)/i.test(String(value||''));
+}
+function domainFromUrl(value='') { try { return new URL(value).hostname.replace(/^www\./i,'').toLowerCase(); } catch { return ''; } }
+function inferredOrgDomains(org) {
+  const out=new Set();
+  for (const source of (Array.isArray(org?.rss_sources)?org.rss_sources:[])) {
+    const d=domainFromUrl(source?.url||''); if(d && !/google\.com$|bing\.com$/i.test(d)) out.add(d);
+  }
+  const district=String(org?.district||'').trim().toLocaleLowerCase('az-AZ')
+    .replace(/ə/g,'e').replace(/ğ/g,'g').replace(/ı/g,'i').replace(/ö/g,'o').replace(/ü/g,'u').replace(/ş/g,'s').replace(/ç/g,'c')
+    .replace(/[^a-z0-9]+/g,'');
+  const short=String(org?.short_name||'').toLocaleLowerCase('az-AZ');
+  if(district && /sms[iıİI]{2}/i.test(short)) out.add(`${district}smsii.az`);
+  return [...out];
+}
+function parseSitemap(xml='') {
+  const urls=[];
+  for (const m of String(xml).matchAll(/<url\b[^>]*>([\s\S]*?)<\/url>/gi)) {
+    const b=m[1]; const loc=stripHtml(tag(b,'loc')); if(!loc) continue;
+    urls.push({url:loc,lastmod:normalizeDate(stripHtml(tag(b,'lastmod')))});
+  }
+  const indexes=[];
+  for (const m of String(xml).matchAll(/<sitemap\b[^>]*>([\s\S]*?)<\/sitemap>/gi)) {
+    const loc=stripHtml(tag(m[1],'loc')); if(loc) indexes.push(loc);
+  }
+  return {urls,indexes};
+}
+function linkItemsFromHtml(html='',base='') {
+  const out=[];
+  for (const m of String(html).matchAll(/<a\b[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const href=absoluteUrl(base,m[1]); const title=stripHtml(m[2]);
+    if(!href || !/^https?:/i.test(href) || title.length<12) continue;
+    try { if(new URL(href).hostname!==new URL(base).hostname) continue; } catch { continue; }
+    out.push({title,text:'',url:href,published_at:null,image:null,author:null,raw:{kind:'configured_site_link',provider:'Configured Web'}});
+  }
+  return dedupe(out).slice(0,120);
+}
+async function directWebsite(source, org) {
+  const base=String(source?.url||'').trim(); if(!base) return [];
+  const orgName=org?.short_name||org?.name||'Təşkilat';
+  const out=[];
+  try {
+    const u=new URL(base); const origin=u.origin;
+    const candidates=[`${origin}/sitemap.xml`,`${origin}/sitemap_index.xml`,`${origin}/sitemap-index.xml`];
+    for (const sm of candidates) {
+      try {
+        const xml=await fetchText(sm,{timeoutMs:9000,retries:0,minGapMs:700});
+        const parsed=parseSitemap(xml);
+        let urls=[...parsed.urls];
+        for(const idx of parsed.indexes.slice(0,4)){
+          try{ const nested=await fetchText(idx,{timeoutMs:8000,retries:0,minGapMs:650}); urls.push(...parseSitemap(nested).urls); }catch{}
+        }
+        urls.sort((a,b)=>String(b.lastmod||'').localeCompare(String(a.lastmod||'')));
+        for(const row of urls.slice(0,160)) out.push({title:row.url.split('/').filter(Boolean).pop()?.replace(/[-_]+/g,' ')||row.url,text:'',url:row.url,published_at:row.lastmod||null,image:null,author:null,raw:{kind:'configured_site_sitemap',provider:source.name||'Configured Web'}});
+        if(out.length) break;
+      } catch {}
+    }
+    if(!out.length){
+      const {html}=await fetchPage(base,{timeoutMs:9000});
+      out.push(...linkItemsFromHtml(html,base));
+    }
+    for(const feedPath of ['/feed/','/feed','/rss/','/rss','/atom.xml']){
+      try{ const xml=await fetchText(`${origin}${feedPath}`,{timeoutMs:7000,retries:0,minGapMs:500}); const items=parseFeed(xml,'configured_feed',orgName,source.name||source.platform||base); if(items.length){out.push(...items);break;} }catch{}
+    }
+  } catch(e){ console.log(`[${orgName}] Birbaşa sayt discovery xəta: ${base} — ${e?.message||e}`); }
+  return dedupe(out);
+}
+async function directFeed(source, org) {
   if (!source?.url) return [];
+  const orgName=org?.short_name||org?.name||'Təşkilat';
+  if(!isFeedLikeUrl(source.url) && !/rss|atom/i.test(String(source.platform||''))) return directWebsite(source,org);
   try {
     const xml = await fetchText(source.url,{timeoutMs:15000,retries:1,minGapMs:1200});
     return parseFeed(xml,'configured_feed',orgName,source.name || source.platform || source.url);
@@ -436,7 +507,9 @@ for (const org of plan.organizations) {
   const rotatingQueries = allGoogle.slice(3);
   // Hər run-da daha çox mövzu dövr etdirilir. Bununla eyni 30-40 nəticənin içində
   // qalmırıq; 5 dəqiqəlik rotasiya ilə 28 sorğulu bank mərhələli şəkildə taranır.
-  const webQueries = [...new Set([...broadDistrict,...topicCore,...rotate(rotatingQueries,7,org.id)])].slice(0,10);
+  const azDomainQueries = org.district ? [`site:.az \"${org.district}\" suvarma`,`site:.az \"${org.district}\" meliorasiya`,`site:.az \"${org.district}\" kanal`] : [];
+  const directDomainQueries=inferredOrgDomains(org).flatMap(domain=>[`site:${domain} suvarma`,`site:${domain} meliorasiya`,`site:${domain} ${org.district||''}`]).filter(Boolean);
+  const webQueries = [...new Set([...broadDistrict,...topicCore,...rotate(rotatingQueries,6,org.id),...rotate(azDomainQueries,1,`az-${org.id}`),...rotate(directDomainQueries,1,`domain-${org.id}`)])].slice(0,11);
   // Google News ayrıca istifadəçi platforması deyil, discovery provider-dir. Burada
   // yalnız iki yüksək siqnallı sorğu saxlayırıq və tapılan nəticələri Web axınına qatırıq.
   const googleQueries=[...new Set([...topicCore.slice(0,1),...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,2);
@@ -445,8 +518,12 @@ for (const org of plan.organizations) {
 
   const googleItems=[];
   const webItems=[];
+  const configuredSources=[...(Array.isArray(org.rss_sources)?org.rss_sources:[])];
+  for(const domain of inferredOrgDomains(org)){
+    if(!configuredSources.some(x=>domainFromUrl(x?.url||'')===domain)) configuredSources.push({platform:'Web',url:`https://${domain}/`,name:`${domain} birbaşa sayt`});
+  }
 
-  for (const q of googleQueries) {
+  if(!DIRECT_ONLY) for (const q of googleQueries) {
     try {
       const g = await googleNews(q);
       googleItems.push(...g.items);
@@ -455,7 +532,7 @@ for (const org of plan.organizations) {
       totalFailures++; console.log(`[${org.short_name}] Google News xəta (${q}):`, e?.message||e);
     }
   }
-  for (const q of webQueries) {
+  if(!DIRECT_ONLY) for (const q of webQueries) {
     try {
       const qi=webQueries.indexOf(q);
       webItems.push(...await bingNews(q,0));
@@ -472,8 +549,8 @@ for (const org of plan.organizations) {
   }
 
   // Admin paneldə əl ilə əlavə olunan normal RSS/Atom feed-ləri birbaşa oxu.
-  for (const source of (Array.isArray(org.rss_sources)?org.rss_sources:[]).slice(0,12)) {
-    const items = await directFeed(source,org.short_name);
+  for (const source of configuredSources.slice(0,DIRECT_ONLY?8:16)) {
+    const items = await directFeed(source,org);
     if (/google/i.test(`${source.platform||''} ${source.name||''} ${source.url||''}`)) googleItems.push(...items);
     else webItems.push(...items);
   }
@@ -499,7 +576,7 @@ for (const org of plan.organizations) {
   // Google News burada yalnız kəşf mənbəyidir. Eyni xəbər Google News, Bing News,
   // Bing Web və birbaşa RSS-dən eyni anda gələ bildiyi üçün bütün discovery nəticələri
   // ingest-dən ƏVVƏL bir Web axınında birləşdirilir və başlıq+tarix/URL ilə təkrarsızlaşdırılır.
-  const unifiedWebItems=dedupe([...googleItems,...webItems]).slice(0,420);
+  const unifiedWebItems=dedupe([...googleItems,...webItems]).slice(0,DIRECT_ONLY?80:420);
 
   const batches = [
     {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}
@@ -525,7 +602,7 @@ for (const org of plan.organizations) {
     // və əsas xəbər şəklini dəqiqləşdiririk. Beləliklə axtarış snippet-i orijinal mətn kimi saxlanmır.
     const acceptedTargets=Array.isArray(result?.accepted_targets)?result.accepted_targets:[];
     const screenshotFallback=[];
-    for (const target of acceptedTargets.slice(0,32)) {
+    for (const target of acceptedTargets.slice(0,DIRECT_ONLY?8:32)) {
       const enriched=await enrichPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:target.image||null,author:target.author||null,raw:target.raw||{}});
       try {
         const refreshed=await callMonitor({
@@ -553,7 +630,7 @@ for (const org of plan.organizations) {
 
     // Xəbər şəkli yoxdursa arxiv screenshot saxlanılır. Hər run-da limit var; növbəti run
     // screenshot-u olmayan növbəti materialları tamamlayacaq.
-    for (const target of screenshotFallback.slice(0,6)) {
+    for (const target of screenshotFallback.slice(0,DIRECT_ONLY?2:6)) {
       const shot=await captureScreenshot({...target,url:target.capture_url||target.url});
       if (!shot) { console.log(`[${org.short_name}] Screenshot alınmadı: ${String(target?.url||'').slice(0,120)}`); continue; }
       try {
