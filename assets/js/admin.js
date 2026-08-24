@@ -14,6 +14,8 @@ let keywords = [];
 let keywordStats = [];
 const KEYWORD_PAGE_SIZE = 100;
 let sources = [];
+let sourceIndex = [];
+const SOURCE_PAGE_SIZE = 100;
 let auditRows = [];
 
 const STATUS_LABELS = { active: 'Aktiv', grace: 'Möhlət', suspended: 'Dayandırılıb', archived: 'Arxiv' };
@@ -86,11 +88,10 @@ async function refresh() {
     supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
-    supabase.from('sources').select('*,organizations(short_name)').order('created_at',{ascending:false}).limit(1000),
     supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100)
   ]);
 
-  const [o,u,p,d,s,a] = results;
+  const [o,u,p,d,a] = results;
   const fatal = results.find(r => r.error);
   if (fatal?.error) toast(fatal.error.message, 'error');
 
@@ -99,10 +100,10 @@ async function refresh() {
   positions = p.data || [];
   districts = d.data || [];
   keywords = []; // Minlərlə açar sözü səhifə açılan kimi RAM-a yükləmirik.
-  sources = s.data || [];
+  sources = [];
   auditRows = a.data || [];
 
-  await loadKeywordStats();
+  await Promise.all([loadKeywordStats(), loadSourceIndex()]);
 
   renderMetrics();
   renderOrgs();
@@ -303,24 +304,115 @@ async function loadKeywordGroup(group, offset=0, append=false) {
   bindDynamicActions();
 }
 
+function normalizeSourcePlatform(value='') {
+  const v = String(value || '').trim().toLocaleLowerCase('az-AZ');
+  if (v.includes('youtube')) return 'youtube';
+  if (v.includes('facebook')) return 'facebook';
+  if (v.includes('instagram')) return 'instagram';
+  if (v.includes('tiktok')) return 'tiktok';
+  if (v.includes('linkedin') || v.includes('linked in')) return 'linkedin';
+  if (v === 'x' || v.includes('twitter')) return 'x';
+  if (v.includes('rss') || v.includes('web') || v.includes('google news')) return 'web';
+  return v || 'digər';
+}
+
+function sourcePlatformLabel(key) {
+  return ({youtube:'YouTube',facebook:'Facebook',instagram:'Instagram',tiktok:'TikTok',linkedin:'LinkedIn',x:'X',web:'Web',digər:'Digər'})[key] || key;
+}
+
+async function loadSourceIndex() {
+  const rows = [];
+  const pageSize = 1000;
+  for (let from = 0; from < 20000; from += pageSize) {
+    const { data, error } = await supabase.from('sources')
+      .select('id,organization_id,platform,is_active')
+      .order('created_at',{ascending:false})
+      .range(from, from + pageSize - 1);
+    if (error) { toast(error.message,'error'); break; }
+    const batch = data || [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  sourceIndex = rows;
+}
+
+function sourceGroupSummary(org) {
+  const rows = sourceIndex.filter(x => x.organization_id === org.id);
+  const counts = new Map();
+  for (const row of rows) {
+    const key = normalizeSourcePlatform(row.platform);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const order = ['youtube','facebook','instagram','tiktok','linkedin','x','web','digər'];
+  const platformGroups = order.filter(key => counts.get(key)).map(key => `
+    <details class="source-platform-group" data-source-platform-group data-org-id="${org.id}" data-platform-key="${key}" data-total="${counts.get(key)}">
+      <summary><span><strong>${sourcePlatformLabel(key)}</strong><small>${counts.get(key)} mənbə</small></span><span class="badge info">${counts.get(key)}</span></summary>
+      <div class="source-platform-body" data-source-platform-body><div class="empty compact">Açdıqda yüklənəcək.</div></div>
+    </details>`).join('');
+  return `<details class="keyword-group source-org-group" data-source-org-group>
+    <summary><span><strong>${escapeHtml(org.short_name || org.name || 'Təşkilat')}</strong><small>${rows.length} izlənilən mənbə</small></span><span class="badge info">${rows.length}</span></summary>
+    <div class="source-org-body">${platformGroups || '<div class="empty compact">Mənbə yoxdur.</div>'}</div>
+  </details>`;
+}
+
 function renderSources() {
   const el = document.querySelector('#source-list');
   if (!el) return;
-  const seen = new Set();
-  const visible = sources.filter(x => {
-    const orgKey = x.organization_id || 'global';
-    const rawUrl = String(x.url || '').trim();
-    const isGoogleNews = rawUrl.includes('news.google.com/rss/');
-    const key = isGoogleNews ? `${orgKey}|google-news-rss` : `${orgKey}|${rawUrl.toLowerCase()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+  const groups = orgs.filter(o => sourceIndex.some(x => x.organization_id === o.id));
+  el.innerHTML = groups.map(sourceGroupSummary).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
+
+  el.querySelectorAll('[data-source-platform-group]').forEach(group => {
+    group.addEventListener('toggle', () => {
+      if (group.open && group.dataset.loaded !== '1') loadSourcePlatformGroup(group, 0, false);
+    });
   });
-  el.innerHTML = visible.map(x => {
+}
+
+async function loadSourcePlatformGroup(group, offset=0, append=false) {
+  const body = group.querySelector('[data-source-platform-body]');
+  if (!body || group.dataset.loading === '1') return;
+  group.dataset.loading = '1';
+  if (!append) body.innerHTML = '<div class="empty compact">Yüklənir…</div>';
+
+  const orgId = group.dataset.orgId;
+  const platformKey = group.dataset.platformKey;
+  const actualPlatforms = [...new Set(sourceIndex
+    .filter(x => x.organization_id === orgId && normalizeSourcePlatform(x.platform) === platformKey)
+    .map(x => String(x.platform || 'Web')))].filter(Boolean);
+
+  let q = supabase.from('sources')
+    .select('id,organization_id,platform,url,is_active,created_at')
+    .eq('organization_id',orgId)
+    .order('created_at',{ascending:false})
+    .range(offset, offset + SOURCE_PAGE_SIZE - 1);
+  if (actualPlatforms.length === 1) q = q.eq('platform', actualPlatforms[0]);
+  else if (actualPlatforms.length > 1) q = q.in('platform', actualPlatforms);
+
+  const { data, error } = await q;
+  group.dataset.loading = '0';
+  if (error) { body.innerHTML = `<div class="empty compact">${escapeHtml(error.message)}</div>`; return; }
+
+  const rows = data || [];
+  const html = rows.map(x => {
     const rawUrl = String(x.url || '');
-    const platform = rawUrl.includes('news.google.com/rss/') ? 'Google News RSS' : (x.platform || 'Web');
-    return `<div class="list-row source-row"><div><strong>${escapeHtml(platform)}</strong><small>${escapeHtml(x.organizations?.short_name || '')}</small><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl)}</a></div><span class="badge source-status-badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span></div>`;
-  }).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
+    return `<div class="source-item">
+      <div class="source-item-main"><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl || 'URL yoxdur')}</a><small>${escapeHtml(x.platform || sourcePlatformLabel(platformKey))}</small></div>
+      <span class="source-item-actions"><span class="badge source-status-badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span><button class="icon-btn source-delete" type="button" title="Mənbəni sil" aria-label="Mənbəni sil" data-source-delete="${x.id}">×</button></span>
+    </div>`;
+  }).join('');
+
+  const total = Number(group.dataset.total || 0);
+  const nextOffset = offset + rows.length;
+  const more = nextOffset < total ? `<button class="btn ghost btn-sm source-load-more" type="button" data-source-more="${nextOffset}">Daha ${Math.min(SOURCE_PAGE_SIZE,total-nextOffset)} göstər</button>` : '';
+  if (append) {
+    body.querySelector('[data-source-more]')?.remove();
+    body.insertAdjacentHTML('beforeend', html + more);
+  } else {
+    body.innerHTML = html + more || '<div class="empty compact">Mənbə yoxdur.</div>';
+    group.dataset.loaded = '1';
+  }
+  body.querySelector('[data-source-more]')?.addEventListener('click', e => loadSourcePlatformGroup(group, Number(e.currentTarget.dataset.sourceMore || 0), true));
+  bindDynamicActions();
 }
 
 function renderBilling() {
@@ -417,6 +509,19 @@ function bindDynamicActions() {
       btn.disabled = false;
       toast(error ? error.message : (isExclude ? 'Filtr silindi' : 'Açar söz silindi'), error ? 'error' : 'success');
       if (!error) await refresh();
+    });
+  });
+
+  document.querySelectorAll('[data-source-delete]').forEach(btn=>{
+    if (btn.dataset.bound) return;
+    btn.dataset.bound='1';
+    btn.addEventListener('click', async ()=>{
+      if (!confirm('Bu izlənilən mənbəni silmək istəyirsiniz?')) return;
+      btn.disabled = true;
+      const { error } = await supabase.from('sources').delete().eq('id',btn.dataset.sourceDelete);
+      btn.disabled = false;
+      toast(error ? error.message : 'Mənbə silindi', error ? 'error' : 'success');
+      if (!error) { await loadSourceIndex(); renderSources(); bindDynamicActions(); }
     });
   });
 
@@ -628,7 +733,9 @@ async function configureBarda() {
   }
 
   const rssUrl = 'https://news.google.com/rss/search?q=' + encodeURIComponent('"Bərdə SMSİİ" OR "Bərdə suvarma" OR "Bərdə Suvarma İdarəsi"') + '&hl=az&gl=AZ&ceid=AZ:az';
-  const hasRss = sources.some(s => s.organization_id===org.id && String(s.url||'').includes('news.google.com/rss/search'));
+  const rssCheck = await supabase.from('sources').select('id',{count:'exact',head:true}).eq('organization_id',org.id).ilike('url','%news.google.com/rss/%');
+  if (rssCheck.error) return toast(rssCheck.error.message,'error');
+  const hasRss = (rssCheck.count || 0) > 0;
   if (!hasRss) {
     const { error } = await supabase.from('sources').insert({organization_id:org.id,platform:'RSS',url:rssUrl,is_active:true});
     if (error) return toast(error.message,'error');
@@ -645,7 +752,7 @@ function renderBardaStatus() {
   const org = orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
   if (!org) { el.innerHTML = '<span class="badge danger">Bərdə SMSİİ tapılmadı</span>'; return; }
   const hasDirector = positions.some(p => p.name === 'İdarə rəisi' && (!p.organization_id || p.organization_id === org.id));
-  const hasRss = sources.some(s => s.organization_id===org.id && String(s.url||'').includes('news.google.com/rss/search'));
+  const hasRss = sourceIndex.some(s => s.organization_id===org.id && String(s.platform||'').toLowerCase().includes('rss'));
   const bits = [statusBadge(org.service_status), hasDirector ? '<span class="badge ok">Vəzifələr hazırdır</span>' : '<span class="badge warn">Vəzifə tamamlanmalıdır</span>', hasRss ? '<span class="badge ok">Real RSS hazırdır</span>' : '<span class="badge warn">RSS əlavə edilməlidir</span>'];
   el.innerHTML = bits.join(' ');
 }
@@ -686,8 +793,14 @@ document.querySelector('#source-form').onsubmit = async e => {
   const platform = document.querySelector('#source-platform').value.trim();
   const url = document.querySelector('#source-url').value.trim();
   const googleNews = url.includes('news.google.com/rss/');
-  const duplicate = sources.some(s => s.organization_id === organization_id && (googleNews ? String(s.url||'').includes('news.google.com/rss/') : String(s.url||'').trim().toLowerCase() === url.toLowerCase()));
-  if (duplicate) return toast(googleNews ? 'Bu təşkilat üçün Google News RSS artıq mövcuddur.' : 'Bu mənbə artıq mövcuddur.', 'error');
+  const urlNoSlash = url.replace(/\/+$/,'');
+  let duplicateQuery = supabase.from('sources').select('id',{count:'exact',head:true}).eq('organization_id',organization_id);
+  duplicateQuery = googleNews
+    ? duplicateQuery.ilike('url','%news.google.com/rss/%')
+    : duplicateQuery.in('url',[urlNoSlash,`${urlNoSlash}/`]);
+  const duplicateResult = await duplicateQuery;
+  if (duplicateResult.error) return toast(duplicateResult.error.message,'error');
+  if ((duplicateResult.count || 0) > 0) return toast(googleNews ? 'Bu təşkilat üçün Google News RSS artıq mövcuddur.' : 'Bu mənbə artıq mövcuddur.', 'error');
   const { error } = await supabase.from('sources').insert({organization_id,platform,url,is_active:true});
   toast(error ? error.message : 'Mənbə əlavə edildi',error?'error':'success');
   if(!error){e.target.reset();await refresh();}

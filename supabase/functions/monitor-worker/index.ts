@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
 
     currentStage = 'organizations';
     let orgQuery:any = admin.from('organizations')
-      .select('id,name,short_name,district_id,districts(name),show_district_wide,sources(*)')
+      .select('id,name,short_name,district_id,districts(name),show_district_wide')
       .in('service_status',['active','grace']);
     if (callerOrganizationId) orgQuery = orgQuery.eq('id', callerOrganizationId);
     const orgResult:any = await orgQuery;
@@ -74,6 +74,15 @@ Deno.serve(async (req) => {
       return json({ok:false,run_id:runId,stage:currentStage,failures:1,errors:[{stage:currentStage,...errorInfo(err)}],details},200);
     }
     const orgs = Array.isArray(orgResult.data) ? orgResult.data : [];
+
+    // sources(*) relation-u yüzlərlə Web mənbəsi olduqda Edge Function yaddaşını şişirdirdi
+    // və YouTube mərhələsində WORKER_RESOURCE_LIMIT (HTTP 546) yaradırdı. Mənbələri
+    // rejimə uyğun ayrıca və səhifəli oxuyuruq: news_plan üçün bütün aktiv mənbələr,
+    // normal production monitorunda isə yalnız YouTube. Web/Xəbər GitHub gateway-dədir.
+    for (const org of orgs) {
+      const sourceMode = options.mode === 'news_plan' || options.edge_news_probe ? 'all' : 'youtube';
+      org.sources = await fetchOrganizationSources(admin, String(org.id), sourceMode, 3000);
+    }
 
     // Web/Xəbər xarici şəbəkə sorğuları Supabase Edge datacenter-lərində Google News
     // və GDELT tərəfindən abort/503 ala bilir. Production discovery GitHub Actions
@@ -665,6 +674,26 @@ async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):
   }
 
   return {items:dedupeItems(items),queries,failures,transport};
+}
+
+async function fetchOrganizationSources(admin:any, organizationId:string, mode:'all'|'youtube'='all', maxRows=3000):Promise<any[]> {
+  const rows:any[] = [];
+  const pageSize = 1000;
+  for (let from = 0; from < maxRows; from += pageSize) {
+    let q:any = admin.from('sources')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .eq('is_active', true)
+      .order('created_at', {ascending:false})
+      .range(from, Math.min(from + pageSize - 1, maxRows - 1));
+    if (mode === 'youtube') q = q.ilike('platform', 'youtube');
+    const result:any = await q;
+    if (result?.error) throw result.error;
+    const batch = Array.isArray(result?.data) ? result.data : [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  return rows;
 }
 
 async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRows=12000):Promise<any[]> {
