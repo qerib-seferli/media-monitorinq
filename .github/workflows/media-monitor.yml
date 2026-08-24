@@ -11,7 +11,7 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
   web-fast-watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     concurrency:
       group: media-monitor-web-fast-watch
       cancel-in-progress: true
