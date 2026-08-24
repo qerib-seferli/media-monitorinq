@@ -130,7 +130,7 @@ Deno.serve(async (req) => {
               newsCount += await safeSave(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords,villageNames,errors,org.short_name,'Google News');
             }
             inserted += newsCount;
-            details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, query_count:rssBatch.queries.length, query_failures:rssBatch.failures.length, ...((options.debug || rssItems.length===0) ? { queries:rssBatch.queries, fetch_errors:rssBatch.failures.slice(0,4), sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 8) } : {}) });
+            details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, query_count:rssBatch.queries.length, query_failures:rssBatch.failures.length, locales:rssBatch.locales, ...((options.debug || rssItems.length===0) ? { queries:rssBatch.queries, fetch_errors:rssBatch.failures.slice(0,4), sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 8) } : {}) });
           } else fail(currentStage,rssSettled.reason,org.short_name,'Google News RSS');
 
           currentStage = 'gdelt-web-news';
@@ -143,7 +143,7 @@ Deno.serve(async (req) => {
               webCount += await safeSave(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords,villageNames,errors,org.short_name,'GDELT');
             }
             inserted += webCount;
-            details.push({ organization:org.short_name, source:'GDELT Web / Xəbər', found:webItems.length, inserted:webCount, query_count:webBatch.queries.length, query_failures:webBatch.failures.length, ...((options.debug || webItems.length===0) ? { queries:webBatch.queries, fetch_errors:webBatch.failures.slice(0,4), sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 10) } : {}) });
+            details.push({ organization:org.short_name, source:'GDELT Web / Xəbər', found:webItems.length, inserted:webCount, query_count:webBatch.queries.length, query_failures:webBatch.failures.length, transport:webBatch.transport, ...((options.debug || webItems.length===0) ? { queries:webBatch.queries, fetch_errors:webBatch.failures.slice(0,4), sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 10) } : {}) });
           } else fail(currentStage,webSettled.reason,org.short_name,'GDELT');
         } else if (options.debug) {
           details.push({organization:org.short_name,source:'Google News RSS',skipped:'time-budget'});
@@ -372,75 +372,85 @@ async function safeSourceTouch(admin:any,sourceId:any,errors:DiagnosticError[],o
   }
 }
 
-async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[]}> {
+async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[];locales:string[]}> {
   const bank = buildGoogleNewsQueries(org, keywords, villages);
   const queries = bank.length ? [bank[Math.floor(Date.now()/60000) % bank.length]] : [];
   const failures:any[] = [];
   const items:Item[] = [];
+  const locales = [
+    {hl:'az',gl:'AZ',ceid:'AZ:az',label:'az-AZ'},
+    // Google News-in AZ endpoint-i bəzi datacenter-lərdən 503 verə bilir.
+    // RU/EN endpoint-ləri eyni indeksə alternativ giriş rolunu oynayır.
+    {hl:'ru',gl:'RU',ceid:'RU:ru',label:'ru-RU'},
+    {hl:'en-US',gl:'US',ceid:'US:en',label:'en-US'}
+  ];
+
   for (const query of queries) {
-    const googleUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=az&gl=AZ&ceid=AZ:az`;
-    try {
+    const settled = await Promise.allSettled(locales.map(async locale=>{
+      const googleUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${encodeURIComponent(locale.hl)}&gl=${encodeURIComponent(locale.gl)}&ceid=${encodeURIComponent(locale.ceid)}`;
       const xml = await fetchTextWithRetry(googleUrl, {
         headers:{
           'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
           'accept':'application/rss+xml,application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
-          'accept-language':'az-AZ,az;q=0.9,en;q=0.7'
+          'accept-language':'az-AZ,az;q=0.9,ru;q=0.7,en;q=0.6',
+          'cache-control':'no-cache'
         }
-      },1,5500);
-      items.push(...parseRss(xml).map(item=>({...item,raw:{...((item.raw as any)||{}),kind:'google_news',discovery_query:query}})));
-    } catch (e) {
-      const info=errorInfo(e); failures.push({query,...info}); console.error('google-news-query',query,info);
-    }
+      },1,6500);
+      return {locale:locale.label, items:parseRss(xml)};
+    }));
+
+    settled.forEach((result,index)=>{
+      const locale = locales[index]?.label || 'unknown';
+      if (result.status === 'fulfilled') {
+        for (const item of result.value.items) {
+          items.push({...item,raw:{...((item.raw as any)||{}),kind:'google_news',discovery_query:query,google_locale:locale}});
+        }
+      } else {
+        failures.push({query,locale,...errorInfo(result.reason)});
+      }
+    });
   }
-  return {items:dedupeItems(items),queries,failures};
+  return {items:dedupeItems(items),queries,failures,locales:locales.map(x=>x.label)};
 }
 
-async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[]}> {
-  // GDELT API Supabase Edge-dən 6 paralel ağır query-də tez timeout olur.
-  // İki kompakt query ardıcıl işləyir; nəticə sonra lokaldakı aidiyyət filtrlərindən keçir.
+async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[];transport:string}> {
   const queries = buildGdeltQueries(org, keywords, villages, 1);
   const failures:any[] = [];
   const items:Item[] = [];
+  const transport = 'rssarchive';
 
-  for (let i=0; i<queries.length; i++) {
-    const query = queries[i];
+  // DOC 2.0 ArtList RSS çıxışı JSON-dan daha yüngüldür və Edge runtime-da
+  // response.json() gözləməsini aradan qaldırır. GDELT-in rəsmi sənədlərində
+  // ArtList + format=rssarchive kombinasiyası dəstəklənir.
+  for (const query of queries) {
     try {
       const endpoint = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
       endpoint.searchParams.set('query', query);
-      endpoint.searchParams.set('mode', 'ArtList');
-      endpoint.searchParams.set('maxrecords', '50');
-      endpoint.searchParams.set('format', 'json');
-      endpoint.searchParams.set('sort', 'DateDesc');
+      endpoint.searchParams.set('mode', 'artlist');
+      endpoint.searchParams.set('maxrecords', '35');
+      endpoint.searchParams.set('format', 'rssarchive');
+      endpoint.searchParams.set('sort', 'datedesc');
       endpoint.searchParams.set('timespan', '3months');
-      const data = await fetchJsonWithRetry(endpoint.toString(), {
+
+      const xml = await fetchTextWithRetry(endpoint.toString(), {
         headers:{
-          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/5.3; +public-news-monitoring)',
-          'accept':'application/json,text/plain;q=0.9,*/*;q=0.8'
+          'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/5.4; +public-news-monitoring)',
+          'accept':'application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.7',
+          'accept-language':'az,en;q=0.8'
         }
-      },1,7500);
-      for (const article of data?.articles || []) {
-        const url = String(article?.url || '').trim();
-        const title = String(article?.title || '').trim();
-        if (!url || !title) continue;
-        items.push({
-          title,
-          text:`${article?.domain || ''} ${article?.language || ''} ${article?.sourcecountry || ''}`.trim(),
-          url,
-          published_at:gdeltDate(article?.seendate),
-          image:String(article?.socialimage || '').trim() || null,
-          author:String(article?.domain || '').trim() || null,
-          raw:{kind:'gdelt_article', discovery_query:query, ...article}
-        });
+      },1,11000);
+
+      for (const item of parseRss(xml)) {
+        items.push({...item,raw:{...((item.raw as any)||{}),kind:'gdelt_article',discovery_query:query,transport}});
       }
     } catch (e) {
       const info = errorInfo(e);
-      failures.push({query,...info});
+      failures.push({query,transport,...info});
       console.error('gdelt-query', query, info);
     }
-    if (i < queries.length - 1) await sleep(250);
   }
 
-  return {items:dedupeItems(items),queries,failures};
+  return {items:dedupeItems(items),queries,failures,transport};
 }
 
 async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRows=12000):Promise<any[]> {
@@ -547,7 +557,10 @@ function buildGoogleNewsQueries(org:any, keywords:string[], villages:string[]=[]
     .filter((value,index,arr)=>arr.findIndex(x=>normalizeForMatch(x)===normalizeForMatch(value))===index)
     .map(value=>`"${value}"`);
   if (identityParts.length) candidates.push(identityParts.join(' OR '));
-  if (district) candidates.push(`"${district}" (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR fermer OR "su gəlmir" OR "su çatışmazlığı")`);
+  if (district) {
+    const aliases = districtAliases(district).map(value=>`"${value}"`).join(' OR ');
+    candidates.push(`(${aliases}) (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR fermer OR "su gəlmir" OR "su çatışmazlığı")`);
+  }
 
   // Rayon/təşkilat məlumatı natamamdırsa böyük bankdan yalnız bir fallback sorğu götür.
   if (candidates.length < 2) candidates.push(...buildDiscoveryQueries(org, keywords, villages, 1));
@@ -562,6 +575,23 @@ function buildGoogleNewsQueries(org:any, keywords:string[], villages:string[]=[]
     if(out.length>=2) break;
   }
   return out;
+}
+
+function districtAliases(value:string):string[] {
+  const original = String(value || '').trim();
+  if (!original) return [];
+  const ascii = original
+    .replace(/ə/g,'e').replace(/Ə/g,'E')
+    .replace(/ğ/g,'g').replace(/Ğ/g,'G')
+    .replace(/ı/g,'i').replace(/İ/g,'I')
+    .replace(/ö/g,'o').replace(/Ö/g,'O')
+    .replace(/ü/g,'u').replace(/Ü/g,'U')
+    .replace(/ş/g,'s').replace(/Ş/g,'S')
+    .replace(/ç/g,'c').replace(/Ç/g,'C');
+  const aliases = [original, ascii];
+  if (normalizeForMatch(original) === 'berde') aliases.push('Barda');
+  if (normalizeForMatch(original) === 'agdam') aliases.push('Agdam');
+  return [...new Set(aliases.filter(Boolean))];
 }
 
 function dedupeItems(items:Item[]):Item[] {
