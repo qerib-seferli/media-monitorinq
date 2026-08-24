@@ -76,6 +76,46 @@ async function callMonitor(body) {
   } finally { clearTimeout(timer); }
 }
 
+function chunks(items, size = 18) {
+  const rows = Array.isArray(items) ? items : [];
+  const out = [];
+  for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
+  return out;
+}
+
+async function ingestInChunks({org, platform, label, items}) {
+  const pieces = chunks(items, 18);
+  const aggregate = {
+    received: 0, accepted: 0, rejected: 0, inserted: 0,
+    sample_results: [], screenshot_targets: [], errors: [], chunk_failures: 0
+  };
+  for (let i = 0; i < pieces.length; i++) {
+    const part = pieces[i];
+    try {
+      const result = await callMonitor({
+        mode:'news_ingest', organization_id:org.id, source_platform:platform,
+        source_label:label, items:part
+      });
+      aggregate.received += Number(result?.received || 0);
+      aggregate.accepted += Number(result?.accepted || 0);
+      aggregate.rejected += Number(result?.rejected || 0);
+      aggregate.inserted += Number(result?.inserted || 0);
+      if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
+      if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
+      if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
+      console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
+    } catch (e) {
+      aggregate.chunk_failures++;
+      console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} ingest xəta — ${e?.message||e}`);
+      // Bir paket Edge resource limit/timeout alsa bütün GitHub job dayanmasın.
+      // Növbəti run eyni discovery nəticələrini yenidən görəcək və duplicate qoruması var.
+      await sleep(900);
+    }
+  }
+  aggregate.screenshot_targets = dedupe(aggregate.screenshot_targets.map(x=>({ ...x, url:String(x?.url||'') }))).filter(x=>x.url);
+  return aggregate;
+}
+
 function decodeXml(s='') {
   return String(s)
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1')
@@ -223,12 +263,12 @@ async function captureScreenshot(target) {
   const chrome=findChrome();
   if (!chrome || !target?.url) return null;
   const file=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
-  const args=['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--window-size=1365,900',`--screenshot=${file}`,target.url];
+  const args=['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--window-size=1200,760',`--screenshot=${file}`,target.url];
   const r=spawnSync(chrome,args,{encoding:'utf8',timeout:25000});
   if (r.status!==0 || !existsSync(file)) return null;
   try {
     const base64=readFileSync(file).toString('base64');
-    if (base64.length > 3_800_000) return null;
+    if (base64.length > 1_600_000) return null;
     return {base64,mime_type:'image/png'};
   } finally { try{unlinkSync(file)}catch{} }
 }
@@ -350,10 +390,10 @@ for (const org of plan.organizations) {
       console.log(`[${org.short_name}] ${batch.label}: 0 material`);
       continue;
     }
-    const result = await callMonitor({
-      mode:'news_ingest',organization_id:org.id,source_platform:batch.platform,
-      source_label:batch.label,items:batch.items
-    });
+    // 5-10 min açar söz bankı ilə yüzlərlə materialı bir Edge Function çağırışına
+    // vermək Supabase WORKER_RESOURCE_LIMIT yaradır. Materialları kiçik paketlərlə
+    // göndəririk; bütün namizədlər yenə yoxlanılır, sadəcə hər invocation yüngülləşir.
+    const result = await ingestInChunks({org,platform:batch.platform,label:batch.label,items:batch.items});
     totalReceived += Number(result?.received||0);
     totalAccepted += Number(result?.accepted||0);
     totalRejected += Number(result?.rejected||0);
@@ -363,7 +403,7 @@ for (const org of plan.organizations) {
 
     // Yalnız filtrlərdən keçmiş və bazada screenshot-u olmayan xəbərlər üçün arxiv görüntüsü alırıq.
     // Bir run-da limit saxlanılır ki GitHub Action uzanmasın.
-    const screenshotTargets=Array.isArray(result?.screenshot_targets)?result.screenshot_targets.slice(0,6):[];
+    const screenshotTargets=Array.isArray(result?.screenshot_targets)?result.screenshot_targets.slice(0,2):[];
     for (const target of screenshotTargets) {
       const shot=await captureScreenshot(target);
       if (!shot) { console.log(`[${org.short_name}] Screenshot alınmadı: ${String(target?.url||'').slice(0,120)}`); continue; }
