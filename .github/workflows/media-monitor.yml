@@ -40,7 +40,7 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d '{"mode":"scheduled","debug":false}' \
+            -d '{"mode":"scheduled","debug":false,"quick_youtube_comments":true,"verify_existing":false}' \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
   web-fast-watch:
     runs-on: ubuntu-latest
