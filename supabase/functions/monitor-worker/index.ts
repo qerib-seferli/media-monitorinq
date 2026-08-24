@@ -106,6 +106,50 @@ Deno.serve(async (req) => {
       return json({ok:true,run_id:runId,mode:'news_plan',organizations},200);
     }
 
+    if (options.mode === 'news_screenshot') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'news_screenshot',error:'Təşkilat tapılmadı'},200);
+      if (!options.source_url || !options.image_base64) {
+        return json({ok:false,run_id:runId,mode:'news_screenshot',error:'source_url və image_base64 tələb olunur'},200);
+      }
+      try {
+        const mentionResult:any = await admin.from('mentions')
+          .select('id,title,mention_media(id,media_type,url)')
+          .eq('organization_id',org.id)
+          .eq('source_url',options.source_url)
+          .order('published_at',{ascending:false,nullsFirst:false})
+          .limit(1)
+          .maybeSingle();
+        if (mentionResult?.error) throw mentionResult.error;
+        const mention = mentionResult?.data || null;
+        if (!mention?.id) return json({ok:true,run_id:runId,mode:'news_screenshot',saved:false,skipped:'mention-not-found'},200);
+        const already = (Array.isArray(mention.mention_media)?mention.mention_media:[])
+          .some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot');
+        if (already) return json({ok:true,run_id:runId,mode:'news_screenshot',saved:false,skipped:'already-exists'},200);
+
+        const mime = /^image\/(png|jpeg|webp)$/i.test(options.mime_type) ? options.mime_type.toLowerCase() : 'image/jpeg';
+        const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+        const binary = decodeBase64(options.image_base64);
+        if (!binary.length || binary.length > 3_000_000) {
+          return json({ok:true,run_id:runId,mode:'news_screenshot',saved:false,skipped:'invalid-or-too-large'},200);
+        }
+        const bucket='monitor-screenshots';
+        await ensurePublicBucket(admin,bucket);
+        const now=new Date();
+        const path=`${org.id}/${now.getUTCFullYear()}/${String(now.getUTCMonth()+1).padStart(2,'0')}/${mention.id}-${crypto.randomUUID().slice(0,8)}.${ext}`;
+        const upload:any = await admin.storage.from(bucket).upload(path,binary,{contentType:mime,upsert:false,cacheControl:'31536000'});
+        if (upload?.error) throw upload.error;
+        const publicResult:any = admin.storage.from(bucket).getPublicUrl(path);
+        const publicUrl = publicResult?.data?.publicUrl || '';
+        if (!publicUrl) throw new Error('Screenshot public URL yaradılmadı');
+        const mediaInsert:any = await admin.from('mention_media').insert({mention_id:mention.id,media_type:'screenshot',url:publicUrl,captured_at:new Date().toISOString()});
+        if (mediaInsert?.error) throw mediaInsert.error;
+        return json({ok:true,run_id:runId,mode:'news_screenshot',saved:true,mention_id:mention.id,url:publicUrl},200);
+      } catch (e) {
+        return json({ok:false,run_id:runId,mode:'news_screenshot',saved:false,error:errorInfo(e).message},200);
+      }
+    }
+
     if (options.mode === 'news_ingest') {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_ingest',error:'Təşkilat tapılmadı'},200);
@@ -134,14 +178,33 @@ Deno.serve(async (req) => {
       let rejected = 0;
       let saved = 0;
       const samples:any[] = [];
+      const acceptedItems:Item[] = [];
       for (const item of dedupeItems(options.news_items || []).slice(0,250)) {
         const match = evaluateMatch(org,item,lowerKeywords,villageNames);
         if (match.accepted) accepted++; else rejected++;
         if (samples.length < 10) samples.push({title:item.title || '',url:item.url || '',accepted:match.accepted,reason:match.reason,matched_terms:match.matches});
         if (!match.accepted) continue;
+        acceptedItems.push(item);
         saved += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,options.source_label || options.source_platform || 'News Gateway');
       }
-      return json({ok:true,run_id:runId,mode:'news_ingest',organization:org.short_name,source_platform:source.platform,received:(options.news_items||[]).length,accepted,rejected,inserted:saved,sample_results:samples,errors},200);
+
+      const acceptedUrls=[...new Set(acceptedItems.map((x:Item)=>String(x.url||'')).filter(Boolean))].slice(0,80);
+      const screenshotTargets:any[]=[];
+      if (acceptedUrls.length) {
+        const mr:any = await admin.from('mentions')
+          .select('id,title,source_url,published_at,mention_media(media_type,url)')
+          .eq('organization_id',org.id)
+          .in('source_url',acceptedUrls)
+          .order('published_at',{ascending:false,nullsFirst:false});
+        if (!mr?.error) {
+          for (const row of (Array.isArray(mr?.data)?mr.data:[])) {
+            const hasScreenshot=(Array.isArray(row?.mention_media)?row.mention_media:[]).some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot');
+            if (!hasScreenshot && row?.source_url) screenshotTargets.push({mention_id:row.id,title:row.title||'',url:row.source_url,published_at:row.published_at||null});
+            if (screenshotTargets.length >= 12) break;
+          }
+        }
+      }
+      return json({ok:true,run_id:runId,mode:'news_ingest',organization:org.short_name,source_platform:source.platform,received:(options.news_items||[]).length,accepted,rejected,inserted:saved,sample_results:samples,screenshot_targets:screenshotTargets,errors},200);
     }
 
     for (const org of orgs) {
@@ -1701,6 +1764,9 @@ type RunOptions = {
   source_platform:string;
   source_label:string;
   news_items:Item[];
+  source_url:string;
+  image_base64:string;
+  mime_type:string;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -1717,7 +1783,10 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   organization_id:null,
   source_platform:'Web',
   source_label:'',
-  news_items:[]
+  news_items:[],
+  source_url:'',
+  image_base64:'',
+  mime_type:'image/jpeg'
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -1750,7 +1819,10 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       organization_id:body?.organization_id ? String(body.organization_id) : null,
       source_platform:String(body?.source_platform || 'Web'),
       source_label:String(body?.source_label || ''),
-      news_items:newsItems
+      news_items:newsItems,
+      source_url:String(body?.source_url || '').slice(0,2000),
+      image_base64:String(body?.image_base64 || ''),
+      mime_type:String(body?.mime_type || 'image/jpeg').slice(0,80)
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};
@@ -2077,4 +2149,25 @@ function clean(s:string){return decode(String(s||'').replace(/<[^>]+>/g,' ').rep
 function decode(s:string){return String(s||'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ')}
 function clamp(v:any){const n=Number(v||0);return Math.max(0,Math.min(100,Math.round(n)))}
 async function sha256(input:string){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(input));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+function decodeBase64(value:string):Uint8Array {
+  try {
+    const raw=atob(String(value||'').replace(/^data:[^;]+;base64,/i,''));
+    const out=new Uint8Array(raw.length);
+    for(let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i);
+    return out;
+  } catch { return new Uint8Array(); }
+}
+
+async function ensurePublicBucket(admin:any,bucket:string) {
+  try {
+    const existing:any = await admin.storage.getBucket(bucket);
+    if (!existing?.error && existing?.data) {
+      if (existing.data.public !== true) await admin.storage.updateBucket(bucket,{public:true});
+      return;
+    }
+  } catch {}
+  const created:any = await admin.storage.createBucket(bucket,{public:true,fileSizeLimit:3145728,allowedMimeTypes:['image/jpeg','image/png','image/webp']});
+  if (created?.error && !String(created.error?.message||'').toLowerCase().includes('already exists')) throw created.error;
+}
+
 function json(data:unknown,status=200){return new Response(JSON.stringify(data),{status,headers:{...corsHeaders,'Content-Type':'application/json; charset=utf-8'}})}

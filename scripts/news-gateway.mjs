@@ -7,6 +7,10 @@ if (!MONITOR_SECRET) {
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36 MediaMonitorinqGateway/1.1';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+import { spawnSync } from 'node:child_process';
+import { readFileSync, unlinkSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 let lastExternalFetchAt = 0;
 let gdeltBlockedUntil = 0;
 
@@ -160,22 +164,73 @@ async function googleNews(query) {
   return {items:dedupe(out),errors};
 }
 
-async function bingNews(query) {
-  const variants = [
-    ['az','AZ'], ['tr','TR'], ['en','US']
-  ];
+async function bingNews(query, page = 0) {
+  const variants = [ ['az','AZ'], ['tr','TR'], ['en','US'] ];
   const out=[];
   for (const [setlang,cc] of variants) {
     const u = new URL('https://www.bing.com/news/search');
     u.searchParams.set('q',query); u.searchParams.set('format','rss'); u.searchParams.set('setlang',setlang); u.searchParams.set('cc',cc);
+    if (page > 0) u.searchParams.set('first', String(page * 10 + 1));
     try {
-      const xml = await fetchText(u.toString(),{timeoutMs:13000,retries:0,minGapMs:1200});
+      const xml = await fetchText(u.toString(),{timeoutMs:13000,retries:0,minGapMs:900});
       const items = parseFeed(xml,'bing_news',query,`Bing News RSS ${setlang}-${cc}`);
       out.push(...items);
-      if (items.length >= 3) break;
+      if (items.length >= 5) break;
     } catch {}
   }
   return dedupe(out);
+}
+
+async function bingWeb(query, page = 0) {
+  const u = new URL('https://www.bing.com/search');
+  u.searchParams.set('q',query); u.searchParams.set('format','rss'); u.searchParams.set('setlang','az-AZ'); u.searchParams.set('cc','AZ');
+  if (page > 0) u.searchParams.set('first', String(page * 10 + 1));
+  try {
+    const xml = await fetchText(u.toString(),{timeoutMs:13000,retries:0,minGapMs:900});
+    return parseFeed(xml,'bing_web',query,'Bing Web RSS');
+  } catch { return []; }
+}
+
+function firstMatch(html, patterns) {
+  for (const re of patterns) {
+    const m = String(html || '').match(re);
+    if (m?.[1]) return decodeXml(m[1].trim());
+  }
+  return '';
+}
+
+async function enrichPage(item) {
+  if (!item?.url || /news\.google\.com/i.test(item.url)) return item;
+  try {
+    const html = await fetchText(item.url,{timeoutMs:9000,retries:0,minGapMs:650});
+    const title = firstMatch(html,[/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,/<title[^>]*>([\s\S]*?)<\/title>/i]);
+    const desc = firstMatch(html,[/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i]);
+    const image = firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i]);
+    const published = firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
+    return {...item,title:stripHtml(title)||item.title,text:stripHtml(desc)||item.text,image:image||item.image,published_at:normalizeDate(published)||item.published_at,raw:{...(item.raw||{}),enriched:true}};
+  } catch { return item; }
+}
+
+function findChrome() {
+  for (const bin of ['google-chrome','google-chrome-stable','chromium','chromium-browser']) {
+    const r=spawnSync('which',[bin],{encoding:'utf8'});
+    if (r.status===0 && r.stdout.trim()) return r.stdout.trim();
+  }
+  return '';
+}
+
+async function captureScreenshot(target) {
+  const chrome=findChrome();
+  if (!chrome || !target?.url) return null;
+  const file=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
+  const args=['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--window-size=1365,900',`--screenshot=${file}`,target.url];
+  const r=spawnSync(chrome,args,{encoding:'utf8',timeout:25000});
+  if (r.status!==0 || !existsSync(file)) return null;
+  try {
+    const base64=readFileSync(file).toString('base64');
+    if (base64.length > 3_800_000) return null;
+    return {base64,mime_type:'image/png'};
+  } finally { try{unlinkSync(file)}catch{} }
 }
 
 async function gdeltNews(query) {
@@ -228,7 +283,7 @@ for (const org of plan.organizations) {
   // rayon xəbəri tapmaq şansı yüksəkdir və dar təşkilat adı nəticəni sıfırlamır.
   const coreQueries = allGoogle.slice(0,3);
   const rotatingQueries = allGoogle.slice(3);
-  const selectedQueries = [...new Set([...coreQueries, ...rotate(rotatingQueries,1,org.id)])].slice(0,4);
+  const selectedQueries = [...new Set([...coreQueries, ...rotate(rotatingQueries,3,org.id)])].slice(0,6);
   console.log(`[${org.short_name}] Discovery sorğuları: ${selectedQueries.join(' || ')}`);
 
   const googleItems=[];
@@ -243,8 +298,15 @@ for (const org of plan.organizations) {
       totalFailures++; console.log(`[${org.short_name}] Google News xəta (${q}):`, e?.message||e);
     }
 
-    try { webItems.push(...await bingNews(q)); }
-    catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing News xəta (${q}):`, e?.message||e); }
+    try {
+      webItems.push(...await bingNews(q,0));
+      webItems.push(...await bingWeb(q,0));
+      // Əsas rayon sorğularında ikinci səhifəni də oxuyuruq ki ilk 10 nəticə ilə məhdudlaşmayaq.
+      if (selectedQueries.indexOf(q) < 2) {
+        webItems.push(...await bingNews(q,1));
+        webItems.push(...await bingWeb(q,1));
+      }
+    } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
   }
 
   // Admin paneldə əl ilə əlavə olunan normal RSS/Atom feed-ləri birbaşa oxu.
@@ -270,9 +332,17 @@ for (const org of plan.organizations) {
     }
   }
 
+  // Search nəticələrinin öz snippet-i bəzən çox zəif olur. İlk namizədlərin səhifə
+  // metadata-sını (og:title/description/image/datePublished) götürərək tarix və preview-ni dəqiqləşdiririk.
+  const googleDeduped=dedupe(googleItems).slice(0,220);
+  const webDeduped=dedupe(webItems).slice(0,260);
+  const enrichedWeb=[];
+  for (const item of webDeduped.slice(0,36)) enrichedWeb.push(await enrichPage(item));
+  enrichedWeb.push(...webDeduped.slice(36));
+
   const batches = [
-    {platform:'Google News',label:'Google News RSS / GitHub Gateway',items:dedupe(googleItems).slice(0,220)},
-    {platform:'Web',label:'Web / Bing + RSS + GDELT / GitHub Gateway',items:dedupe(webItems).slice(0,260)}
+    {platform:'Google News',label:'Google News RSS / GitHub Gateway',items:googleDeduped},
+    {platform:'Web',label:'Web / Bing News + Bing Web + RSS / GitHub Gateway',items:dedupe(enrichedWeb)}
   ];
 
   for (const batch of batches) {
@@ -290,6 +360,18 @@ for (const org of plan.organizations) {
     totalInserted += Number(result?.inserted||0);
     console.log(`[${org.short_name}] ${batch.label}: received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
     logIngestSamples(org.short_name,batch.label,result);
+
+    // Yalnız filtrlərdən keçmiş və bazada screenshot-u olmayan xəbərlər üçün arxiv görüntüsü alırıq.
+    // Bir run-da limit saxlanılır ki GitHub Action uzanmasın.
+    const screenshotTargets=Array.isArray(result?.screenshot_targets)?result.screenshot_targets.slice(0,6):[];
+    for (const target of screenshotTargets) {
+      const shot=await captureScreenshot(target);
+      if (!shot) { console.log(`[${org.short_name}] Screenshot alınmadı: ${String(target?.url||'').slice(0,120)}`); continue; }
+      try {
+        const saved=await callMonitor({mode:'news_screenshot',organization_id:org.id,source_url:target.url,image_base64:shot.base64,mime_type:shot.mime_type});
+        console.log(`[${org.short_name}] Screenshot: ${saved?.ok && saved?.saved ? 'SAXLANDI' : (saved?.skipped||saved?.error||'buraxıldı')} | ${String(target?.title||target?.url||'').slice(0,100)}`);
+      } catch(e) { console.log(`[${org.short_name}] Screenshot upload xəta: ${e?.message||e}`); }
+    }
   }
 }
 
