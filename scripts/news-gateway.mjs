@@ -302,11 +302,12 @@ function paragraphText(html='') {
       if(paras.length) candidates.push(paras.join('\n\n'));
     }
   }
-  if(!candidates.length){
-    const paras=[...raw.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
-      .map(x=>cleanArticleText(x[1])).filter(x=>x.length>=45 && !/cookie|reklam|advert|abunə|subscribe/i.test(x));
-    if(paras.length) candidates.push(paras.join('\n\n'));
-  }
+  // Bəzi xəbər saytlarında məqalə nested div-lərlə qurulur və regex ilk bağlanan div-də
+  // dayanır. Ona görə səhifədəki bütün real paraqraflardan ayrıca uzun namizəd də qururuq.
+  const allParas=[...raw.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map(x=>cleanArticleText(x[1]))
+    .filter(x=>x.length>=35 && !/cookie|reklam|advert|abunə|subscribe|copyright|bütün hüquqlar/i.test(x));
+  if(allParas.length) candidates.push([...new Set(allParas)].join('\n\n'));
   candidates.sort((a,b)=>b.length-a.length);
   return candidates[0]||'';
 }
@@ -376,12 +377,12 @@ async function captureScreenshot(target) {
   const chrome=findChrome();
   if (!chrome || !target?.url) return null;
   const file=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
-  const args=['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--window-size=1200,760',`--screenshot=${file}`,target.url];
+  const args=['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--window-size=1440,2400','--force-device-scale-factor=0.8',`--screenshot=${file}`,target.url];
   const r=spawnSync(chrome,args,{encoding:'utf8',timeout:25000});
   if (r.status!==0 || !existsSync(file)) return null;
   try {
     const base64=readFileSync(file).toString('base64');
-    if (base64.length > 1_600_000) return null;
+    if (base64.length > 3_800_000) return null;
     return {base64,mime_type:'image/png'};
   } finally { try{unlinkSync(file)}catch{} }
 }
@@ -509,7 +510,13 @@ for (const org of plan.organizations) {
   // qalmırıq; 5 dəqiqəlik rotasiya ilə 28 sorğulu bank mərhələli şəkildə taranır.
   const azDomainQueries = org.district ? [`site:.az \"${org.district}\" suvarma`,`site:.az \"${org.district}\" meliorasiya`,`site:.az \"${org.district}\" kanal`] : [];
   const directDomainQueries=inferredOrgDomains(org).flatMap(domain=>[`site:${domain} suvarma`,`site:${domain} meliorasiya`,`site:${domain} ${org.district||''}`]).filter(Boolean);
-  const webQueries = [...new Set([...broadDistrict,...topicCore,...rotate(rotatingQueries,6,org.id),...rotate(azDomainQueries,1,`az-${org.id}`),...rotate(directDomainQueries,1,`domain-${org.id}`)])].slice(0,11);
+  const districtName=String(org.district||'').trim();
+  const discoveryCore=districtName ? [
+    `\"${districtName}\" su`, `\"${districtName}\" suvarma`, `\"${districtName}\" meliorasiya`,
+    `\"${districtName}\" kanal`, `\"${districtName}\" subartezian`, `\"${districtName}\" artezian`,
+    `\"${districtName}\" fermer su`, `\"${districtName}\" əkin su`, `\"${districtName}\" su təchizatı`
+  ] : [];
+  const webQueries = [...new Set([...broadDistrict,...topicCore,...discoveryCore,...rotate(rotatingQueries,10,org.id),...azDomainQueries,...rotate(directDomainQueries,1,`domain-${org.id}`)])].slice(0,24);
   // Google News ayrıca istifadəçi platforması deyil, discovery provider-dir. Burada
   // yalnız iki yüksək siqnallı sorğu saxlayırıq və tapılan nəticələri Web axınına qatırıq.
   const googleQueries=[...new Set([...topicCore.slice(0,1),...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,2);
@@ -537,11 +544,11 @@ for (const org of plan.organizations) {
       const qi=webQueries.indexOf(q);
       webItems.push(...await bingNews(q,0));
       webItems.push(...await bingWeb(q,0));
-      if (qi < 4) {
+      if (qi < 12) {
         webItems.push(...await bingNews(q,1));
         webItems.push(...await bingWeb(q,1));
       }
-      if (qi < 2) {
+      if (qi < 6) {
         webItems.push(...await bingNews(q,2));
         webItems.push(...await bingWeb(q,2));
       }
@@ -602,7 +609,7 @@ for (const org of plan.organizations) {
     // və əsas xəbər şəklini dəqiqləşdiririk. Beləliklə axtarış snippet-i orijinal mətn kimi saxlanmır.
     const acceptedTargets=Array.isArray(result?.accepted_targets)?result.accepted_targets:[];
     const screenshotFallback=[];
-    for (const target of acceptedTargets.slice(0,DIRECT_ONLY?8:32)) {
+    for (const target of acceptedTargets.slice(0,DIRECT_ONLY?20:80)) {
       const enriched=await enrichPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:target.image||null,author:target.author||null,raw:target.raw||{}});
       try {
         const refreshed=await callMonitor({
@@ -630,7 +637,7 @@ for (const org of plan.organizations) {
 
     // Xəbər şəkli yoxdursa arxiv screenshot saxlanılır. Hər run-da limit var; növbəti run
     // screenshot-u olmayan növbəti materialları tamamlayacaq.
-    for (const target of screenshotFallback.slice(0,DIRECT_ONLY?2:6)) {
+    for (const target of screenshotFallback.slice(0,DIRECT_ONLY?12:36)) {
       const shot=await captureScreenshot({...target,url:target.capture_url||target.url});
       if (!shot) { console.log(`[${org.short_name}] Screenshot alınmadı: ${String(target?.url||'').slice(0,120)}`); continue; }
       try {

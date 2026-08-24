@@ -2006,6 +2006,18 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   }).slice(0,12);
 
   const raw:any = item.raw || {};
+  // Təşkilatın rəsmi portalının ana səhifəsi / naviqasiya nəticəsi xəbər deyil.
+  // Axtarış mühərrikləri bunu yüksək uyğunluqla qaytarsa da monitorinq və bildirişlərə salmırıq.
+  let ownPortalNoise=false;
+  try {
+    const host=new URL(String(item.url||'')).hostname.replace(/^www\./i,'').toLowerCase();
+    const path=new URL(String(item.url||'')).pathname.replace(/\/+$/,'') || '/';
+    const districtAscii=normalizeForMatch(String(org.districts?.name||'')).replace(/\s+/g,'');
+    const shortAscii=normalizeForMatch(String(org.short_name||'')).replace(/\s+/g,'');
+    const ownHost=(districtAscii && host.includes(districtAscii) && /smsii/i.test(host)) || (shortAscii && host.replace(/[^a-z0-9]/g,'').includes(shortAscii.replace(/[^a-z0-9]/g,'')));
+    const navText=normalizeForMatch(`${item.title||''} ${item.text||''}`);
+    ownPortalNoise=Boolean(ownHost && (path==='/' || path==='/index.html' || /resmi portal|butun xeberler|haqqimizda|struktur|rehberlik|elektron muraciet/.test(navText)));
+  } catch {}
   const kind=String(raw.kind||'');
   const isComment=kind.includes('comment');
   const trustedParentComment = isComment && raw.parent_is_relevant === true;
@@ -2028,11 +2040,11 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0 && (!villageHits.length || ambiguousVillageHit);
 
   const districtWide = org.show_district_wide !== false;
-  const accepted = trustedParentComment || (!negativeOnly && !foreignHit && (
+  const accepted = !ownPortalNoise && (trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
     (districtWide && locationHit && positiveTopic) ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
-  ));
+  )));
 
   const matches=[...new Set([
     ...directMatches,
