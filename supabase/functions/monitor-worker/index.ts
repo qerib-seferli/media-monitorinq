@@ -86,8 +86,22 @@ Deno.serve(async (req) => {
         name:String(org.name || ''),
         short_name:String(org.short_name || ''),
         district:String(org.districts?.name || ''),
-        google_queries:buildGoogleNewsQueries(org, [], []),
-        gdelt_queries:buildGdeltQueries(org, [], [], 2)
+        // GitHub gateway bir run-da bütün sorğuları eyni anda vurmayacaq. Burada geniş
+        // namizəd bankı veririk, gateway identity + rotasiya olunan mövzu sorğularını
+        // seçir. Bu həm 429/503 riskini azaldır, həm də hər 5 dəqiqə fərqli mövzunu
+        // yoxlayaraq suvarma/meliorasiya əhatəsini mərhələli şəkildə genişləndirir.
+        google_queries:buildGoogleNewsGatewayQueries(org),
+        gdelt_queries:buildGdeltGatewayQueries(org),
+        rss_sources:(Array.isArray(org.sources)?org.sources:[])
+          .filter((source:any)=>source?.is_active !== false)
+          .map((source:any)=>({
+            id:String(source?.id || ''),
+            platform:String(source?.platform || ''),
+            url:String(source?.url || ''),
+            name:String(source?.name || source?.platform || source?.url || '')
+          }))
+          .filter((source:any)=>Boolean(source.url) && !/youtube\.com|youtu\.be/i.test(source.url))
+          .slice(0,30)
       }));
       return json({ok:true,run_id:runId,mode:'news_plan',organizations},200);
     }
@@ -581,6 +595,57 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
   }
   return out;
 }
+function buildGoogleNewsGatewayQueries(org:any):string[] {
+  const district = String(org.districts?.name || '').trim();
+  const shortName = String(org.short_name || '').trim();
+  const fullName = String(org.name || '').trim();
+  const candidates:string[] = [];
+
+  if (shortName) candidates.push(`"${shortName}"`);
+  if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
+
+  if (district) {
+    // Google News RSS üçün qısa, sadə sorğular kompleks mötərizə/OR bloklarından
+    // daha stabil nəticə verir. Gateway bunları rotasiya ilə işlədəcək.
+    const topicQueries = [
+      'suvarma','meliorasiya','suvarma suyu','su problemi','su gəlmir','su çatışmazlığı',
+      'kanal','arx','drenaj','kollektor','subartezian','artezian','su quyusu',
+      'nasos stansiyası','əkin sahəsi su','fermer su','lildən təmizlənir','şoranlaşma'
+    ];
+    for (const topic of topicQueries) candidates.push(`"${district}" "${topic}"`);
+    for (const alias of districtAliases(district).slice(1,2)) {
+      candidates.push(`"${alias}" suvarma`);
+      candidates.push(`"${alias}" meliorasiya`);
+    }
+  }
+
+  const seen=new Set<string>();
+  return candidates.filter(q=>{
+    const key=normalizeForMatch(q);
+    if(!key || seen.has(key)) return false;
+    seen.add(key); return true;
+  }).slice(0,28);
+}
+
+function buildGdeltGatewayQueries(org:any):string[] {
+  const district = String(org.districts?.name || '').trim();
+  const shortName = String(org.short_name || '').trim();
+  const fullName = String(org.name || '').trim();
+  const candidates:string[] = [];
+  if (district) {
+    candidates.push(`"${district}" (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj)`);
+    candidates.push(`"${district}" ("su gəlmir" OR "su çatışmazlığı" OR fermer)`);
+  }
+  if (shortName) candidates.push(`"${shortName}"`);
+  if (fullName && normalizeForMatch(fullName)!==normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
+  const seen=new Set<string>();
+  return candidates.filter(q=>{
+    const key=normalizeForMatch(q);
+    if(!key || seen.has(key)) return false;
+    seen.add(key); return true;
+  }).slice(0,6);
+}
+
 function buildGdeltQueries(org:any, keywords:string[], villages:string[] = [], max=1):string[] {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();
