@@ -118,7 +118,7 @@ Deno.serve(async (req) => {
           try {
             const rssItems = await googleNewsItems(org, keywords, villageNames);
             let newsCount = 0;
-            for (const item of rssItems.slice(0,20)) {
+            for (const item of rssItems.slice(0,60)) {
               if (Date.now() >= stopAt) break;
               newsCount += await safeSave(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords,villageNames,errors,org.short_name,'Google News');
             }
@@ -135,7 +135,7 @@ Deno.serve(async (req) => {
           try {
             const webItems = await gdeltNewsItems(org, keywords, villageNames);
             let webCount = 0;
-            for (const item of webItems.slice(0,30)) {
+            for (const item of webItems.slice(0,80)) {
               if (Date.now() >= stopAt) break;
               webCount += await safeSave(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords,villageNames,errors,org.short_name,'GDELT');
             }
@@ -278,7 +278,7 @@ Deno.serve(async (req) => {
             const xml = await fetchTextWithRetry(sourceUrl, {headers:{'user-agent':'Mozilla/5.0 MediaMonitorinq/4.0','accept':'application/rss+xml, application/xml, text/xml, */*'}}, 1);
             const items = parseRss(xml);
             let count = 0;
-            for (const item of items.slice(0,20)) {
+            for (const item of items.slice(0,50)) {
               if (Date.now() >= stopAt) break;
               count += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,sourceUrl);
             }
@@ -287,7 +287,7 @@ Deno.serve(async (req) => {
           } else {
             const web = await webSourceItems(source?.url, source?.name || source?.url);
             let count = 0;
-            for (const item of web.items.slice(0,20)) {
+            for (const item of web.items.slice(0,50)) {
               if (Date.now() >= stopAt) break;
               count += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,sourceLabel);
             }
@@ -368,7 +368,7 @@ async function safeSourceTouch(admin:any,sourceId:any,errors:DiagnosticError[],o
 }
 
 async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<Item[]> {
-  const queries = buildDiscoveryQueries(org, keywords, villages, 3);
+  const queries = buildGoogleNewsQueries(org, keywords, villages);
   const jobs = queries.map(async (query)=>{
     const googleUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=az&gl=AZ&ceid=AZ:az`;
     try {
@@ -393,13 +393,13 @@ async function googleNewsItems(org:any, keywords:string[], villages:string[]=[])
 }
 
 async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<Item[]> {
-  const queries = buildDiscoveryQueries(org, keywords, villages, 3);
+  const queries = buildDiscoveryQueries(org, keywords, villages, 6);
   const jobs = queries.map(async (query)=>{
     try {
       const endpoint = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
       endpoint.searchParams.set('query', query);
       endpoint.searchParams.set('mode', 'ArtList');
-      endpoint.searchParams.set('maxrecords', '20');
+      endpoint.searchParams.set('maxrecords', '50');
       endpoint.searchParams.set('format', 'json');
       endpoint.searchParams.set('sort', 'DateDesc');
       endpoint.searchParams.set('timespan', '3months');
@@ -494,6 +494,44 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
   }
   return out;
 }
+function buildGoogleNewsQueries(org:any, keywords:string[], villages:string[]=[]):string[] {
+  const live = buildDiscoveryQueries(org, keywords, villages, 6);
+  const district = String(org.districts?.name || '').trim();
+  const shortName = String(org.short_name || '').trim();
+  const fullName = String(org.name || '').trim();
+  const now = new Date();
+  const firstYear = 2000;
+  const currentYear = now.getUTCFullYear();
+  const yearCount = Math.max(1, currentYear - firstYear + 1);
+
+  // Hər 5 dəqiqəlik run başqa tarixi ili yoxlayır. Beləliklə canlı nəticələri
+  // itirmədən Google News indeksində mövcud olan köhnə materiallar da zamanla
+  // 2000-ci ildən bu günə qədər backfill olunur. API açarı tələb etmir.
+  const slot = Math.floor(Date.now() / (5 * 60 * 1000));
+  const archiveYear = firstYear + (slot % yearCount);
+  const after = `${archiveYear}-01-01`;
+  const before = `${archiveYear + 1}-01-01`;
+  const archive:string[] = [];
+
+  if (shortName) archive.push(`\"${shortName}\" after:${after} before:${before}`);
+  else if (fullName) archive.push(`\"${fullName}\" after:${after} before:${before}`);
+
+  if (district) {
+    const topics = ['suvarma','meliorasiya','su təsərrüfatı','su kanalı','subartezian','fermer su','su çatışmazlığı'];
+    const topic = topics[slot % topics.length];
+    archive.push(`\"${district}\" ${topic} after:${after} before:${before}`);
+  }
+
+  const out:string[]=[];
+  const seen=new Set<string>();
+  for (const q of [...live,...archive]) {
+    const key=normalizeForMatch(q);
+    if(!key || seen.has(key)) continue;
+    seen.add(key); out.push(q);
+  }
+  return out.slice(0,8);
+}
+
 function dedupeItems(items:Item[]):Item[] {
   const seen = new Set<string>();
   return items.filter(item=>{
