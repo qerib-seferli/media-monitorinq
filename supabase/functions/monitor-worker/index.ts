@@ -112,39 +112,41 @@ Deno.serve(async (req) => {
       }
 
       if (!options.youtube_backfill && !options.quick_youtube_comments) {
-        if (timeLeft(stopAt) > 16000) {
+        // Xəbər lane-ləri paralel işləyir ki, bir xarici servis ləngiyəndə bütün run büdcəsini yeməsin.
+        if (timeLeft(stopAt) > 10000) {
+          checked += 2;
+          const [rssSettled, webSettled] = await Promise.allSettled([
+            googleNewsItems(org, keywords, villageNames),
+            gdeltNewsItems(org, keywords, villageNames)
+          ]);
+
           currentStage = 'google-news';
-          checked++;
-          try {
-            const rssBatch = await googleNewsItems(org, keywords, villageNames);
+          if (rssSettled.status === 'fulfilled') {
+            const rssBatch = rssSettled.value;
             const rssItems = rssBatch.items;
             let newsCount = 0;
             for (const item of rssItems.slice(0,80)) {
-              if (Date.now() >= stopAt) break;
+              if (timeLeft(stopAt) < 1500) break;
               newsCount += await safeSave(admin,org,{platform:'Google News',url:'https://news.google.com/'},item,lowerKeywords,villageNames,errors,org.short_name,'Google News');
             }
             inserted += newsCount;
-            details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, query_count:rssBatch.queries.length, query_failures:rssBatch.failures.length, ...((options.debug || rssItems.length===0) ? { queries:rssBatch.queries, fetch_errors:rssBatch.failures.slice(0,6), sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 8) } : {}) });
-          } catch (e) { fail(currentStage,e,org.short_name,'Google News RSS'); }
-        } else if (options.debug) {
-          details.push({organization:org.short_name,source:'Google News RSS',skipped:'time-budget'});
-        }
+            details.push({ organization:org.short_name, source:'Google News RSS', found:rssItems.length, inserted:newsCount, query_count:rssBatch.queries.length, query_failures:rssBatch.failures.length, ...((options.debug || rssItems.length===0) ? { queries:rssBatch.queries, fetch_errors:rssBatch.failures.slice(0,4), sample_results:debugSamples(rssItems, org, lowerKeywords, villageNames, 8) } : {}) });
+          } else fail(currentStage,rssSettled.reason,org.short_name,'Google News RSS');
 
-        if (timeLeft(stopAt) > 14000) {
           currentStage = 'gdelt-web-news';
-          checked++;
-          try {
-            const webBatch = await gdeltNewsItems(org, keywords, villageNames);
+          if (webSettled.status === 'fulfilled') {
+            const webBatch = webSettled.value;
             const webItems = webBatch.items;
             let webCount = 0;
             for (const item of webItems.slice(0,100)) {
-              if (Date.now() >= stopAt) break;
+              if (timeLeft(stopAt) < 1500) break;
               webCount += await safeSave(admin,org,{platform:'Web',url:'https://api.gdeltproject.org/'},item,lowerKeywords,villageNames,errors,org.short_name,'GDELT');
             }
             inserted += webCount;
-            details.push({ organization:org.short_name, source:'GDELT Web / Xəbər', found:webItems.length, inserted:webCount, query_count:webBatch.queries.length, query_failures:webBatch.failures.length, ...((options.debug || webItems.length===0) ? { queries:webBatch.queries, fetch_errors:webBatch.failures.slice(0,6), sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 10) } : {}) });
-          } catch (e) { fail(currentStage,e,org.short_name,'GDELT'); }
+            details.push({ organization:org.short_name, source:'GDELT Web / Xəbər', found:webItems.length, inserted:webCount, query_count:webBatch.queries.length, query_failures:webBatch.failures.length, ...((options.debug || webItems.length===0) ? { queries:webBatch.queries, fetch_errors:webBatch.failures.slice(0,4), sample_results:debugSamples(webItems, org, lowerKeywords, villageNames, 10) } : {}) });
+          } else fail(currentStage,webSettled.reason,org.short_name,'GDELT');
         } else if (options.debug) {
+          details.push({organization:org.short_name,source:'Google News RSS',skipped:'time-budget'});
           details.push({organization:org.short_name,source:'GDELT Web / Xəbər',skipped:'time-budget'});
         }
       } else if (options.debug) {
@@ -371,37 +373,25 @@ async function safeSourceTouch(admin:any,sourceId:any,errors:DiagnosticError[],o
 }
 
 async function googleNewsItems(org:any, keywords:string[], villages:string[]=[]):Promise<{items:Item[];queries:string[];failures:any[]}> {
-  // Google News RSS eyni IP-dən paralel sorğulara tez 503 qaytara bilir.
-  // Buna görə yalnız yüksək siqnallı sorğuları ardıcıl və qısa fasilə ilə işləyirik.
-  const queries = buildGoogleNewsQueries(org, keywords, villages).slice(0,2);
+  const bank = buildGoogleNewsQueries(org, keywords, villages);
+  const queries = bank.length ? [bank[Math.floor(Date.now()/60000) % bank.length]] : [];
   const failures:any[] = [];
   const items:Item[] = [];
-
-  for (let i=0; i<queries.length; i++) {
-    const query = queries[i];
+  for (const query of queries) {
     const googleUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=az&gl=AZ&ceid=AZ:az`;
     try {
       const xml = await fetchTextWithRetry(googleUrl, {
         headers:{
           'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
           'accept':'application/rss+xml,application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
-          'accept-language':'az-AZ,az;q=0.9,en;q=0.7',
-          'cache-control':'no-cache'
+          'accept-language':'az-AZ,az;q=0.9,en;q=0.7'
         }
-      },2,9000);
-      items.push(...parseRss(xml).map(item=>({
-        ...item,
-        raw:{...((item.raw as any) || {}), kind:'google_news', discovery_query:query}
-      })));
+      },1,5500);
+      items.push(...parseRss(xml).map(item=>({...item,raw:{...((item.raw as any)||{}),kind:'google_news',discovery_query:query}})));
     } catch (e) {
-      const info = errorInfo(e);
-      failures.push({query,...info});
-      console.error('google-news-query', query, info);
+      const info=errorInfo(e); failures.push({query,...info}); console.error('google-news-query',query,info);
     }
-    // Google-un anti-burst limitinə düşməmək üçün sorğuları ardıcıl saxla.
-    if (i < queries.length - 1) await sleep(350);
   }
-
   return {items:dedupeItems(items),queries,failures};
 }
 
@@ -427,7 +417,7 @@ async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):
           'user-agent':'Mozilla/5.0 (compatible; MediaMonitorinq/5.3; +public-news-monitoring)',
           'accept':'application/json,text/plain;q=0.9,*/*;q=0.8'
         }
-      },2,11000);
+      },1,7500);
       for (const article of data?.articles || []) {
         const url = String(article?.url || '').trim();
         const title = String(article?.title || '').trim();
