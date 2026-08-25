@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
           district:String(org.districts?.name || ''),
           google_queries:buildGoogleNewsGatewayQueries(org),
           gdelt_queries:buildGdeltGatewayQueries(org),
-          keyword_queries:buildKeywordGatewayQueries(org, positiveKeywords, villageNames, 6000),
+          keyword_queries:buildKeywordGatewayQueries(org, positiveKeywords, villageNames, 600),
           keyword_count:positiveKeywords.length,
           rss_sources:(Array.isArray(org.sources)?org.sources:[])
             .filter((source:any)=>source?.is_active !== false)
@@ -803,10 +803,16 @@ function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[
   // Bank minlərlə sətr ola bilər. Hər 15 dəqiqə fərqli hissədən başlayırıq; gateway
   // shard-ları da bu bankı bölür. Beləliklə eyni 2-3 sorğuya ilişib qalmadan bankın
   // hamısı zamanla axtarışa daxil olur.
-  // Gateway bütün aktiv bankı alır; 5 GitHub shard hər 15 dəqiqədə
-  // bankın ayrı hissəsini seçir. Beləliklə minlərlə sözün hamısı dövr edir.
-  const windowSize = Math.min(cleaned.length, Math.max(40, Math.min(6000, max)));
-  const rotated:string[] = cleaned.slice(0, windowSize);
+  // Supabase news_plan cavabını minlərlə sətirlə şişirtmirik.
+  // Hər 15 dəqiqədə bankdan növbəti 600-lük pəncərə seçilir; 5 GitHub shard
+  // həmin pəncərənin ayrı hissələrini işləyir. Beləliklə 5897 sözün hamısı
+  // mərhələli dövr edir, amma plan sorğusu timeout vermir.
+  const windowSize = Math.min(cleaned.length, Math.max(40, Math.min(600, max)));
+  const bucket = Math.floor(Date.now() / (15 * 60 * 1000));
+  const stride = Math.max(120, Math.floor(windowSize * 0.8));
+  const start = cleaned.length ? (bucket * stride) % cleaned.length : 0;
+  const rotated:string[] = [];
+  for (let i=0; i<windowSize; i++) rotated.push(cleaned[(start+i)%cleaned.length]);
 
   const queries:string[] = [];
   const querySeen = new Set<string>();

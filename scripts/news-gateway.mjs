@@ -69,9 +69,9 @@ async function fetchText(url, {timeoutMs = 15000, retries = 1, minGapMs = 1200} 
   throw lastError || new Error('fetch failed');
 }
 
-async function callMonitor(body) {
+async function callMonitor(body, timeoutMs = 35000) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 35000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(MONITOR_URL, {
       method: 'POST',
@@ -640,7 +640,15 @@ function logIngestSamples(orgName, label, result) {
   for (const err of errs.slice(0,3)) console.log(`[${orgName}] ${label} ingest xəta: ${err?.message||JSON.stringify(err)}`);
 }
 
-const plan = await callMonitor({mode:'news_plan'});
+let plan;
+try {
+  plan = await callMonitor({mode:'news_plan'}, 60000);
+} catch (e) {
+  if (e?.name === 'AbortError') {
+    throw new Error('news_plan timeout: Supabase plan cavabı 60 saniyəni keçdi');
+  }
+  throw e;
+}
 if (!plan?.ok || !Array.isArray(plan.organizations)) throw new Error(`News plan alınmadı: ${JSON.stringify(plan).slice(0,800)}`);
 
 let totalReceived=0, totalAccepted=0, totalRejected=0, totalInserted=0, totalFailures=0;
