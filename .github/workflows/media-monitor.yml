@@ -3,7 +3,7 @@ name: Media Monitorinq Worker
 on:
   schedule:
     - cron: '*/5 * * * *'
-    - cron: '17 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -78,7 +78,7 @@ jobs:
         run: node scripts/news-gateway.mjs
 
   web-archive-discovery:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
@@ -110,7 +110,7 @@ jobs:
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_SOURCE_BATCH: '40'
           NEWS_DOMAIN_SEARCH_BATCH: '10'
-          NEWS_BROAD_QUERY_LIMIT: '2'
+          NEWS_BROAD_QUERY_LIMIT: '6'
           NEWS_MAX_INGEST_ITEMS: '140'
           NEWS_MAX_ENRICH_ITEMS: '8'
           NEWS_MAX_SCREENSHOTS: '3'
