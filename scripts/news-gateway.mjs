@@ -22,6 +22,8 @@ const FAST_FEED_LIMIT = Math.max(4, Math.min(20, Number(process.env.NEWS_FAST_FE
 const MAX_INGEST_ITEMS = Math.max(20, Math.min(180, Number(process.env.NEWS_MAX_INGEST_ITEMS || (DIRECT_ONLY ? 90 : 120))));
 const MAX_ENRICH_ITEMS = Math.max(2, Math.min(24, Number(process.env.NEWS_MAX_ENRICH_ITEMS || (DIRECT_ONLY ? 8 : 12))));
 const MAX_SCREENSHOTS = Math.max(1, Math.min(12, Number(process.env.NEWS_MAX_SCREENSHOTS || (DIRECT_ONLY ? 3 : 5))));
+const SOURCE_SHARD_COUNT = Math.max(1, Math.min(20, Number(process.env.NEWS_SOURCE_SHARD_COUNT || 1)));
+const SOURCE_SHARD_INDEX = Math.max(0, Math.min(SOURCE_SHARD_COUNT - 1, Number(process.env.NEWS_SOURCE_SHARD_INDEX || 0)));
 
 async function politeWait(minGapMs = 1200) {
   const elapsed = Date.now() - lastExternalFetchAt;
@@ -232,9 +234,6 @@ function rotate(items, count, salt='') {
 
 function rotateSources(items, count, salt='') {
   if (!Array.isArray(items) || !items.length || count <= 0) return [];
-  // Sürətli watch job-u eyni 5 dəqiqəlik run daxilində 3 dəfə işləyir.
-  // 5 dəqiqəlik bucket istifadə etsəydi eyni 8 saytı 3 dəfə yoxlayardı.
-  // DIRECT_ONLY rejimində 45 saniyəlik bucket ilə hər dövrədə növbəti paket seçilir.
   const bucket = Math.floor(Date.now()/(DIRECT_ONLY ? 45000 : 300000));
   let hash = 0;
   for (const c of String(salt)) hash = ((hash << 5) - hash + c.charCodeAt(0)) | 0;
@@ -242,6 +241,12 @@ function rotateSources(items, count, salt='') {
   const out=[];
   for (let i=0;i<Math.min(count,items.length);i++) out.push(items[(start+i)%items.length]);
   return out;
+}
+
+function sourceShard(items=[]) {
+  const rows=[...(Array.isArray(items)?items:[])].sort((a,b)=>String(a?.url||'').localeCompare(String(b?.url||'')));
+  if (SOURCE_SHARD_COUNT <= 1) return rows;
+  return rows.filter((_,index)=>index % SOURCE_SHARD_COUNT === SOURCE_SHARD_INDEX);
 }
 
 async function googleNews(query) {
@@ -480,6 +485,18 @@ function linkItemsFromHtml(html='',base='') {
   }
   return dedupe(out).slice(0,120);
 }
+function advertisedFeedUrls(html='',base='') {
+  const out=[];
+  for (const m of String(html).matchAll(/<link\b[^>]*rel=["'][^"']*alternate[^"']*["'][^>]*>/gi)) {
+    const tagText=m[0];
+    if(!/application\/(?:rss\+xml|atom\+xml)|text\/xml/i.test(tagText)) continue;
+    const href=tagText.match(/href=["']([^"']+)["']/i)?.[1]||'';
+    const url=absoluteUrl(base,href);
+    if(url && /^https?:/i.test(url)) out.push(url);
+  }
+  return [...new Set(out)].slice(0,2);
+}
+
 function asciiToken(value='') {
   return String(value||'').toLocaleLowerCase('az-AZ')
     .replace(/ə/g,'e').replace(/ğ/g,'g').replace(/ı/g,'i').replace(/ö/g,'o').replace(/ü/g,'u').replace(/ş/g,'s').replace(/ç/g,'c')
@@ -520,20 +537,27 @@ async function directWebsite(source, org) {
     // Fast watch yalnız ana səhifəni + bir RSS ehtimalını yoxlayır. Dərin arxiv scan
     // ayrıca saatlıq job-da qalır.
     if (DIRECT_ONLY) {
+      let homepageHtml='';
       try {
-        const {html}=await fetchPage(base,{timeoutMs:3500});
+        const {html}=await fetchPage(base,{timeoutMs:3000});
+        homepageHtml=html;
         const links=linkItemsFromHtml(html,base);
         const relevant=links.filter(x=>configuredLinkIsRelevant(x,org));
-        out.push(...(relevant.length ? relevant.slice(0,FAST_LINK_LIMIT) : links.slice(0,Math.min(4,FAST_LINK_LIMIT))));
+        out.push(...(relevant.length ? relevant.slice(0,FAST_LINK_LIMIT) : links.slice(0,Math.min(3,FAST_LINK_LIMIT))));
       } catch {}
-      for(const feedPath of ['/feed/','/rss/']) {
+
+      // RSS ayrıca sources sətrində saxlanmasa da problem deyil: işlək saytların çoxu
+      // ana səhifədə rel=alternate ilə real feed ünvanını elan edir. Sürətli watch onu
+      // avtomatik tapıb oxuyur. Elan edilməyibsə yalnız bir ucuz /feed/ fallback sınanır.
+      const feeds=homepageHtml ? advertisedFeedUrls(homepageHtml,base) : [];
+      if(!feeds.length) feeds.push(`${origin}/feed/`);
+      for(const feedUrl of feeds.slice(0,1)) {
         try {
-          const xml=await fetchText(`${origin}${feedPath}`,{timeoutMs:3000,retries:0,minGapMs:120});
+          const xml=await fetchText(feedUrl,{timeoutMs:2500,retries:0,minGapMs:80});
           const items=parseFeed(xml,'configured_feed',orgName,source.name||source.platform||base);
           if(items.length){
             const relevant=items.filter(x=>configuredLinkIsRelevant(x,org));
-            out.push(...(relevant.length ? relevant.slice(0,FAST_FEED_LIMIT) : items.slice(0,Math.min(4,FAST_FEED_LIMIT))));
-            break;
+            out.push(...(relevant.length ? relevant.slice(0,FAST_FEED_LIMIT) : items.slice(0,Math.min(3,FAST_FEED_LIMIT))));
           }
         } catch {}
       }
@@ -642,7 +666,7 @@ for (const org of plan.organizations) {
     if(!configuredSources.some(x=>domainFromUrl(x?.url||'')===domain)) configuredSources.push({platform:'Web',url:`https://${domain}/`,name:`${domain} birbaşa sayt`});
   }
 
-  if(!DIRECT_ONLY) for (const q of googleQueries) {
+  if(!DIRECT_ONLY && SOURCE_SHARD_INDEX===0) for (const q of googleQueries) {
     try {
       const g = await googleNews(q);
       googleItems.push(...g.items);
@@ -651,7 +675,7 @@ for (const org of plan.organizations) {
       totalFailures++; console.log(`[${org.short_name}] Google News xəta (${q}):`, e?.message||e);
     }
   }
-  if(!DIRECT_ONLY) for (const q of webQueries) {
+  if(!DIRECT_ONLY && SOURCE_SHARD_INDEX===0) for (const q of webQueries) {
     try {
       webItems.push(...await bingNews(q,0));
       webItems.push(...await bingWeb(q,0));
@@ -667,9 +691,14 @@ for (const org of plan.organizations) {
   // Admin paneldə əlavə olunan yüzlərlə media mənbəsinin hamısını eyni run-da
   // açmaq həm GitHub timeout, həm də xarici sayt limitləri yaradır. Buna görə hər
   // run fərqli paket seçilir; beləcə bankdakı bütün saytlar mərhələli yoxlanılır.
-  const sourceBatch = rotateSources(configuredSources, SOURCE_BATCH_SIZE, `sources-${org.id}`);
-  console.log(`[${org.short_name}] Birbaşa mənbə paketi: ${sourceBatch.length}/${configuredSources.length}`);
-  const targetedSources=sourceBatch.slice(0,DOMAIN_SEARCH_BATCH);
+  const shardPool=sourceShard(configuredSources);
+  const sourceBatch = shardPool.length <= SOURCE_BATCH_SIZE
+    ? shardPool
+    : rotateSources(shardPool, SOURCE_BATCH_SIZE, `sources-${org.id}-shard-${SOURCE_SHARD_INDEX}`);
+  console.log(`[${org.short_name}] Birbaşa mənbə paketi: ${sourceBatch.length}/${configuredSources.length} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} (${shardPool.length} mənbə)`);
+  const targetedSources=DOMAIN_SEARCH_BATCH > 0
+    ? rotateSources(sourceBatch, DOMAIN_SEARCH_BATCH, `domain-search-${org.id}-shard-${SOURCE_SHARD_INDEX}`)
+    : [];
   for (const source of targetedSources) {
     const domain=domainFromUrl(source?.url||'');
     if(!domain || !org.district) continue;

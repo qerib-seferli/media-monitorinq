@@ -732,16 +732,6 @@ async function configureBarda() {
     if (!error) changed++;
   }
 
-  const rssUrl = 'https://news.google.com/rss/search?q=' + encodeURIComponent('"Bərdə SMSİİ" OR "Bərdə suvarma" OR "Bərdə Suvarma İdarəsi"') + '&hl=az&gl=AZ&ceid=AZ:az';
-  const rssCheck = await supabase.from('sources').select('id',{count:'exact',head:true}).eq('organization_id',org.id).ilike('url','%news.google.com/rss/%');
-  if (rssCheck.error) return toast(rssCheck.error.message,'error');
-  const hasRss = (rssCheck.count || 0) > 0;
-  if (!hasRss) {
-    const { error } = await supabase.from('sources').insert({organization_id:org.id,platform:'RSS',url:rssUrl,is_active:true});
-    if (error) return toast(error.message,'error');
-    changed++;
-  }
-
   toast(changed ? `Bərdə SMSİİ konfiqurasiyası tamamlandı: ${changed} dəyişiklik.` : 'Bərdə SMSİİ artıq düzgün konfiqurasiya olunub.', 'success');
   await refresh();
 }
@@ -752,8 +742,13 @@ function renderBardaStatus() {
   const org = orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
   if (!org) { el.innerHTML = '<span class="badge danger">Bərdə SMSİİ tapılmadı</span>'; return; }
   const hasDirector = positions.some(p => p.name === 'İdarə rəisi' && (!p.organization_id || p.organization_id === org.id));
-  const hasRss = sourceIndex.some(s => s.organization_id===org.id && String(s.platform||'').toLowerCase().includes('rss'));
-  const bits = [statusBadge(org.service_status), hasDirector ? '<span class="badge ok">Vəzifələr hazırdır</span>' : '<span class="badge warn">Vəzifə tamamlanmalıdır</span>', hasRss ? '<span class="badge ok">Real RSS hazırdır</span>' : '<span class="badge warn">RSS əlavə edilməlidir</span>'];
+  const webSources = sourceIndex.filter(s => s.organization_id===org.id && ['web','rss'].some(kind=>String(s.platform||'').toLowerCase().includes(kind)) && s.is_active !== false);
+  const bits = [
+    statusBadge(org.service_status),
+    hasDirector ? '<span class="badge ok">Vəzifələr hazırdır</span>' : '<span class="badge warn">Vəzifə tamamlanmalıdır</span>',
+    webSources.length ? `<span class="badge ok">Web mənbələri hazırdır (${webSources.length})</span>` : '<span class="badge warn">Web mənbəsi əlavə edilməlidir</span>',
+    webSources.length ? '<span class="badge info">RSS avtomatik aşkarlanır</span>' : ''
+  ].filter(Boolean);
   el.innerHTML = bits.join(' ');
 }
 
