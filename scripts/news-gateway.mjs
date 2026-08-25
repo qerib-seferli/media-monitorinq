@@ -694,16 +694,32 @@ for (const org of plan.organizations) {
     `\"${districtName}\" kanal`, `\"${districtName}\" subartezian`, `\"${districtName}\" artezian`,
     `\"${districtName}\" fermer su`, `\"${districtName}\" əkin su`, `\"${districtName}\" su təchizatı`
   ] : [];
-  const keywordQueries = shardQueryWindow(keywordBank, Math.max(BROAD_QUERY_LIMIT, 6), SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
-  // Geniş Bing/Web axtarışına kənd və ya dar açar sözü təkbaşına buraxmaq müxtəlif
-  // ölkələrdən əlaqəsiz nəticələr gətirirdi. Geniş discovery yalnız rayon+su mövzusu
-  // ilə işləyir; 5897-lik açar söz bankı aşağıda hər konfiqurasiya olunmuş domenə
-  // site:domain şəklində bağlanaraq istifadə olunur.
-  const fallbackQueries = [...new Set([...topicCore,...rotate(discoveryCore,2,`core-${org.id}`),...azDomainQueries.slice(0,1)])];
-  const webQueries = DIRECT_ONLY ? [] : fallbackQueries.slice(0,Math.min(2,BROAD_QUERY_LIMIT));
-  // Google News ayrıca istifadəçi platforması deyil, discovery provider-dir. Burada
-  // yalnız iki yüksək siqnallı sorğu saxlayırıq və tapılan nəticələri Web axınına qatırıq.
-  const googleQueries=[...new Set([...topicCore.slice(0,1),...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,2);
+  const keywordQueries = shardQueryWindow(keywordBank, Math.max(BROAD_QUERY_LIMIT, 8), SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
+  // Əvvəlki variantda bütün 5 shard faktiki olaraq eyni 1-2 geniş sorğunu işlədirdi.
+  // Buna görə eyni köhnə 5 xəbər təkrar tapılır, yeni material tapılsa belə çox vaxt
+  // dublikat kimi insert olunmurdu. İndi hər shard rayon+mövzu və açar-söz bankının
+  // fərqli hissəsini işləyir. Beləliklə 5 paralel job real olaraq 5 ayrı discovery
+  // pəncərəsi olur və arxiv mərhələli şəkildə genişlənir.
+  const shardDiscoveryPool = [...new Set([
+    ...discoveryCore,
+    ...topicCore,
+    ...rotatingQueries,
+    ...keywordQueries,
+    ...azDomainQueries,
+    ...directDomainQueries
+  ].filter(Boolean))];
+  const webQueries = DIRECT_ONLY ? [] : shardQueryWindow(
+    shardDiscoveryPool,
+    Math.max(1,BROAD_QUERY_LIMIT),
+    SOURCE_SHARD_INDEX,
+    SOURCE_SHARD_COUNT
+  ).slice(0,Math.max(1,BROAD_QUERY_LIMIT));
+  // Google News də shard üzrə fərqli sorğular görür. Əsas rayon sorğusu qorunur,
+  // ikinci/üçüncü sorğular isə həmin shard-ın açar söz pəncərəsindən seçilir.
+  const googleQueries = DIRECT_ONLY ? [] : [...new Set([
+    ...(broadDistrict.length ? broadDistrict : topicCore.slice(0,1)),
+    ...shardQueryWindow([...rotatingQueries,...keywordQueries], 3, SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT)
+  ].filter(Boolean))].slice(0,4);
   console.log(`[${org.short_name}] Açar söz bankı: ${Number(org.keyword_count||keywordBank.length)} aktiv | bu shard: ${keywordQueries.length} sorğu`);
   console.log(`[${org.short_name}] Web discovery sorğuları: ${webQueries.join(' || ')}`);
   console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
@@ -729,8 +745,8 @@ for (const org of plan.organizations) {
 
   // Arxiv discovery aktiv açar söz bankının shard-a düşən frazalarını da Google News-də yoxlayır.
   // Yalnız admin paneldə konfiqurasiya olunmuş media domenlərindən gələn nəticələr saxlanılır.
-  const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,6);
-  const allGoogleQueries=[...new Set([...googleQueries,...keywordGoogleQueries])];
+  const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,8);
+  const allGoogleQueries=[...new Set([...googleQueries,...keywordGoogleQueries])].slice(0,10);
   if(!DIRECT_ONLY) for (const q of allGoogleQueries) {
     try {
       const g = await googleNews(q);
@@ -742,11 +758,12 @@ for (const org of plan.organizations) {
   }
   if(!DIRECT_ONLY) for (const q of webQueries) {
     try {
-      broadWebItems.push(...keepConfiguredDomainItems(await bingNews(q,0)));
-      broadWebItems.push(...keepConfiguredDomainItems(await bingWeb(q,0)));
-      if (webQueries.indexOf(q) < 2) {
-        broadWebItems.push(...keepConfiguredDomainItems(await bingNews(q,1)));
-        broadWebItems.push(...keepConfiguredDomainItems(await bingWeb(q,1)));
+      // Arxiv run-da ilk səhifə ilə kifayətlənmək eyni populyar nəticələrin təkrar
+      // düşməsinə səbəb olurdu. Hər shard fərqli sorğu işlədiyi üçün 3 səhifəyə qədər
+      // oxumaq artıq həm təhlükəsizdir, həm də köhnə materialları tapma şansını artırır.
+      for (let page=0; page<3; page++) {
+        broadWebItems.push(...keepConfiguredDomainItems(await bingNews(q,page)));
+        broadWebItems.push(...keepConfiguredDomainItems(await bingWeb(q,page)));
       }
     } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
   }
@@ -756,7 +773,10 @@ for (const org of plan.organizations) {
     ? shardPool
     : rotateSources(shardPool, SOURCE_BATCH_SIZE, `sources-${org.id}-shard-${SOURCE_SHARD_INDEX}`);
   console.log(`[${org.short_name}] Birbaşa mənbə paketi: ${sourceBatch.length}/${configuredSources.length} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} (${shardPool.length} mənbə)`);
-  const targetedSources=DOMAIN_SEARCH_BATCH > 0
+  // Fast-watch ana səhifə + avtomatik RSS ilə canlı dəyişiklikləri tutur. Orada
+  // ayrıca Bing site:domain axtarışı həm vaxt aparır, həm də çox vaxt exact=0 qaytarır.
+  // Domen axtarışı yalnız arxiv job-da işləyir.
+  const targetedSources=!DIRECT_ONLY && DOMAIN_SEARCH_BATCH > 0
     ? (sourceBatch.length <= DOMAIN_SEARCH_BATCH ? sourceBatch : rotateSources(sourceBatch, DOMAIN_SEARCH_BATCH, `domain-search-${org.id}-shard-${SOURCE_SHARD_INDEX}`))
     : [];
   for (const source of targetedSources) {
