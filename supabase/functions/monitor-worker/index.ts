@@ -90,31 +90,52 @@ Deno.serve(async (req) => {
     // mövcud eyni filtr/saxlama məntiqi ilə qəbul edir. Beləliklə tenant məntiqi və
     // aidiyyət filtri iki yerdə təkrarlanmır.
     if (options.mode === 'news_plan') {
-      const organizations = orgs.map((org:any)=>({
-        id:String(org.id),
-        name:String(org.name || ''),
-        short_name:String(org.short_name || ''),
-        district:String(org.districts?.name || ''),
-        // GitHub gateway bir run-da bütün sorğuları eyni anda vurmayacaq. Burada geniş
-        // namizəd bankı veririk, gateway identity + rotasiya olunan mövzu sorğularını
-        // seçir. Bu həm 429/503 riskini azaldır, həm də hər 5 dəqiqə fərqli mövzunu
-        // yoxlayaraq suvarma/meliorasiya əhatəsini mərhələli şəkildə genişləndirir.
-        google_queries:buildGoogleNewsGatewayQueries(org),
-        gdelt_queries:buildGdeltGatewayQueries(org),
-        rss_sources:(Array.isArray(org.sources)?org.sources:[])
-          .filter((source:any)=>source?.is_active !== false)
-          .map((source:any)=>({
-            id:String(source?.id || ''),
-            platform:String(source?.platform || ''),
-            url:String(source?.url || ''),
-            name:String(source?.name || source?.platform || source?.url || '')
-          }))
-          .filter((source:any)=>Boolean(source.url) && !/youtube\.com|youtu\.be/i.test(source.url))
-          // Media portal bankı yüzlərlə mənbə ola bilər. Gateway özü onları
-          // rotasiya ilə kiçik paketlərdə yoxlayır; burada ilk 30 mənbə ilə
-          // kəsmək qalan saytların heç vaxt monitorinqə düşməsinə səbəb olurdu.
-          .slice(0,1000)
-      }));
+      const organizations:any[] = [];
+      for (const org of orgs) {
+        // Web discovery artıq statik "Bərdə suvarma" sorğularına bağlı deyil.
+        // Hər təşkilatın aktiv açar söz bankını və kəndlərini ayrıca oxuyub GitHub
+        // gateway-ə rotasiya olunan axtarış bankı veririk. Beləliklə admin paneldə
+        // əlavə edilən açar sözlər növbəti discovery run-larında avtomatik işləyir.
+        const keywordRows = await fetchOrganizationKeywords(admin, String(org.id), 12000);
+        const positiveKeywords = keywordRows
+          .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
+          .map((k:any)=>String(k?.value || '').trim())
+          .filter(Boolean);
+
+        let villageNames:string[] = [];
+        if (org.district_id) {
+          const villageResult:any = await admin.from('villages')
+            .select('name')
+            .eq('district_id', org.district_id)
+            .order('name');
+          if (!villageResult?.error) {
+            villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : [])
+              .map((x:any)=>String(x?.name || '').trim())
+              .filter(Boolean);
+          }
+        }
+
+        organizations.push({
+          id:String(org.id),
+          name:String(org.name || ''),
+          short_name:String(org.short_name || ''),
+          district:String(org.districts?.name || ''),
+          google_queries:buildGoogleNewsGatewayQueries(org),
+          gdelt_queries:buildGdeltGatewayQueries(org),
+          keyword_queries:buildKeywordGatewayQueries(org, positiveKeywords, villageNames, 180),
+          keyword_count:positiveKeywords.length,
+          rss_sources:(Array.isArray(org.sources)?org.sources:[])
+            .filter((source:any)=>source?.is_active !== false)
+            .map((source:any)=>({
+              id:String(source?.id || ''),
+              platform:String(source?.platform || ''),
+              url:String(source?.url || ''),
+              name:String(source?.name || source?.platform || source?.url || '')
+            }))
+            .filter((source:any)=>Boolean(source.url) && !/youtube\.com|youtu\.be/i.test(source.url))
+            .slice(0,1000)
+        });
+      }
       return json({ok:true,run_id:runId,mode:'news_plan',organizations},200);
     }
 
@@ -759,6 +780,60 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
   }
   return out;
 }
+function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[] = [], max=180):string[] {
+  const district = String(org.districts?.name || '').trim();
+  const shortName = String(org.short_name || '').trim();
+  const fullName = String(org.name || '').trim();
+  const nd = normalizeForMatch(district);
+  const orgNames = [shortName, fullName].map(normalizeForMatch).filter(Boolean);
+  const villageNorms = villages.map(normalizeForMatch).filter(v=>v.length >= 4);
+
+  const cleaned:string[] = [];
+  const seen = new Set<string>();
+  for (const raw of keywords) {
+    const value = String(raw || '').replace(/\s+/g,' ').trim();
+    const nk = normalizeForMatch(value);
+    if (!nk || nk.length < 3 || nk.length > 140) continue;
+    if (value.split(/\s+/).length > 16) continue;
+    if (/^https?:\/\//i.test(value) || seen.has(nk)) continue;
+    seen.add(nk);
+    cleaned.push(value);
+  }
+
+  // Bank minlərlə sətr ola bilər. Hər 15 dəqiqə fərqli hissədən başlayırıq; gateway
+  // shard-ları da bu bankı bölür. Beləliklə eyni 2-3 sorğuya ilişib qalmadan bankın
+  // hamısı zamanla axtarışa daxil olur.
+  const windowSize = Math.max(40, Math.min(240, max));
+  const bucket = Math.floor(Date.now() / (15 * 60 * 1000));
+  const stride = Math.max(20, Math.floor(windowSize / 3));
+  const start = cleaned.length ? (bucket * stride) % cleaned.length : 0;
+  const rotated:string[] = [];
+  for (let i=0; i<Math.min(cleaned.length, windowSize); i++) rotated.push(cleaned[(start+i)%cleaned.length]);
+
+  const queries:string[] = [];
+  const querySeen = new Set<string>();
+  const add=(q:string)=>{
+    const key=normalizeForMatch(q);
+    if (!key || querySeen.has(key)) return;
+    querySeen.add(key); queries.push(q);
+  };
+
+  if (shortName) add(`"${shortName}"`);
+  if (fullName && normalizeForMatch(fullName)!==normalizeForMatch(shortName)) add(`"${fullName}"`);
+
+  for (const value of rotated) {
+    const nk = normalizeForMatch(value);
+    const alreadyScoped = (nd && nk.includes(nd)) || orgNames.some(n=>n && nk.includes(n)) || villageNorms.some(v=>nk.includes(v));
+    const safe = value.replace(/["“”]+/g,'').trim();
+    if (!safe) continue;
+    if (alreadyScoped || !district) add(`"${safe}"`);
+    else add(`"${district}" "${safe}"`);
+    if (queries.length >= windowSize) break;
+  }
+
+  return queries.slice(0,windowSize);
+}
+
 function buildGoogleNewsGatewayQueries(org:any):string[] {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();

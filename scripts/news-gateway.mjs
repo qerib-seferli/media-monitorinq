@@ -618,6 +618,19 @@ async function directFeed(source, org) {
   }
 }
 
+function shardQueryWindow(items, limit, shardIndex = 0, shardCount = 1) {
+  const rows=[...new Set((Array.isArray(items)?items:[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if (!rows.length || limit <= 0) return [];
+  const count=Math.max(1,Number(shardCount)||1);
+  const index=Math.max(0,Math.min(count-1,Number(shardIndex)||0));
+  const bucket=Math.floor(Date.now()/(15*60*1000));
+  const perCycle=Math.max(1,limit*count);
+  const base=(bucket*perCycle + index*limit) % rows.length;
+  const out=[];
+  for(let i=0;i<Math.min(limit,rows.length);i++) out.push(rows[(base+i)%rows.length]);
+  return out;
+}
+
 function logIngestSamples(orgName, label, result) {
   const samples = Array.isArray(result?.sample_results) ? result.sample_results : [];
   for (const sample of samples.slice(0,5)) {
@@ -635,6 +648,7 @@ let gdeltUsedThisRun=false;
 
 for (const org of plan.organizations) {
   const allGoogle = Array.isArray(org.google_queries) ? org.google_queries.filter(Boolean) : [];
+  const keywordBank = Array.isArray(org.keyword_queries) ? org.keyword_queries.filter(Boolean) : [];
   // Planın ilk 3 sorğusu həmişəlik əsas discovery sorğularıdır:
   // 1) rayonun özü (geniş discovery), 2) rayon + suvarma, 3) rayon + subartezian.
   // Qalan sorğulardan yalnız biri rotasiya olunur. Beləliklə hər manual run-da real
@@ -652,10 +666,16 @@ for (const org of plan.organizations) {
     `\"${districtName}\" kanal`, `\"${districtName}\" subartezian`, `\"${districtName}\" artezian`,
     `\"${districtName}\" fermer su`, `\"${districtName}\" əkin su`, `\"${districtName}\" su təchizatı`
   ] : [];
-  const webQueries = [...new Set([...broadDistrict,...topicCore,...rotate(discoveryCore,4,`core-${org.id}`),...rotate(rotatingQueries,4,org.id),...azDomainQueries.slice(0,1)])].slice(0,BROAD_QUERY_LIMIT);
+  const keywordQueries = shardQueryWindow(keywordBank, BROAD_QUERY_LIMIT, SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
+  // Əsas Web discovery bazadakı aktiv açar sözlərdən gəlir. Statik rayon/suvarma
+  // sorğuları yalnız bank boş olduqda fallback kimi qalır. Hər shard ayrı hissəni
+  // götürdüyü üçün 5 paralel job eyni nəticələri təkrar axtarmır.
+  const fallbackQueries = [...new Set([...broadDistrict,...topicCore,...rotate(discoveryCore,4,`core-${org.id}`),...rotate(rotatingQueries,4,org.id),...azDomainQueries.slice(0,1)])];
+  const webQueries = (keywordQueries.length ? keywordQueries : fallbackQueries).slice(0,BROAD_QUERY_LIMIT);
   // Google News ayrıca istifadəçi platforması deyil, discovery provider-dir. Burada
   // yalnız iki yüksək siqnallı sorğu saxlayırıq və tapılan nəticələri Web axınına qatırıq.
   const googleQueries=[...new Set([...topicCore.slice(0,1),...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,2);
+  console.log(`[${org.short_name}] Açar söz bankı: ${Number(org.keyword_count||keywordBank.length)} aktiv | bu shard: ${keywordQueries.length} sorğu`);
   console.log(`[${org.short_name}] Web discovery sorğuları: ${webQueries.join(' || ')}`);
   console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
 
@@ -675,7 +695,7 @@ for (const org of plan.organizations) {
       totalFailures++; console.log(`[${org.short_name}] Google News xəta (${q}):`, e?.message||e);
     }
   }
-  if(!DIRECT_ONLY && SOURCE_SHARD_INDEX===0) for (const q of webQueries) {
+  if(!DIRECT_ONLY) for (const q of webQueries) {
     try {
       webItems.push(...await bingNews(q,0));
       webItems.push(...await bingWeb(q,0));
@@ -704,7 +724,13 @@ for (const org of plan.organizations) {
     if(!domain || !org.district) continue;
     // Ümumi xəbər portalının son 50-100 linkini oxumaq köhnə Bərdə xəbərlərini tapmır.
     // Hər seçilmiş domen üçün ayrıca axtarış tarixi arxiv səhifələrini də çıxarır.
-    const q=`site:${domain} "${org.district}" (suvarma OR meliorasiya OR subartezian OR artezian OR kanal OR "su problemi")`;
+    const sourceIndex = targetedSources.indexOf(source);
+    const keywordOffset = Math.floor(Date.now()/(15*60*1000)) * Math.max(1, targetedSources.length * SOURCE_SHARD_COUNT)
+      + SOURCE_SHARD_INDEX * Math.max(1, targetedSources.length) + Math.max(0, sourceIndex);
+    const scopedKeyword = keywordBank.length ? keywordBank[keywordOffset % keywordBank.length] : '';
+    const q=scopedKeyword
+      ? `site:${domain} ${scopedKeyword}`
+      : `site:${domain} "${org.district}" (suvarma OR meliorasiya OR subartezian OR artezian OR kanal OR "su problemi")`;
     try {
       const targeted=await bingWeb(q,0);
       webItems.push(...targeted);
