@@ -14,6 +14,9 @@ import { join } from 'node:path';
 let lastExternalFetchAt = 0;
 let gdeltBlockedUntil = 0;
 const DIRECT_ONLY = ['1','true','yes'].includes(String(process.env.NEWS_DIRECT_ONLY || '').toLowerCase());
+const SOURCE_BATCH_SIZE = Math.max(4, Math.min(40, Number(process.env.NEWS_SOURCE_BATCH || (DIRECT_ONLY ? 12 : 14))));
+const DOMAIN_SEARCH_BATCH = Math.max(0, Math.min(SOURCE_BATCH_SIZE, Number(process.env.NEWS_DOMAIN_SEARCH_BATCH || (DIRECT_ONLY ? 12 : 10))));
+const BROAD_QUERY_LIMIT = Math.max(2, Math.min(12, Number(process.env.NEWS_BROAD_QUERY_LIMIT || (DIRECT_ONLY ? 2 : 6))));
 
 async function politeWait(minGapMs = 1200) {
   const elapsed = Date.now() - lastExternalFetchAt;
@@ -141,6 +144,24 @@ function normalizeDate(value='') {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
+function unwrapSearchUrl(value='') {
+  let current=String(value||'').trim();
+  if(!current) return current;
+  try {
+    const u=new URL(current);
+    const host=u.hostname.replace(/^www\./i,'').toLowerCase();
+    // Bing RSS nəticələri tez-tez apiclick.aspx wrapper-i ilə gəlir. Stabil dedupe,
+    // düzgün original açılışı və enrich üçün daxildəki real xəbər URL-ni saxlayırıq.
+    if(host==='bing.com' || host==='www.bing.com') {
+      const raw=u.searchParams.get('url');
+      if(raw) {
+        try { current=decodeURIComponent(raw); } catch { current=raw; }
+      }
+    }
+  } catch {}
+  return current;
+}
+
 function parseFeed(xml, rawKind, discoveryQuery, provider) {
   const rssBlocks = [...String(xml).matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gi)].map(m=>m[1]);
   const atomBlocks = rssBlocks.length ? [] : [...String(xml).matchAll(/<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/gi)].map(m=>m[1]);
@@ -150,6 +171,7 @@ function parseFeed(xml, rawKind, discoveryQuery, provider) {
     const title = stripHtml(tag(block,'title'));
     let url = atom ? (attr(block,'link','href') || stripHtml(tag(block,'link'))) : stripHtml(tag(block,'link'));
     if (!url) url = stripHtml(tag(block,'guid')) || stripHtml(tag(block,'id'));
+    url = unwrapSearchUrl(url);
     const description = stripHtml(tag(block, atom ? 'summary' : 'description') || tag(block,'content'));
     const pub = stripHtml(tag(block,'pubDate') || tag(block,'published') || tag(block,'updated'));
     const source = stripHtml(tag(block,'source') || tag(block,'author'));
@@ -453,6 +475,25 @@ function linkItemsFromHtml(html='',base='') {
   }
   return dedupe(out).slice(0,120);
 }
+function asciiToken(value='') {
+  return String(value||'').toLocaleLowerCase('az-AZ')
+    .replace(/ə/g,'e').replace(/ğ/g,'g').replace(/ı/g,'i').replace(/ö/g,'o').replace(/ü/g,'u').replace(/ş/g,'s').replace(/ç/g,'c')
+    .replace(/[^a-z0-9]+/g,' ')
+    .trim();
+}
+function relevantSitemapUrl(url='', org={}) {
+  const hay=asciiToken(url);
+  const district=asciiToken(org?.district||'').replace(/\s+/g,'');
+  const districtSpaced=asciiToken(org?.district||'');
+  const locationHit=Boolean((district && hay.replace(/\s+/g,'').includes(district)) || (districtSpaced && hay.includes(districtSpaced)));
+  const topicTokens=['suvarma','meliorasiya','subartezian','artezian','drenaj','kanal','arx','su teminati','su problemi','su catismamazligi','fermer','ekin'];
+  return locationHit && topicTokens.some(t=>hay.includes(t));
+}
+function rotatingIndexes(indexes=[], count=8, salt='') {
+  const preferred=indexes.filter(x=>/news|xeber|post|article|story/i.test(String(x||'')));
+  const base=preferred.length>=count ? preferred : indexes;
+  return rotate(base,count,`sitemap-${salt}`);
+}
 async function directWebsite(source, org) {
   const base=String(source?.url||'').trim(); if(!base) return [];
   const orgName=org?.short_name||org?.name||'Təşkilat';
@@ -462,27 +503,46 @@ async function directWebsite(source, org) {
     const candidates=[`${origin}/sitemap.xml`,`${origin}/sitemap_index.xml`,`${origin}/sitemap-index.xml`];
     for (const sm of candidates) {
       try {
-        const xml=await fetchText(sm,{timeoutMs:9000,retries:0,minGapMs:700});
+        const xml=await fetchText(sm,{timeoutMs:DIRECT_ONLY?5500:8000,retries:0,minGapMs:350});
         const parsed=parseSitemap(xml);
         let urls=[...parsed.urls];
-        for(const idx of parsed.indexes.slice(0,4)){
-          try{ const nested=await fetchText(idx,{timeoutMs:8000,retries:0,minGapMs:650}); urls.push(...parseSitemap(nested).urls); }catch{}
+        // Sitemap index-lərdə yalnız ilk 4 faylı oxumaq illərlə köhnə arxivləri heç vaxt
+        // görmürdü. Hər run fərqli alt-sitemap paketi seçilir; URL-də Bərdə+su mövzusu keçən
+        // köhnə məqalələr recent sıralamasından asılı olmadan namizəd olur.
+        for(const idx of rotatingIndexes(parsed.indexes,DIRECT_ONLY?3:8,`${org?.id||''}-${origin}`)){
+          try{
+            const nested=await fetchText(idx,{timeoutMs:DIRECT_ONLY?4500:6500,retries:0,minGapMs:300});
+            urls.push(...parseSitemap(nested).urls);
+          }catch{}
         }
-        urls.sort((a,b)=>String(b.lastmod||'').localeCompare(String(a.lastmod||'')));
-        for(const row of urls.slice(0,160)) out.push({title:row.url.split('/').filter(Boolean).pop()?.replace(/[-_]+/g,' ')||row.url,text:'',url:row.url,published_at:row.lastmod||null,image:null,author:null,raw:{kind:'configured_site_sitemap',provider:source.name||'Configured Web'}});
+        const relevant=urls.filter(row=>relevantSitemapUrl(row.url,org));
+        const chosen=(relevant.length?relevant:urls)
+          .sort((a,b)=>String(b.lastmod||'').localeCompare(String(a.lastmod||'')))
+          .slice(0,relevant.length?220:50);
+        for(const row of chosen) out.push({
+          title:row.url.split('/').filter(Boolean).pop()?.replace(/[-_]+/g,' ')||row.url,
+          text:'',url:row.url,published_at:row.lastmod||null,image:null,author:null,
+          raw:{kind:'configured_site_sitemap',provider:source.name||'Configured Web'}
+        });
         if(out.length) break;
       } catch {}
     }
-    if(!out.length){
-      const {html}=await fetchPage(base,{timeoutMs:9000});
-      out.push(...linkItemsFromHtml(html,base));
-    }
+    // Ana səhifə linkləri realtime yeni xəbərlər üçün ayrıca saxlanılır.
+    try {
+      const {html}=await fetchPage(base,{timeoutMs:DIRECT_ONLY?4500:6500});
+      out.push(...linkItemsFromHtml(html,base).slice(0,60));
+    } catch {}
     for(const feedPath of ['/feed/','/feed','/rss/','/rss','/atom.xml']){
-      try{ const xml=await fetchText(`${origin}${feedPath}`,{timeoutMs:7000,retries:0,minGapMs:500}); const items=parseFeed(xml,'configured_feed',orgName,source.name||source.platform||base); if(items.length){out.push(...items);break;} }catch{}
+      try{
+        const xml=await fetchText(`${origin}${feedPath}`,{timeoutMs:DIRECT_ONLY?4000:5500,retries:0,minGapMs:250});
+        const items=parseFeed(xml,'configured_feed',orgName,source.name||source.platform||base);
+        if(items.length){out.push(...items);break;}
+      }catch{}
     }
   } catch(e){ console.log(`[${orgName}] Birbaşa sayt discovery xəta: ${base} — ${e?.message||e}`); }
   return dedupe(out);
 }
+
 async function directFeed(source, org) {
   if (!source?.url) return [];
   const orgName=org?.short_name||org?.name||'Təşkilat';
@@ -530,7 +590,7 @@ for (const org of plan.organizations) {
     `\"${districtName}\" kanal`, `\"${districtName}\" subartezian`, `\"${districtName}\" artezian`,
     `\"${districtName}\" fermer su`, `\"${districtName}\" əkin su`, `\"${districtName}\" su təchizatı`
   ] : [];
-  const webQueries = [...new Set([...broadDistrict,...topicCore,...discoveryCore,...rotate(rotatingQueries,10,org.id),...azDomainQueries,...rotate(directDomainQueries,1,`domain-${org.id}`)])].slice(0,24);
+  const webQueries = [...new Set([...broadDistrict,...topicCore,...rotate(discoveryCore,4,`core-${org.id}`),...rotate(rotatingQueries,4,org.id),...azDomainQueries.slice(0,1)])].slice(0,BROAD_QUERY_LIMIT);
   // Google News ayrıca istifadəçi platforması deyil, discovery provider-dir. Burada
   // yalnız iki yüksək siqnallı sorğu saxlayırıq və tapılan nəticələri Web axınına qatırıq.
   const googleQueries=[...new Set([...topicCore.slice(0,1),...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,2);
@@ -555,16 +615,13 @@ for (const org of plan.organizations) {
   }
   if(!DIRECT_ONLY) for (const q of webQueries) {
     try {
-      const qi=webQueries.indexOf(q);
       webItems.push(...await bingNews(q,0));
       webItems.push(...await bingWeb(q,0));
-      if (qi < 12) {
+      // İkinci səhifə yalnız ilk iki geniş sorğu üçün. Əvvəl 20+ sorğu × 3 səhifə
+      // job-u 10-15 dəqiqəyə uzadırdı və növbəti cron run-u ilə toqquşurdu.
+      if (webQueries.indexOf(q) < 2) {
         webItems.push(...await bingNews(q,1));
         webItems.push(...await bingWeb(q,1));
-      }
-      if (qi < 6) {
-        webItems.push(...await bingNews(q,2));
-        webItems.push(...await bingWeb(q,2));
       }
     } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
   }
@@ -572,8 +629,25 @@ for (const org of plan.organizations) {
   // Admin paneldə əlavə olunan yüzlərlə media mənbəsinin hamısını eyni run-da
   // açmaq həm GitHub timeout, həm də xarici sayt limitləri yaradır. Buna görə hər
   // run fərqli paket seçilir; beləcə bankdakı bütün saytlar mərhələli yoxlanılır.
-  const sourceBatch = rotateSources(configuredSources, DIRECT_ONLY ? 8 : 16, `sources-${org.id}`);
+  const sourceBatch = rotateSources(configuredSources, SOURCE_BATCH_SIZE, `sources-${org.id}`);
   console.log(`[${org.short_name}] Birbaşa mənbə paketi: ${sourceBatch.length}/${configuredSources.length}`);
+  const targetedSources=sourceBatch.slice(0,DOMAIN_SEARCH_BATCH);
+  for (const source of targetedSources) {
+    const domain=domainFromUrl(source?.url||'');
+    if(!domain || !org.district) continue;
+    // Ümumi xəbər portalının son 50-100 linkini oxumaq köhnə Bərdə xəbərlərini tapmır.
+    // Hər seçilmiş domen üçün ayrıca axtarış tarixi arxiv səhifələrini də çıxarır.
+    const q=`site:${domain} "${org.district}" (suvarma OR meliorasiya OR subartezian OR artezian OR kanal OR "su problemi")`;
+    try {
+      const targeted=await bingWeb(q,0);
+      webItems.push(...targeted);
+      // Bəzi axtarış indeksləri uzun OR sorğusuna az nəticə verir. Belə domenlərdə
+      // ikinci, daha geniş rayon+su fallback-i tarixi materialların itirilməsinin qarşısını alır.
+      if(targeted.length < 3) webItems.push(...await bingWeb(`site:${domain} "${org.district}" su`,0));
+    } catch(e) {
+      console.log(`[${org.short_name}] Domen axtarışı xəta (${domain}): ${e?.message||e}`);
+    }
+  }
   for (const source of sourceBatch) {
     const items = await directFeed(source,org);
     if (/google/i.test(`${source.platform||''} ${source.name||''} ${source.url||''}`)) googleItems.push(...items);
@@ -601,7 +675,7 @@ for (const org of plan.organizations) {
   // Google News burada yalnız kəşf mənbəyidir. Eyni xəbər Google News, Bing News,
   // Bing Web və birbaşa RSS-dən eyni anda gələ bildiyi üçün bütün discovery nəticələri
   // ingest-dən ƏVVƏL bir Web axınında birləşdirilir və başlıq+tarix/URL ilə təkrarsızlaşdırılır.
-  const unifiedWebItems=dedupe([...googleItems,...webItems]).slice(0,DIRECT_ONLY?80:420);
+  const unifiedWebItems=dedupe([...googleItems,...webItems]).slice(0,DIRECT_ONLY?320:420);
 
   const batches = [
     {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}
@@ -627,7 +701,7 @@ for (const org of plan.organizations) {
     // və əsas xəbər şəklini dəqiqləşdiririk. Beləliklə axtarış snippet-i orijinal mətn kimi saxlanmır.
     const acceptedTargets=Array.isArray(result?.accepted_targets)?result.accepted_targets:[];
     const screenshotFallback=[];
-    for (const target of acceptedTargets.slice(0,DIRECT_ONLY?20:80)) {
+    for (const target of acceptedTargets.slice(0,DIRECT_ONLY?36:80)) {
       const enriched=await enrichPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:target.image||null,author:target.author||null,raw:target.raw||{}});
       try {
         const refreshed=await callMonitor({
@@ -655,7 +729,7 @@ for (const org of plan.organizations) {
 
     // Xəbər şəkli yoxdursa arxiv screenshot saxlanılır. Hər run-da limit var; növbəti run
     // screenshot-u olmayan növbəti materialları tamamlayacaq.
-    for (const target of screenshotFallback.slice(0,DIRECT_ONLY?12:36)) {
+    for (const target of screenshotFallback.slice(0,DIRECT_ONLY?20:36)) {
       const shot=await captureScreenshot({...target,url:target.capture_url||target.url});
       if (!shot) { console.log(`[${org.short_name}] Screenshot alınmadı: ${String(target?.url||'').slice(0,120)}`); continue; }
       try {
