@@ -9,27 +9,18 @@ permissions:
   contents: read
 
 jobs:
-  monitor:
+  youtube-monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 4
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Check monitor secret
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
           if [ -z "$MONITOR_SECRET" ]; then
-            echo "MONITOR_SECRET təyin edilməyib; monitor işi buraxılır."
+            echo "MONITOR_SECRET təyin edilməyib; YouTube monitoru buraxılır."
             exit 0
           fi
-
-      - name: Web and news gateway
-        env:
-          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
-          MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
-        run: node scripts/news-gateway.mjs
 
       - name: YouTube and internal monitor worker
         env:
@@ -42,12 +33,13 @@ jobs:
             -H "x-monitor-secret: $MONITOR_SECRET" \
             -d '{"mode":"scheduled","debug":false,"quick_youtube_comments":true,"verify_existing":false}' \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
-  web-fast-watch:
+
+  web-monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 9
     concurrency:
-      group: media-monitor-web-fast-watch
-      cancel-in-progress: true
+      group: media-monitor-web
+      cancel-in-progress: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -57,19 +49,16 @@ jobs:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
           if [ -z "$MONITOR_SECRET" ]; then
-            echo "MONITOR_SECRET təyin edilməyib; sürətli web yoxlaması buraxılır."
+            echo "MONITOR_SECRET təyin edilməyib; Web monitoru buraxılır."
             exit 0
           fi
 
-      - name: Configured websites fast watch
+      - name: Web and news gateway
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
           NEWS_DIRECT_ONLY: '1'
-        run: |
-          for i in 1 2 3; do
-            echo "Sürətli web yoxlaması $i/3"
-            node scripts/news-gateway.mjs || true
-            if [ "$i" != "3" ]; then sleep 50; fi
-          done
-
+          NEWS_SOURCE_BATCH: '12'
+          NEWS_DOMAIN_SEARCH_BATCH: '12'
+          NEWS_BROAD_QUERY_LIMIT: '2'
+        run: node scripts/news-gateway.mjs
