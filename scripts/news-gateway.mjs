@@ -182,6 +182,7 @@ function parseFeed(xml, rawKind, discoveryQuery, provider) {
     const description = stripHtml(tag(block, atom ? 'summary' : 'description') || tag(block,'content'));
     const pub = stripHtml(tag(block,'pubDate') || tag(block,'published') || tag(block,'updated'));
     const source = stripHtml(tag(block,'source') || tag(block,'author'));
+    const sourceUrl = attr(block,'source','url') || '';
     const enclosure = attr(block,'enclosure','url') || attr(block,'media:content','url') || attr(block,'media:thumbnail','url') || (tag(block, atom ? 'summary' : 'description').match(/<img[^>]+src=[\"']([^\"']+)[\"']/i)?.[1] || null);
     return {
       title,
@@ -190,7 +191,7 @@ function parseFeed(xml, rawKind, discoveryQuery, provider) {
       published_at: normalizeDate(pub),
       image: enclosure,
       author: source || null,
-      raw: {kind:rawKind,provider,discovery_query:discoveryQuery}
+      raw: {kind:rawKind,provider,discovery_query:discoveryQuery,source_url:sourceUrl||null}
     };
   }).filter(x=>x.url && x.title);
 }
@@ -708,21 +709,32 @@ for (const org of plan.organizations) {
   console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
 
   const googleItems=[];
-  const webItems=[];
+  const broadWebItems=[];
+  const domainWebItems=[];
+  const directWebItems=[];
   const configuredSources=[...(Array.isArray(org.rss_sources)?org.rss_sources:[])];
   for(const domain of inferredOrgDomains(org)){
     if(!configuredSources.some(x=>domainFromUrl(x?.url||'')===domain)) configuredSources.push({platform:'Web',url:`https://${domain}/`,name:`${domain} birbaşa sayt`});
   }
   const allowedDomains=[...new Set(configuredSources.map(x=>domainFromUrl(x?.url||'')).filter(Boolean))];
+  const itemDomain=(item={})=>{
+    const direct=domainFromUrl(item?.url||'');
+    if(direct && !/^(?:news\.)?google\./i.test(direct)) return direct;
+    return domainFromUrl(item?.raw?.source_url||'');
+  };
   const keepConfiguredDomainItems=(items=[])=>dedupe((Array.isArray(items)?items:[]).filter(item=>{
-    const host=domainFromUrl(item?.url||'');
+    const host=itemDomain(item);
     return host && allowedDomains.some(domain=>host===domain || host.endsWith(`.${domain}`));
   }));
 
-  if(!DIRECT_ONLY && SOURCE_SHARD_INDEX===0) for (const q of googleQueries) {
+  // Arxiv discovery aktiv açar söz bankının shard-a düşən frazalarını da Google News-də yoxlayır.
+  // Yalnız admin paneldə konfiqurasiya olunmuş media domenlərindən gələn nəticələr saxlanılır.
+  const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,6);
+  const allGoogleQueries=[...new Set([...googleQueries,...keywordGoogleQueries])];
+  if(!DIRECT_ONLY) for (const q of allGoogleQueries) {
     try {
       const g = await googleNews(q);
-      googleItems.push(...g.items);
+      googleItems.push(...keepConfiguredDomainItems(g.items));
       if (g.errors.length) console.log(`[${org.short_name}] Google locale xətaları (${q}): ${g.errors.join(' | ')}`);
     } catch (e) {
       totalFailures++; console.log(`[${org.short_name}] Google News xəta (${q}):`, e?.message||e);
@@ -730,20 +742,15 @@ for (const org of plan.organizations) {
   }
   if(!DIRECT_ONLY) for (const q of webQueries) {
     try {
-      webItems.push(...keepConfiguredDomainItems(await bingNews(q,0)));
-      webItems.push(...keepConfiguredDomainItems(await bingWeb(q,0)));
-      // İkinci səhifə yalnız ilk iki geniş sorğu üçün. Əvvəl 20+ sorğu × 3 səhifə
-      // job-u 10-15 dəqiqəyə uzadırdı və növbəti cron run-u ilə toqquşurdu.
+      broadWebItems.push(...keepConfiguredDomainItems(await bingNews(q,0)));
+      broadWebItems.push(...keepConfiguredDomainItems(await bingWeb(q,0)));
       if (webQueries.indexOf(q) < 2) {
-        webItems.push(...keepConfiguredDomainItems(await bingNews(q,1)));
-        webItems.push(...keepConfiguredDomainItems(await bingWeb(q,1)));
+        broadWebItems.push(...keepConfiguredDomainItems(await bingNews(q,1)));
+        broadWebItems.push(...keepConfiguredDomainItems(await bingWeb(q,1)));
       }
     } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
   }
 
-  // Admin paneldə əlavə olunan yüzlərlə media mənbəsinin hamısını eyni run-da
-  // açmaq həm GitHub timeout, həm də xarici sayt limitləri yaradır. Buna görə hər
-  // run fərqli paket seçilir; beləcə bankdakı bütün saytlar mərhələli yoxlanılır.
   const shardPool=sourceShard(configuredSources);
   const sourceBatch = shardPool.length <= SOURCE_BATCH_SIZE
     ? shardPool
@@ -772,37 +779,23 @@ for (const org of plan.organizations) {
         console.log(`[${org.short_name}] Domen axtarışı xəta (${domain}): ${e?.message||e}`);
       }
     }
-    webItems.push(...dedupe(found));
+    domainWebItems.push(...dedupe(found));
   }
   for (const source of sourceBatch) {
     const domain=domainFromUrl(source?.url||'');
     const items = keepDomain(await directFeed(source,org),domain);
     if (/google/i.test(`${source.platform||''} ${source.name||''} ${source.url||''}`)) googleItems.push(...items);
-    else webItems.push(...items);
+    else directWebItems.push(...items);
   }
 
-  // GDELT shared public endpoint-i GitHub runner-lərdə 429 verə bilir. Bir run-da
-  // yalnız bir təşkilat üçün, başqa lane-lər az material verəndə ehtiyat kimi sınanır.
-  if (false && !gdeltUsedThisRun && (googleItems.length + webItems.length) < 12) {
-    const q = rotate(org.gdelt_queries || [],1,`gdelt-${org.id}`)[0];
-    if (q) {
-      gdeltUsedThisRun=true;
-      try {
-        const gd = await gdeltNews(q);
-        webItems.push(...(gd.items||[]));
-        if (gd.skipped) console.log(`[${org.short_name}] GDELT buraxıldı: ${gd.skipped}`);
-      } catch (e) {
-        totalFailures++; console.log(`[${org.short_name}] GDELT xəta:`, e?.message||e);
-      }
-    }
-  }
-
-  // Search nəticələrinin öz snippet-i bəzən çox zəif olur. İlk namizədlərin səhifə
-  // metadata-sını (og:title/description/image/datePublished) götürərək tarix və preview-ni dəqiqləşdiririk.
-  // Google News burada yalnız kəşf mənbəyidir. Eyni xəbər Google News, Bing News,
-  // Bing Web və birbaşa RSS-dən eyni anda gələ bildiyi üçün bütün discovery nəticələri
-  // ingest-dən ƏVVƏL bir Web axınında birləşdirilir və başlıq+tarix/URL ilə təkrarsızlaşdırılır.
-  const unifiedWebItems=dedupe([...googleItems,...webItems]).slice(0,MAX_INGEST_ITEMS);
+  // Birbaşa sayt/RSS/sitemap nəticələri əvvəl gəlir ki, geniş axtarış nəticələri ingest limitini doldurmasın.
+  const unifiedWebItems=dedupe([
+    ...directWebItems,
+    ...domainWebItems,
+    ...googleItems,
+    ...broadWebItems
+  ]).slice(0,MAX_INGEST_ITEMS);
+  console.log(`[${org.short_name}] Web namizədlər: direct=${directWebItems.length} domain=${domainWebItems.length} google=${googleItems.length} broad=${broadWebItems.length} unified=${unifiedWebItems.length}`);
 
   const batches = [
     {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}

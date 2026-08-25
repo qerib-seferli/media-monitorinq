@@ -22,12 +22,12 @@ function rangeIso(){
   return [start.toISOString(),end.toISOString()];
 }
 function normalizeStoryTitle(v=''){return String(v||'').toLocaleLowerCase('az-AZ').normalize('NFKD').replace(/[əƏ]/g,'e').replace(/[ıİ]/g,'i').replace(/[şŞ]/g,'s').replace(/[çÇ]/g,'c').replace(/[öÖ]/g,'o').replace(/[üÜ]/g,'u').replace(/[ğĞ]/g,'g').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();}
-function storyKey(x){const p=String(x?.source_platform||'').toLowerCase();if(p==='web'||p==='google news'){const t=normalizeStoryTitle(x?.title||'');const d=String(x?.published_at||'').slice(0,10);if(t.length>=18)return `web|${t}|${d}`;}return `id|${x?.id||x?.content_hash||x?.source_url||''}`;}
+function storyKey(x){const p=String(x?.source_platform||'').toLowerCase();if(p==='web'||p==='google news'){const t=normalizeStoryTitle(x?.title||'');const d=String(x?.published_at||x?.detected_at||'').slice(0,10);if(t.length>=18)return `web|${t}|${d}`;}return `id|${x?.id||x?.content_hash||x?.source_url||''}`;}
 function dedupeRows(data){const seen=new Set();const out=[];for(const x of data){const k=storyKey(x);if(seen.has(k))continue;seen.add(k);out.push(x);}return out;}
 async function loadBreakdown(){
   const [a,b]=rangeIso(); const out=[]; const size=1000;
   for(let page=0;page<100;page++){
-    const r=await supabase.from('mentions').select('id,title,source_url,content_hash,source_platform,priority_score,sentiment,published_at').gt('relevance_score',0).gte('published_at',a).lte('published_at',b).range(page*size,page*size+size-1);
+    const r=await supabase.from('mentions').select('id,title,source_url,content_hash,source_platform,priority_score,sentiment,published_at,detected_at').gt('relevance_score',0).or(`and(published_at.gte.${a},published_at.lte.${b}),and(published_at.is.null,detected_at.gte.${a},detected_at.lte.${b})`).order('published_at',{ascending:false,nullsFirst:false}).order('detected_at',{ascending:false}).range(page*size,page*size+size-1);
     if(r.error)throw r.error; const batch=r.data||[];out.push(...batch);if(batch.length<size)break;
   }
   return dedupeRows(out);

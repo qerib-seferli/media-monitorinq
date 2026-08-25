@@ -94,8 +94,9 @@ async function load({reset=false}={}){
       const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
       let q=supabase.from('mentions').select('*, districts(name), villages(name), mention_media(*)')
         .gt('relevance_score',0)
-        .gte('published_at',range.from).lte('published_at',range.to)
-        .order('published_at',{ascending:false,nullsFirst:false}).range(from,to);
+        .or(`and(published_at.gte.${range.from},published_at.lte.${range.to}),and(published_at.is.null,detected_at.gte.${range.from},detected_at.lte.${range.to})`)
+        .order('published_at',{ascending:false,nullsFirst:false})
+        .order('detected_at',{ascending:false}).range(from,to);
       if(platform.value) q=q.ilike('source_platform',platform.value);
       if(sentiment.value) q=q.eq('sentiment',sentiment.value);
       if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
