@@ -3,6 +3,7 @@ name: Media Monitorinq Worker
 on:
   schedule:
     - cron: '*/5 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -10,6 +11,7 @@ permissions:
 
 jobs:
   youtube-monitor:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
@@ -34,11 +36,12 @@ jobs:
             -d '{"mode":"scheduled","debug":false,"quick_youtube_comments":true,"verify_existing":false}' \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
 
-  web-monitor:
+  web-fast-watch:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 6
     concurrency:
-      group: media-monitor-web
+      group: media-monitor-web-fast
       cancel-in-progress: false
     steps:
       - name: Checkout repository
@@ -49,16 +52,54 @@ jobs:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
           if [ -z "$MONITOR_SECRET" ]; then
-            echo "MONITOR_SECRET təyin edilməyib; Web monitoru buraxılır."
+            echo "MONITOR_SECRET təyin edilməyib; sürətli Web monitoru buraxılır."
             exit 0
           fi
 
-      - name: Web and news gateway
+      - name: Configured websites fast watch
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
           NEWS_DIRECT_ONLY: '1'
-          NEWS_SOURCE_BATCH: '12'
-          NEWS_DOMAIN_SEARCH_BATCH: '12'
+          NEWS_SOURCE_BATCH: '24'
+          NEWS_DOMAIN_SEARCH_BATCH: '0'
+          NEWS_BROAD_QUERY_LIMIT: '0'
+          NEWS_FAST_LINK_LIMIT: '8'
+          NEWS_FAST_FEED_LIMIT: '10'
+          NEWS_MAX_INGEST_ITEMS: '90'
+          NEWS_MAX_ENRICH_ITEMS: '8'
+          NEWS_MAX_SCREENSHOTS: '3'
+        run: node scripts/news-gateway.mjs
+
+  web-archive-discovery:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    concurrency:
+      group: media-monitor-web-archive
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check monitor secret
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          if [ -z "$MONITOR_SECRET" ]; then
+            echo "MONITOR_SECRET təyin edilməyib; Web arxiv monitoru buraxılır."
+            exit 0
+          fi
+
+      - name: Web archive discovery
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_DIRECT_ONLY: '0'
+          NEWS_SOURCE_BATCH: '6'
+          NEWS_DOMAIN_SEARCH_BATCH: '4'
           NEWS_BROAD_QUERY_LIMIT: '2'
+          NEWS_MAX_INGEST_ITEMS: '120'
+          NEWS_MAX_ENRICH_ITEMS: '10'
+          NEWS_MAX_SCREENSHOTS: '4'
         run: node scripts/news-gateway.mjs
