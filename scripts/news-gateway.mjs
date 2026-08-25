@@ -463,13 +463,23 @@ function keepDomain(items=[], domain='') {
 function buildDomainQueries(org, domain, keyword='') {
   const district=String(org?.district||'').trim();
   const cleanKeyword=String(keyword||'').replace(/["“”]+/g,' ').replace(/\s+/g,' ').trim();
-  const core= district
+
+  // Domen üzrə arxiv axtarışında əvvəlcə sadə rayon sorğusu işlədilir.
+  // Əvvəlki yalnız çox sərt (rayon + böyük OR bloku / təsadüfi açar söz) sorğuları
+  // Bing-də çox vaxt raw nəticə qaytarsa da konkret media domenindən exact=0 verirdi.
+  // Sadə site:domain + rayon sorğusu həmin domenin Bərdə arxivini tapır; aidiyyət
+  // (suvarma/meliorasiya və s.) yenə monitor-worker-də dəqiq filtrdən keçirilir.
+  const districtOnly = district ? `site:${domain} "${district}"` : '';
+  const topic = district
     ? `site:${domain} "${district}" (suvarma OR meliorasiya OR subartezian OR artezian OR drenaj OR kanal OR arx OR "su təchizatı" OR "su problemi")`
     : `site:${domain} (suvarma OR meliorasiya OR subartezian OR artezian OR drenaj OR kanal OR arx)`;
   const specific = cleanKeyword
     ? `site:${domain} ${district && !asciiToken(cleanKeyword).includes(asciiToken(district)) ? `"${district}" ` : ''}"${cleanKeyword}"`
     : '';
-  return [...new Set([specific,core].filter(Boolean))];
+
+  // Sadə rayon sorğusunu həmişə birinci saxlayırıq. 3 sorğudan artıq etmirik ki,
+  // 5 paralel shard GitHub Actions vaxtını yenidən 10-15 dəqiqəyə çıxarmasın.
+  return [...new Set([districtOnly,specific,topic].filter(Boolean))].slice(0,3);
 }
 function inferredOrgDomains(org) {
   const out=new Set();
@@ -790,10 +800,18 @@ for (const org of plan.organizations) {
     let found=[];
     for (let qi=0; qi<queries.length; qi++) {
       try {
-        const raw=await bingWeb(queries[qi],0);
+        // Bing Web RSS bir sıra Azərbaycan media domenlərində site: filtrini zəif
+        // tətbiq edir və raw=10 olsa da exact=0 qalır. Eyni sorğunu Bing News RSS-də
+        // də yoxlayırıq; news nəticələri publisher URL-ni verdiyi üçün real xəbər
+        // arxivini tapmaq ehtimalı xeyli artır.
+        const [newsRaw,webRaw]=await Promise.all([
+          bingNews(queries[qi],0).catch(()=>[]),
+          bingWeb(queries[qi],0).catch(()=>[])
+        ]);
+        const raw=dedupe([...(newsRaw||[]),...(webRaw||[])]);
         const exact=keepDomain(raw,domain);
         found.push(...exact);
-        console.log(`[${org.short_name}] Domen axtarışı: ${domain} | ${qi+1}/${queries.length} | raw=${raw.length} exact=${exact.length} | ${queries[qi]}`);
+        console.log(`[${org.short_name}] Domen axtarışı: ${domain} | ${qi+1}/${queries.length} | news=${newsRaw.length} web=${webRaw.length} exact=${exact.length} | ${queries[qi]}`);
         if(dedupe(found).length >= 4) break;
       } catch(e) {
         console.log(`[${org.short_name}] Domen axtarışı xəta (${domain}): ${e?.message||e}`);
