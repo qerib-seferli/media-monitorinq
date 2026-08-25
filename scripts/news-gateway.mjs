@@ -451,6 +451,25 @@ function isFeedLikeUrl(value='') {
   return /(?:\/feed\/?$|\/rss\/?$|\.xml(?:$|\?)|news\.google\.com\/rss\/)/i.test(String(value||''));
 }
 function domainFromUrl(value='') { try { return new URL(value).hostname.replace(/^www\./i,'').toLowerCase(); } catch { return ''; } }
+function urlMatchesDomain(value='', domain='') {
+  const host=domainFromUrl(value);
+  const expected=String(domain||'').replace(/^www\./i,'').toLowerCase();
+  return Boolean(host && expected && (host===expected || host.endsWith(`.${expected}`)));
+}
+function keepDomain(items=[], domain='') {
+  return dedupe((Array.isArray(items)?items:[]).filter(item=>urlMatchesDomain(item?.url||'',domain)));
+}
+function buildDomainQueries(org, domain, keyword='') {
+  const district=String(org?.district||'').trim();
+  const cleanKeyword=String(keyword||'').replace(/["“”]+/g,' ').replace(/\s+/g,' ').trim();
+  const core= district
+    ? `site:${domain} "${district}" (suvarma OR meliorasiya OR subartezian OR artezian OR drenaj OR kanal OR arx OR "su təchizatı" OR "su problemi")`
+    : `site:${domain} (suvarma OR meliorasiya OR subartezian OR artezian OR drenaj OR kanal OR arx)`;
+  const specific = cleanKeyword
+    ? `site:${domain} ${district && !asciiToken(cleanKeyword).includes(asciiToken(district)) ? `"${district}" ` : ''}"${cleanKeyword}"`
+    : '';
+  return [...new Set([specific,core].filter(Boolean))];
+}
 function inferredOrgDomains(org) {
   const out=new Set();
   for (const source of (Array.isArray(org?.rss_sources)?org.rss_sources:[])) {
@@ -543,7 +562,7 @@ async function directWebsite(source, org) {
         homepageHtml=html;
         const links=linkItemsFromHtml(html,base);
         const relevant=links.filter(x=>configuredLinkIsRelevant(x,org));
-        out.push(...(relevant.length ? relevant.slice(0,FAST_LINK_LIMIT) : links.slice(0,Math.min(3,FAST_LINK_LIMIT))));
+        out.push(...relevant.slice(0,FAST_LINK_LIMIT));
       } catch {}
 
       // RSS ayrıca sources sətrində saxlanmasa da problem deyil: işlək saytların çoxu
@@ -557,7 +576,7 @@ async function directWebsite(source, org) {
           const items=parseFeed(xml,'configured_feed',orgName,source.name||source.platform||base);
           if(items.length){
             const relevant=items.filter(x=>configuredLinkIsRelevant(x,org));
-            out.push(...(relevant.length ? relevant.slice(0,FAST_FEED_LIMIT) : items.slice(0,Math.min(3,FAST_FEED_LIMIT))));
+            out.push(...relevant.slice(0,FAST_FEED_LIMIT));
           }
         } catch {}
       }
@@ -674,12 +693,13 @@ for (const org of plan.organizations) {
     `\"${districtName}\" kanal`, `\"${districtName}\" subartezian`, `\"${districtName}\" artezian`,
     `\"${districtName}\" fermer su`, `\"${districtName}\" əkin su`, `\"${districtName}\" su təchizatı`
   ] : [];
-  const keywordQueries = shardQueryWindow(keywordBank, BROAD_QUERY_LIMIT, SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
-  // Əsas Web discovery bazadakı aktiv açar sözlərdən gəlir. Statik rayon/suvarma
-  // sorğuları yalnız bank boş olduqda fallback kimi qalır. Hər shard ayrı hissəni
-  // götürdüyü üçün 5 paralel job eyni nəticələri təkrar axtarmır.
-  const fallbackQueries = [...new Set([...broadDistrict,...topicCore,...rotate(discoveryCore,4,`core-${org.id}`),...rotate(rotatingQueries,4,org.id),...azDomainQueries.slice(0,1)])];
-  const webQueries = (keywordQueries.length ? keywordQueries : fallbackQueries).slice(0,BROAD_QUERY_LIMIT);
+  const keywordQueries = shardQueryWindow(keywordBank, Math.max(BROAD_QUERY_LIMIT, 6), SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
+  // Geniş Bing/Web axtarışına kənd və ya dar açar sözü təkbaşına buraxmaq müxtəlif
+  // ölkələrdən əlaqəsiz nəticələr gətirirdi. Geniş discovery yalnız rayon+su mövzusu
+  // ilə işləyir; 5897-lik açar söz bankı aşağıda hər konfiqurasiya olunmuş domenə
+  // site:domain şəklində bağlanaraq istifadə olunur.
+  const fallbackQueries = [...new Set([...topicCore,...rotate(discoveryCore,2,`core-${org.id}`),...azDomainQueries.slice(0,1)])];
+  const webQueries = DIRECT_ONLY ? [] : fallbackQueries.slice(0,Math.min(2,BROAD_QUERY_LIMIT));
   // Google News ayrıca istifadəçi platforması deyil, discovery provider-dir. Burada
   // yalnız iki yüksək siqnallı sorğu saxlayırıq və tapılan nəticələri Web axınına qatırıq.
   const googleQueries=[...new Set([...topicCore.slice(0,1),...rotate(rotatingQueries,1,`google-${org.id}`)])].slice(0,2);
@@ -693,6 +713,11 @@ for (const org of plan.organizations) {
   for(const domain of inferredOrgDomains(org)){
     if(!configuredSources.some(x=>domainFromUrl(x?.url||'')===domain)) configuredSources.push({platform:'Web',url:`https://${domain}/`,name:`${domain} birbaşa sayt`});
   }
+  const allowedDomains=[...new Set(configuredSources.map(x=>domainFromUrl(x?.url||'')).filter(Boolean))];
+  const keepConfiguredDomainItems=(items=[])=>dedupe((Array.isArray(items)?items:[]).filter(item=>{
+    const host=domainFromUrl(item?.url||'');
+    return host && allowedDomains.some(domain=>host===domain || host.endsWith(`.${domain}`));
+  }));
 
   if(!DIRECT_ONLY && SOURCE_SHARD_INDEX===0) for (const q of googleQueries) {
     try {
@@ -705,13 +730,13 @@ for (const org of plan.organizations) {
   }
   if(!DIRECT_ONLY) for (const q of webQueries) {
     try {
-      webItems.push(...await bingNews(q,0));
-      webItems.push(...await bingWeb(q,0));
+      webItems.push(...keepConfiguredDomainItems(await bingNews(q,0)));
+      webItems.push(...keepConfiguredDomainItems(await bingWeb(q,0)));
       // İkinci səhifə yalnız ilk iki geniş sorğu üçün. Əvvəl 20+ sorğu × 3 səhifə
       // job-u 10-15 dəqiqəyə uzadırdı və növbəti cron run-u ilə toqquşurdu.
       if (webQueries.indexOf(q) < 2) {
-        webItems.push(...await bingNews(q,1));
-        webItems.push(...await bingWeb(q,1));
+        webItems.push(...keepConfiguredDomainItems(await bingNews(q,1)));
+        webItems.push(...keepConfiguredDomainItems(await bingWeb(q,1)));
       }
     } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
   }
@@ -725,32 +750,33 @@ for (const org of plan.organizations) {
     : rotateSources(shardPool, SOURCE_BATCH_SIZE, `sources-${org.id}-shard-${SOURCE_SHARD_INDEX}`);
   console.log(`[${org.short_name}] Birbaşa mənbə paketi: ${sourceBatch.length}/${configuredSources.length} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} (${shardPool.length} mənbə)`);
   const targetedSources=DOMAIN_SEARCH_BATCH > 0
-    ? rotateSources(sourceBatch, DOMAIN_SEARCH_BATCH, `domain-search-${org.id}-shard-${SOURCE_SHARD_INDEX}`)
+    ? (sourceBatch.length <= DOMAIN_SEARCH_BATCH ? sourceBatch : rotateSources(sourceBatch, DOMAIN_SEARCH_BATCH, `domain-search-${org.id}-shard-${SOURCE_SHARD_INDEX}`))
     : [];
   for (const source of targetedSources) {
     const domain=domainFromUrl(source?.url||'');
     if(!domain || !org.district) continue;
-    // Ümumi xəbər portalının son 50-100 linkini oxumaq köhnə Bərdə xəbərlərini tapmır.
-    // Hər seçilmiş domen üçün ayrıca axtarış tarixi arxiv səhifələrini də çıxarır.
     const sourceIndex = targetedSources.indexOf(source);
     const keywordOffset = Math.floor(Date.now()/(15*60*1000)) * Math.max(1, targetedSources.length * SOURCE_SHARD_COUNT)
       + SOURCE_SHARD_INDEX * Math.max(1, targetedSources.length) + Math.max(0, sourceIndex);
     const scopedKeyword = keywordBank.length ? keywordBank[keywordOffset % keywordBank.length] : '';
-    const q=scopedKeyword
-      ? `site:${domain} ${scopedKeyword}`
-      : `site:${domain} "${org.district}" (suvarma OR meliorasiya OR subartezian OR artezian OR kanal OR "su problemi")`;
-    try {
-      const targeted=await bingWeb(q,0);
-      webItems.push(...targeted);
-      // Bəzi axtarış indeksləri uzun OR sorğusuna az nəticə verir. Belə domenlərdə
-      // ikinci, daha geniş rayon+su fallback-i tarixi materialların itirilməsinin qarşısını alır.
-      if(targeted.length < 3) webItems.push(...await bingWeb(`site:${domain} "${org.district}" su`,0));
-    } catch(e) {
-      console.log(`[${org.short_name}] Domen axtarışı xəta (${domain}): ${e?.message||e}`);
+    const queries=buildDomainQueries(org,domain,scopedKeyword);
+    let found=[];
+    for (let qi=0; qi<queries.length; qi++) {
+      try {
+        const raw=await bingWeb(queries[qi],0);
+        const exact=keepDomain(raw,domain);
+        found.push(...exact);
+        console.log(`[${org.short_name}] Domen axtarışı: ${domain} | ${qi+1}/${queries.length} | raw=${raw.length} exact=${exact.length} | ${queries[qi]}`);
+        if(dedupe(found).length >= 4) break;
+      } catch(e) {
+        console.log(`[${org.short_name}] Domen axtarışı xəta (${domain}): ${e?.message||e}`);
+      }
     }
+    webItems.push(...dedupe(found));
   }
   for (const source of sourceBatch) {
-    const items = await directFeed(source,org);
+    const domain=domainFromUrl(source?.url||'');
+    const items = keepDomain(await directFeed(source,org),domain);
     if (/google/i.test(`${source.platform||''} ${source.name||''} ${source.url||''}`)) googleItems.push(...items);
     else webItems.push(...items);
   }
