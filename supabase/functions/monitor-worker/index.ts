@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
           district:String(org.districts?.name || ''),
           google_queries:buildGoogleNewsGatewayQueries(org),
           gdelt_queries:buildGdeltGatewayQueries(org),
-          keyword_queries:buildKeywordGatewayQueries(org, positiveKeywords, villageNames, 180),
+          keyword_queries:buildKeywordGatewayQueries(org, positiveKeywords, villageNames, 6000),
           keyword_count:positiveKeywords.length,
           rss_sources:(Array.isArray(org.sources)?org.sources:[])
             .filter((source:any)=>source?.is_active !== false)
@@ -803,12 +803,10 @@ function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[
   // Bank minlərlə sətr ola bilər. Hər 15 dəqiqə fərqli hissədən başlayırıq; gateway
   // shard-ları da bu bankı bölür. Beləliklə eyni 2-3 sorğuya ilişib qalmadan bankın
   // hamısı zamanla axtarışa daxil olur.
-  const windowSize = Math.max(40, Math.min(240, max));
-  const bucket = Math.floor(Date.now() / (15 * 60 * 1000));
-  const stride = Math.max(20, Math.floor(windowSize / 3));
-  const start = cleaned.length ? (bucket * stride) % cleaned.length : 0;
-  const rotated:string[] = [];
-  for (let i=0; i<Math.min(cleaned.length, windowSize); i++) rotated.push(cleaned[(start+i)%cleaned.length]);
+  // Gateway bütün aktiv bankı alır; 5 GitHub shard hər 15 dəqiqədə
+  // bankın ayrı hissəsini seçir. Beləliklə minlərlə sözün hamısı dövr edir.
+  const windowSize = Math.min(cleaned.length, Math.max(40, Math.min(6000, max)));
+  const rotated:string[] = cleaned.slice(0, windowSize);
 
   const queries:string[] = [];
   const querySeen = new Set<string>();
@@ -2112,6 +2110,14 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     return contains(normalized,term);
   }).slice(0,12);
 
+  // Təşkilat üçün ayrıca yaradılmış konkret çoxsözlü açar ifadə məqalədə
+  // tam keçirsə, həmin ifadənin özü ərazi+mövzu siqnalıdır. Tək ümumi
+  // sözlər bu qayda ilə qəbul edilmir.
+  const curatedBankHits = bankKeywordHits.filter(term=>{
+    const words=term.split(/\s+/).filter(Boolean);
+    return words.length >= 2 && term.length >= 8;
+  });
+
   const raw:any = item.raw || {};
   // Təşkilatın rəsmi portalının ana səhifəsi / naviqasiya nəticəsi xəbər deyil.
   // Axtarış mühərrikləri bunu yüksək uyğunluqla qaytarsa da monitorinq və bildirişlərə salmırıq.
@@ -2149,6 +2155,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const districtWide = org.show_district_wide !== false;
   const accepted = !ownPortalNoise && (trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
+    curatedBankHits.length>0 ||
     (districtWide && locationHit && positiveTopic) ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
   )));
@@ -2170,6 +2177,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     reason:accepted
       ? (trustedParentComment?'aidiyyəti-videonun-rəyi'
         :directMatches.length?'təşkilat-adı-uyğunluğu'
+        :curatedBankHits.length?'açar-söz-bankı-dəqiq-uyğunluğu'
         :(districtHit&&positiveTopic)?'rayon-mövzu-uyğunluğu'
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
         :'mövzu-uyğunluğu')
