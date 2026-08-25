@@ -473,8 +473,18 @@ function buildDomainQueries(org, domain, keyword='') {
   const topic = district
     ? `site:${domain} "${district}" (suvarma OR meliorasiya OR subartezian OR artezian OR drenaj OR kanal OR arx OR "su təchizatı" OR "su problemi")`
     : `site:${domain} (suvarma OR meliorasiya OR subartezian OR artezian OR drenaj OR kanal OR arx)`;
-  const specific = cleanKeyword
-    ? `site:${domain} ${district && !asciiToken(cleanKeyword).includes(asciiToken(district)) ? `"${district}" ` : ''}"${cleanKeyword}"`
+  // Açar söz bankındakı frazanı axtarış sisteminə bütöv dırnaq içində vermirik.
+  // Məs: "Alaçadırlı artezian quyusu" yalnız eyni cümləni tapırdı; halbuki xəbərdə
+  // "Alaçadırlıda yeni artezian quyusu qazılıb" yazıla bilər. Burada sözləri OR ilə
+  // elastikləşdiririk, dəqiq aidiyyət qərarını isə monitor-worker lokal olaraq verir.
+  const keywordParts = cleanKeyword
+    .split(/\s+/)
+    .map(x=>x.replace(/[^\p{L}\p{N}-]+/gu,'').trim())
+    .filter(x=>x.length >= 4)
+    .filter(x=>!district || asciiToken(x)!==asciiToken(district))
+    .slice(0,4);
+  const specific = keywordParts.length
+    ? `site:${domain} ${district ? `"${district}" ` : ''}(${keywordParts.join(' OR ')})`
     : '';
 
   // Sadə rayon sorğusunu həmişə birinci saxlayırıq. 3 sorğudan artıq etmirik ki,

@@ -830,8 +830,18 @@ function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[
     const alreadyScoped = (nd && nk.includes(nd)) || orgNames.some(n=>n && nk.includes(n)) || villageNorms.some(v=>nk.includes(v));
     const safe = value.replace(/["“”]+/g,'').trim();
     if (!safe) continue;
-    if (alreadyScoped || !district) add(`"${safe}"`);
-    else add(`"${district}" "${safe}"`);
+    // Açar sözləri bütöv "dəqiq fraza" kimi axtarmaq şəkilçi və söz sırası dəyişəndə
+    // real xəbərləri itirirdi. Məs: "Alaçadırlı artezian quyusu" ilə
+    // "Alaçadırlıda yeni artezian quyusu qazılıb" eyni mövzudur. Discovery üçün
+    // dırnaqsız, 2-5 əsas söz göndəririk; qəbul/rədd qərarı aşağıdakı lokal filtrdədir.
+    const relaxedParts = safe.split(/\s+/)
+      .map(part=>part.replace(/[^\p{L}\p{N}-]+/gu,'').trim())
+      .filter(part=>part.length >= 3)
+      .slice(0,5);
+    const relaxed = relaxedParts.join(' ');
+    if (!relaxed) continue;
+    if (alreadyScoped || !district) add(relaxed);
+    else add(`${district} ${relaxed}`);
     if (queries.length >= windowSize) break;
   }
 
@@ -2070,6 +2080,28 @@ function debugSamples(items:Item[], org:any, keywords:string[], villages:string[
   });
 }
 
+function flexibleKeywordMatch(normalizedText:string, normalizedTerm:string) {
+  const stop = new Set(['ve','ile','ucun','ucun','olan','kimi','haqqinda','dair','rayon','rayonu','rayonunda']);
+  const textTokens = normalizedText.split(/\s+/).filter(Boolean);
+  const termTokens = normalizedTerm.split(/\s+/)
+    .filter(Boolean)
+    .filter(token=>token.length >= 4 && !stop.has(token));
+  if (termTokens.length < 2) return null;
+
+  const tokenHit=(needle:string)=>textTokens.some(token=>{
+    if (token===needle) return true;
+    // Azərbaycan dilində hal/mənsubiyyət şəkilçilərinə dözümlülük:
+    // alacadırlı -> alacadırlıda, quyu -> quyusu və s.
+    const stemLen = needle.length >= 8 ? 6 : needle.length >= 6 ? 5 : 4;
+    const stem = needle.slice(0,stemLen);
+    return stem.length >= 4 && token.startsWith(stem);
+  });
+
+  const matched = termTokens.filter(tokenHit);
+  const need = termTokens.length <= 2 ? 2 : Math.max(2, Math.ceil(termTokens.length * 0.6));
+  return matched.length >= need ? {term:normalizedTerm,matched,need} : null;
+}
+
 function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] = []) {
   const normalized = normalizeForMatch(`${item.title || ''} ${item.text || ''}`);
   const direct = [String(org.name||''),String(org.short_name||'')]
@@ -2125,6 +2157,16 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   });
 
   const raw:any = item.raw || {};
+  const webLike = /google_news|bing_news|bing_web|configured_|gdelt_article|web/i.test(
+    `${String(raw.kind||'')} ${String(raw.provider||'')}`
+  );
+  // Web xəbərlərində açar söz bankını yalnız tam fraza ilə deyil, söz köklərinin
+  // elastik üst-üstə düşməsi ilə də yoxlayırıq. YouTube/rəy məntiqinə toxunmuruq.
+  const flexibleBankMatches = webLike
+    ? normalizedKeywords.map(term=>flexibleKeywordMatch(normalized,term)).filter(Boolean).slice(0,12)
+    : [];
+  const flexibleBankHits = flexibleBankMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
+
   // Təşkilatın rəsmi portalının ana səhifəsi / naviqasiya nəticəsi xəbər deyil.
   // Axtarış mühərrikləri bunu yüksək uyğunluqla qaytarsa da monitorinq və bildirişlərə salmırıq.
   let ownPortalNoise=false;
@@ -2143,7 +2185,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
 
   // Aidiyyəti video təşkilat filtrlərindən artıq keçibsə, onun bütün rəyləri saxlanılır.
   // Rəyin özündə "Bərdə" və ya "suvarma" sözünün təkrarlanmaması vacib məlumatı itirməsin.
-  const positiveTopic = strongHits.length>0 || scopedKeywordHits.length>0 || bankKeywordHits.length>0;
+  const positiveTopic = strongHits.length>0 || scopedKeywordHits.length>0 || bankKeywordHits.length>0 || flexibleBankHits.length>0;
 
   const exclusionHits = excludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
   const negativeOnly = exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
@@ -2162,6 +2204,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const accepted = !ownPortalNoise && (trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
     curatedBankHits.length>0 ||
+    flexibleBankHits.length>0 ||
     (districtWide && locationHit && positiveTopic) ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
   )));
@@ -2171,6 +2214,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     ...strongHits.map(t=>(districtHit?`${district}+${t}`:t)),
     ...scopedKeywordHits,
     ...bankKeywordHits,
+    ...flexibleBankHits,
     ...(!districtHit && villageHits.length && strongHits.length ? villageHits.flatMap(v=>strongHits.slice(0,2).map(t=>`${v}+${t}`)) : [])
   ])];
 
@@ -2184,6 +2228,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
       ? (trustedParentComment?'aidiyyəti-videonun-rəyi'
         :directMatches.length?'təşkilat-adı-uyğunluğu'
         :curatedBankHits.length?'açar-söz-bankı-dəqiq-uyğunluğu'
+        :flexibleBankHits.length?'açar-söz-bankı-elastik-uyğunluğu'
         :(districtHit&&positiveTopic)?'rayon-mövzu-uyğunluğu'
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
         :'mövzu-uyğunluğu')
