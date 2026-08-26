@@ -251,6 +251,33 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (options.mode === 'news_refilter') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'news_refilter',error:'Təşkilat tapılmadı'},200);
+
+      const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
+      const keywords = activeKeywordRows
+        .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
+        .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
+      const excludeTerms = activeKeywordRows
+        .filter((k:any)=>String(k?.kind || '').toLowerCase() === 'exclude')
+        .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
+      org.__exclude_terms = excludeTerms;
+      org.__normalized_keywords = [...new Set(keywords.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+      org.__normalized_excludes = [...new Set(excludeTerms.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+      const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
+
+      let villageNames:string[] = [];
+      if (org.district_id) {
+        const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
+        if (villageResult?.error) throw villageResult.error;
+        villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
+      }
+
+      const result = await refilterExistingWebMentions(admin,org,lowerKeywords,villageNames,300);
+      return json({ok:true,run_id:runId,mode:'news_refilter',organization:org.short_name,...result},200);
+    }
+
     if (options.mode === 'news_ingest') {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_ingest',error:'Təşkilat tapılmadı'},200);
@@ -1497,6 +1524,36 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
   return {checked,filtered_out:filteredOut};
 }
 
+async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],villages:string[],limit=300){
+  const result:any=await admin.from('mentions')
+    .select('id,title,original_text,source_url,published_at,author_name,raw_payload,relevance_score,source_platform')
+    .eq('organization_id',org.id)
+    .in('source_platform',['Web','Google News'])
+    .gt('relevance_score',0)
+    .order('published_at',{ascending:false,nullsFirst:false})
+    .limit(Math.max(1,limit));
+  if(result?.error)throw result.error;
+  let checked=0,filteredOut=0;
+  const samples:any[]=[];
+  for(const row of result?.data||[]){
+    const item:Item={
+      title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',
+      published_at:row?.published_at||null,author:row?.author_name||null,
+      raw:{...(row?.raw_payload||{}),kind:String(row?.raw_payload?.kind||'configured_web'),provider:String(row?.raw_payload?.provider||'web')}
+    };
+    const match=evaluateMatch(org,item,keywords,villages);
+    checked++;
+    if(!match.accepted){
+      const update:any=await admin.from('mentions').update({relevance_score:0}).eq('id',row.id);
+      if(!update?.error){
+        filteredOut++;
+        if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});
+      }
+    }
+  }
+  return {checked,filtered_out:filteredOut,samples};
+}
+
 async function storedYoutubeCommentItems(
   admin:any,
   org:any,
@@ -2102,6 +2159,31 @@ function flexibleKeywordMatch(normalizedText:string, normalizedTerm:string) {
   return matched.length >= need ? {term:normalizedTerm,matched,need} : null;
 }
 
+function flexibleExcludeMatch(normalizedText:string, normalizedTerm:string) {
+  if (!normalizedTerm) return null;
+  const stop = new Set(['ve','ile','ucun','olan','kimi','haqqinda','dair','rayon','rayonu','rayonunda']);
+  const textTokens = normalizedText.split(/\s+/).filter(Boolean);
+  const termTokens = normalizedTerm.split(/\s+/)
+    .filter(Boolean)
+    .filter(token=>token.length >= 3 && !stop.has(token));
+  if (!termTokens.length) return null;
+
+  const tokenHit=(needle:string)=>textTokens.some(token=>{
+    if (token===needle) return true;
+    // Qısa sözlərdə aqressiv kökləmə etmirik.
+    if (needle.length < 5) return false;
+    const stemLen = needle.length >= 8 ? 6 : needle.length >= 6 ? 5 : 4;
+    const stem = needle.slice(0,stemLen);
+    return stem.length >= 4 && token.startsWith(stem);
+  });
+
+  const matched = termTokens.filter(tokenHit);
+  // Tək sözlü exclude: həmin söz/kök tapılan kimi blokla.
+  // Çox sözlü exclude: ən azı 2 söz və ya ifadənin 60%-i uyğun gəlməlidir.
+  const need = termTokens.length === 1 ? 1 : (termTokens.length === 2 ? 2 : Math.max(2, Math.ceil(termTokens.length * 0.6)));
+  return matched.length >= need ? {term:normalizedTerm,matched,need} : null;
+}
+
 function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] = []) {
   const normalized = normalizeForMatch(`${item.title || ''} ${item.text || ''}`);
   const direct = [String(org.name||''),String(org.short_name||'')]
@@ -2167,6 +2249,16 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     : [];
   const flexibleBankHits = flexibleBankMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
 
+  // Axtarılmamalı sözlər də Web materiallarında eyni elastik qayda ilə işləyir.
+  // Məsələn "maşın bazarı" -> "maşın bazarında", "futbol xəbəri" ->
+  // "futbol xəbərləri" kimi şəkilçi/söz forması dəyişiklikləri blokdan qaçmır.
+  // Tək sözlü filtrlərdə isə yalnız söz sərhədi / təhlükəsiz kök uyğunluğu tətbiq olunur
+  // ki, qısa bir filtr təsadüfən başqa sözün içində tapılıb düzgün xəbəri silməsin.
+  const flexibleExcludeMatches = webLike
+    ? excludeTerms.map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12)
+    : [];
+  const flexibleExcludeHits = flexibleExcludeMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
+
   // Təşkilatın rəsmi portalının ana səhifəsi / naviqasiya nəticəsi xəbər deyil.
   // Axtarış mühərrikləri bunu yüksək uyğunluqla qaytarsa da monitorinq və bildirişlərə salmırıq.
   let ownPortalNoise=false;
@@ -2187,8 +2279,14 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // Rəyin özündə "Bərdə" və ya "suvarma" sözünün təkrarlanmaması vacib məlumatı itirməsin.
   const positiveTopic = strongHits.length>0 || scopedKeywordHits.length>0 || bankKeywordHits.length>0 || flexibleBankHits.length>0;
 
-  const exclusionHits = excludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
-  const negativeOnly = exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
+  const exactExclusionHits = excludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
+  const exclusionHits = [...new Set([...exactExclusionHits,...flexibleExcludeHits])].slice(0,12);
+
+  // Web üçün axtarılmamalı filtr sərt veto-dur: müsbət açar söz və ya rayon adı
+  // tapılsa belə, aktiv exclude qaydasına düşən material istifadəçiyə göstərilmir.
+  // YouTube/rəy axınının hazırkı davranışını dəyişməmək üçün sərt veto yalnız Web-dədir.
+  const excludedByRule = webLike && exclusionHits.length > 0;
+  const negativeOnly = !webLike && exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
 
   const foreignDistricts = [
     'agcabedi','agdam','agdas','agsu','astara','balaken','beyleqan','bilesuvar','celilabad','daskesen',
@@ -2201,7 +2299,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0 && (!villageHits.length || ambiguousVillageHit);
 
   const districtWide = org.show_district_wide !== false;
-  const accepted = !ownPortalNoise && (trustedParentComment || (!negativeOnly && !foreignHit && (
+  const accepted = !ownPortalNoise && !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
     curatedBankHits.length>0 ||
     flexibleBankHits.length>0 ||
@@ -2232,7 +2330,8 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
         :(districtHit&&positiveTopic)?'rayon-mövzu-uyğunluğu'
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
         :'mövzu-uyğunluğu')
-      : (negativeOnly?'axtarılmamalı-mövzu'
+      : (excludedByRule?'axtarılmamalı-mövzu-elastik-filtr'
+        :negativeOnly?'axtarılmamalı-mövzu'
         :foreignHit?'başqa-rayon-məlumatıdır'
         :locationHit?'ərazi-var-mövzu-yoxdur'
         :'ərazi-və-mövzu-uyğunluğu-yoxdur')

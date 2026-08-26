@@ -695,6 +695,18 @@ let totalReceived=0, totalAccepted=0, totalRejected=0, totalInserted=0, totalFai
 let gdeltUsedThisRun=false;
 
 for (const org of plan.organizations) {
+  // Yalnız 1-ci shard əvvəlki Web qeydlərini cari axtarılmamalı sözlərlə yenidən yoxlayır.
+  // Beləliklə əvvəlki yumşaq filtrdən keçmiş uyğunsuz xəbərlər relevance_score=0 olur
+  // və Monitorinq/Hesabat/Bildirişlər ekranından avtomatik çıxır.
+  if (SOURCE_SHARD_INDEX === 0) {
+    try {
+      const cleaned = await callMonitor({mode:'news_refilter', organization_id:org.id}, 45000);
+      if (cleaned?.ok) console.log(`[${org.short_name}] Web təmizləmə: checked=${cleaned.checked||0}, filtered_out=${cleaned.filtered_out||0}`);
+      else console.log(`[${org.short_name}] Web təmizləmə buraxıldı: ${cleaned?.error||'naməlum xəta'}`);
+    } catch (e) {
+      console.log(`[${org.short_name}] Web təmizləmə xəta: ${e?.message||e}`);
+    }
+  }
   const allGoogle = Array.isArray(org.google_queries) ? org.google_queries.filter(Boolean) : [];
   const keywordBank = Array.isArray(org.keyword_queries) ? org.keyword_queries.filter(Boolean) : [];
   // Planın ilk 3 sorğusu həmişəlik əsas discovery sorğularıdır:
