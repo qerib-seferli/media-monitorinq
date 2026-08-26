@@ -689,7 +689,9 @@ function archiveYearForShard(salt='') {
   if(!years.length) return new Date().getFullYear();
   let hash=0;
   for(const c of String(salt)) hash=((hash<<5)-hash+c.charCodeAt(0))|0;
-  const cycle=Math.floor(Date.now()/(2*60*60*1000));
+  // Dərin backfill hər manual/scheduled run-da eyni ili saatlarla təkrar etməsin.
+  // 10 dəqiqəlik pəncərə 5 shard-ı ayrı illərə paylayır və arxivi mərhələli geri tarayır.
+  const cycle=Math.floor(Date.now()/(10*60*1000));
   const idx=Math.abs(cycle*SOURCE_SHARD_COUNT + SOURCE_SHARD_INDEX + hash)%years.length;
   return years[idx];
 }
@@ -965,6 +967,7 @@ for (const org of plan.organizations) {
     ...broadWebItems
   ]);
   const unifiedWebItems=allWebCandidates
+    .map(item=>DEEP_BACKFILL ? ({...item,raw:{...(item?.raw||{}),historical_backfill:true}}) : item)
     .map((item,index)=>({item,index,score:relevanceRank(item)}))
     .sort((a,b)=>b.score-a.score || a.index-b.index)
     .slice(0,MAX_INGEST_ITEMS)

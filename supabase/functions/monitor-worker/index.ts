@@ -2328,7 +2328,15 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // Əks halda Bərdə + ümumi bank frazası (məs. qəbul, işıq, məktəb və s.) dairəvi
   // şəkildə positiveTopic yaradıb əlaqəsiz xəbəri qəbul edə bilirdi. Güclü mövzu
   // siqnalı ayrıca suvarma/meliorasiya terminlərindən gəlməlidir.
-  const coreTopicHit = strongHits.length > 0;
+  // Arxiv axtarış snippet-lərində sözlər çox vaxt şəkilçili və ya qısaldılmış gəlir.
+  // Fast-watch davranışını dəyişmədən yalnız historical_backfill namizədlərində
+  // mövzu köklərini də siqnal kimi qəbul edirik.
+  const historicalBackfill = webLike && raw?.historical_backfill === true;
+  const historicalTopicRoots = ['suvar','melior','subartez','artez','drenaj','kollektor','nasos','quyu','irriqas','hidrotex','su teminat','icmeli su','ekin sah','fermer'];
+  const historicalRootHits = historicalBackfill
+    ? historicalTopicRoots.filter(root=>normalized.includes(root)).slice(0,8)
+    : [];
+  const coreTopicHit = strongHits.length > 0 || historicalRootHits.length > 0;
   const positiveTopic = webLike
     ? coreTopicHit
     : (coreTopicHit || scopedKeywordHits.length>0 || bankKeywordHits.length>0 || flexibleBankHits.length>0);
@@ -2364,17 +2372,26 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const safeFlexibleBankHit = flexibleBankHits.length>0 && (!webLike || (locationHit && coreTopicHit));
   const safeCuratedBankHit = curatedBankHits.length>0 && (!webLike || (locationHit && coreTopicHit));
 
+  // Dərin arxivdə axtarış mühərriki bəzən başlıq/snippet-də rayon adını kəsir,
+  // amma discovery_query rayonun özünə bağlanmış olur. Bu siqnal yalnız historical
+  // backfill + real su/meliorasiya mövzusu olduqda işləyir; başqa rayon və exclude veto-su qalır.
+  const discoveryQuery = normalizeForMatch(String(raw?.discovery_query || ''));
+  const historicalScopedQuery = Boolean(historicalBackfill && district && (contains(discoveryQuery,district) || (district.length>=5 && discoveryQuery.split(/\s+/).some(token=>token.startsWith(district)))));
+  const historicalQueryTopicHit = historicalScopedQuery && coreTopicHit;
+
   const accepted = !ownPortalNoise && !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
     safeCuratedBankHit ||
     safeFlexibleBankHit ||
     (districtWide && locationHit && positiveTopic) ||
+    historicalQueryTopicHit ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
   )));
 
   const matches=[...new Set([
     ...directMatches,
     ...strongHits.map(t=>(districtHit?`${district}+${t}`:t)),
+    ...historicalRootHits.map(t=>(districtHit||historicalScopedQuery?`${district}+${t}`:t)),
     ...scopedKeywordHits,
     ...bankKeywordHits,
     ...flexibleBankHits,
@@ -2392,6 +2409,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
         :directMatches.length?'təşkilat-adı-uyğunluğu'
         :safeCuratedBankHit?'açar-söz-bankı-dəqiq-uyğunluğu'
         :safeFlexibleBankHit?'açar-söz-bankı-elastik-uyğunluğu'
+        :historicalQueryTopicHit?'arxiv-sorğusu-rayon-mövzu-uyğunluğu'
         :(districtHit&&positiveTopic)?'rayon-mövzu-uyğunluğu'
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
         :'mövzu-uyğunluğu')
