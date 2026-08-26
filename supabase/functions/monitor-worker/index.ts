@@ -771,7 +771,9 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
   const identity = [shortName, fullName].filter(Boolean);
   const coreTopics = [
     'suvarma','suvarma kanalı','kanal','arx','subartezian','artezian',
-    'kollektor drenaj','meliorasiya','su təsərrüfatı','fermer su','su gəlmir','su çatışmazlığı'
+    'kollektor drenaj','meliorasiya','su təsərrüfatı','fermer su','su gəlmir','su çatışmazlığı',
+    'içməli su','su təchizatı','su xətti','boru xətti','su qəzası','nasos stansiyası',
+    'kanalizasiya','tullantı su','yağış suyu','su sayğacı','suölçən','lildən təmizləmə'
   ];
   const core = district ? coreTopics.map(topic=>`${district} ${topic}`) : [];
 
@@ -946,8 +948,9 @@ function buildGdeltQueries(org:any, keywords:string[], villages:string[] = [], m
   // DOC API mötərizə daxilində OR bloklarını dəstəkləyir; boşluq terminlərin birlikdə
   // axtarılmasını təmin edir. Rayon yoxdursa təşkilat adı ilə fallback edirik.
   if (district) {
-    candidates.push(`"${district}" (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR fermer)`);
-    candidates.push(`"${district}" ("su gəlmir" OR "su çatışmazlığı")`);
+    const aliases = districtAliases(district).map(value=>`"${value}"`).join(' OR ');
+    candidates.push(`(${aliases}) (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR "içməli su" OR "su təchizatı" OR "su xətti" OR nasos)`);
+    candidates.push(`(${aliases}) ("su gəlmir" OR "su çatışmazlığı" OR kanalizasiya OR "tullantı su")`);
   }
   if (shortName) candidates.push(`"${shortName}"`);
   if (fullName && normalizeForMatch(fullName) !== normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
@@ -979,7 +982,7 @@ function buildGoogleNewsQueries(org:any, keywords:string[], villages:string[]=[]
   if (identityParts.length) candidates.push(identityParts.join(' OR '));
   if (district) {
     const aliases = districtAliases(district).map(value=>`"${value}"`).join(' OR ');
-    candidates.push(`(${aliases}) (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR fermer OR "su gəlmir" OR "su çatışmazlığı")`);
+    candidates.push(`(${aliases}) (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR "içməli su" OR "su təchizatı" OR "su xətti" OR "boru xətti" OR nasos OR kanalizasiya OR "tullantı su" OR "su gəlmir" OR "su çatışmazlığı")`);
   }
 
   // Rayon/təşkilat məlumatı natamamdırsa böyük bankdan yalnız bir fallback sorğu götür.
@@ -1009,7 +1012,9 @@ function districtAliases(value:string):string[] {
     .replace(/ş/g,'s').replace(/Ş/g,'S')
     .replace(/ç/g,'c').replace(/Ç/g,'C');
   const aliases = [original, ascii];
-  if (normalizeForMatch(original) === 'berde') aliases.push('Barda');
+  // Azərbaycan dilində rayon adının ən çox rast gəlinən hal/mənsubiyyət formalarını
+  // discovery sorğusuna da veririk. Lokal qəbul filtri ayrıca aidiyyəti yoxlayır.
+  if (normalizeForMatch(original) === 'berde') aliases.push('Barda','Bərdədə','Bərdənin','Bərdə rayonunda','Bərdə rayonunun');
   if (normalizeForMatch(original) === 'agdam') aliases.push('Agdam');
   return [...new Set(aliases.filter(Boolean))];
 }
@@ -2202,8 +2207,17 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
 
   const contains=(text:string,term:string)=>Boolean(term && (` ${text} `).includes(` ${term} `));
   const directMatches = direct.filter(term=>term.length >= 4 && contains(normalized,term));
-  const districtHit = Boolean(district && contains(normalized,district));
-  const villageHits = villageTerms.filter(term=>contains(normalized,term)).slice(0,5);
+  const locationTermHit=(term:string)=>{
+    if (!term) return false;
+    if (contains(normalized,term)) return true;
+    // Bərdə -> Bərdədə / Bərdənin / Bərdədən, kənd adları -> kənd adının şəkilçili forması.
+    // Minimum 5 simvol şərti qısa sözlərdə təsadüfi prefix uyğunluğunu önləyir.
+    if (term.length < 5) return false;
+    const tokens=normalized.split(/\s+/).filter(Boolean);
+    return tokens.some(token=>token.length>term.length && token.startsWith(term));
+  };
+  const districtHit = Boolean(district && locationTermHit(district));
+  const villageHits = villageTerms.filter(term=>locationTermHit(term)).slice(0,5);
   const locationHit = districtHit || villageHits.length > 0;
 
   // Güclü mövzu terminləri. "kanal" kimi ümumi sözlər təkbaşına kifayət etmir,
@@ -2214,7 +2228,11 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'kollektor drenaj','drenaj','hidrotexniki','nasos stansiyasi','su quyusu',
     'su catismamazligi','susuzluq','susuz qalib','su verilmir','su gelmir','su yoxdur',
     'icmeli su','su tapmir','su teminati','su verilisi','su itkisi','ekin sahesi',
-    'fermer su','lilden temizlen','soranlasma'
+    'fermer su','lilden temizlen','soranlasma','su xetti','boru xetti','su kemeri',
+    'su qezasi','qeza berpa','su sebekesi','kanalizasiya','tullanti su','yagis suyu',
+    'su saygaci','suolcen','hidrometrik','hidropost','su anbari','su menbeyi',
+    'nasos','derinlik nasosu','quyu temiri','kanal temizlen','arx temizlen',
+    'kollektor','irriqasiya','su bolgusu','suvarma movsumu','suvarma qrafiki'
   ].map(normalizeForMatch);
 
   const strongHits = strongTopics.filter(term=>contains(normalized,term)).slice(0,8);
