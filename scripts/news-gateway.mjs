@@ -95,7 +95,7 @@ function chunks(items, size = 10) {
 }
 
 async function ingestInChunks({org, platform, label, items}) {
-  const pieces = chunks(items, 10);
+  const pieces = chunks(items, 6);
   const aggregate = {
     received: 0, accepted: 0, rejected: 0, inserted: 0,
     sample_results: [], screenshot_targets: [], accepted_targets: [], errors: [], chunk_failures: 0
@@ -817,10 +817,10 @@ for (const org of plan.organizations) {
     ? shardPool
     : rotateSources(shardPool, SOURCE_BATCH_SIZE, `sources-${org.id}-shard-${SOURCE_SHARD_INDEX}`);
   console.log(`[${org.short_name}] Birbaşa mənbə paketi: ${sourceBatch.length}/${configuredSources.length} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} (${shardPool.length} mənbə)`);
-  // Fast-watch ana səhifə + avtomatik RSS ilə canlı dəyişiklikləri tutur. Orada
-  // ayrıca Bing site:domain axtarışı həm vaxt aparır, həm də çox vaxt exact=0 qaytarır.
-  // Domen axtarışı yalnız arxiv job-da işləyir.
-  const targetedSources=!DIRECT_ONLY && DOMAIN_SEARCH_BATCH > 0
+  // Fast-watch ana səhifə/RSS ilə yanaşı kiçik bir domen axtarışı pəncərəsi də işlədə bilər.
+  // Əvvəl DIRECT_ONLY rejimində bu hissə tam söndürülürdü və bir çox xəbər saytı RSS/link
+  // vermədiyi üçün fast-watch həmişə 0 material görürdü. Batch workflow-da kiçik saxlanılır.
+  const targetedSources=DOMAIN_SEARCH_BATCH > 0
     ? (sourceBatch.length <= DOMAIN_SEARCH_BATCH ? sourceBatch : rotateSources(sourceBatch, DOMAIN_SEARCH_BATCH, `domain-search-${org.id}-shard-${SOURCE_SHARD_INDEX}`))
     : [];
   for (const source of targetedSources) {
@@ -860,14 +860,55 @@ for (const org of plan.organizations) {
     else directWebItems.push(...items);
   }
 
-  // Birbaşa sayt/RSS/sitemap nəticələri əvvəl gəlir ki, geniş axtarış nəticələri ingest limitini doldurmasın.
-  const unifiedWebItems=dedupe([
+  // Namizədləri sadəcə gəldiyi sıraya görə 140-a kəsmək düzgün xəbərlərin hovuzdan
+  // çıxmasına səbəb olurdu. İndi rayon + mövzu + aktiv açar-söz siqnalı olan materiallar
+  // əvvəl sıralanır, yalnız bundan sonra ingest limiti tətbiq olunur. Son qəbul/rədd qərarı
+  // yenə Supabase monitor-worker filtrində verilir; bu sıralama filtri yumşaltmır.
+  const districtNorm=normalizeTitleKey(org.district||'');
+  const queryTerms=[...new Set([
+    ...keywordQueries,
+    ...googleQueries,
+    ...webQueries
+  ].flatMap(q=>normalizeTitleKey(String(q||'').replace(/site:[^\s]+/gi,'')).split(/\s+/))
+    .filter(t=>t.length>=4 && !['barda','berde','rayonu','rayon','sistemlerinin','sistemleri'].includes(t))
+  )].slice(0,160);
+  const topicTerms=['suvarma','meliorasiya','subartezian','artezian','drenaj','kollektor','kanal','arx','su','fermer','ekin','nasos','quyu','temizlen','suvaril'];
+  const sourceWeight=item=>{
+    const kind=String(item?.raw?.kind||'').toLowerCase();
+    if(kind.includes('configured_feed') || kind.includes('configured_site')) return 18;
+    if(kind.includes('google_news')) return 12;
+    if(kind.includes('bing_news')) return 10;
+    return 4;
+  };
+  const relevanceRank=item=>{
+    const text=normalizeTitleKey(`${item?.title||''} ${item?.text||''}`);
+    let score=sourceWeight(item);
+    if(districtNorm && (` ${text} `).includes(` ${districtNorm} `)) score+=70;
+    const topicHits=topicTerms.filter(t=>(` ${text} `).includes(` ${t} `)).length;
+    score+=Math.min(topicHits,5)*12;
+    const keywordHits=queryTerms.filter(t=>(` ${text} `).includes(` ${t} `)).length;
+    score+=Math.min(keywordHits,6)*10;
+    const q=normalizeTitleKey(String(item?.raw?.discovery_query||''));
+    if(districtNorm && q.includes(districtNorm)) score+=15;
+    if(item?.published_at){
+      const ageDays=(Date.now()-new Date(item.published_at).getTime())/86400000;
+      if(Number.isFinite(ageDays)) score+=ageDays<=2?12:ageDays<=30?6:0;
+    }
+    return score;
+  };
+  const allWebCandidates=dedupe([
     ...directWebItems,
     ...domainWebItems,
     ...googleItems,
     ...broadWebItems
-  ]).slice(0,MAX_INGEST_ITEMS);
-  console.log(`[${org.short_name}] Web namizədlər: direct=${directWebItems.length} domain=${domainWebItems.length} google=${googleItems.length} broad=${broadWebItems.length} unified=${unifiedWebItems.length}`);
+  ]);
+  const unifiedWebItems=allWebCandidates
+    .map((item,index)=>({item,index,score:relevanceRank(item)}))
+    .sort((a,b)=>b.score-a.score || a.index-b.index)
+    .slice(0,MAX_INGEST_ITEMS)
+    .map(x=>x.item);
+  const rankedPositive=allWebCandidates.filter(item=>relevanceRank(item)>=70).length;
+  console.log(`[${org.short_name}] Web namizədlər: direct=${directWebItems.length} domain=${domainWebItems.length} google=${googleItems.length} broad=${broadWebItems.length} all=${allWebCandidates.length} yüksək-siqnal=${rankedPositive} unified=${unifiedWebItems.length}`);
 
   const batches = [
     {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}
