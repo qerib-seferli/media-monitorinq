@@ -775,14 +775,26 @@ for (const org of plan.organizations) {
     return host && allowedDomains.some(domain=>host===domain || host.endsWith(`.${domain}`));
   }));
 
+  // Arxiv discovery yalnız 140 əl ilə konfiqurasiya olunmuş domenlə məhdudlaşmır.
+  // Azərbaycan media nəticələri (.az) və ayrıca konfiqurasiya olunmuş domenlər qəbul
+  // hovuzuna düşür; real aidiyyət qərarını Supabase-dəki rayon/kənd + mövzu filtri verir.
+  // Bu, axtarış mühərrikində tapılan düzgün Bərdə xəbərlərinin sırf sources cədvəlində
+  // həmin domen olmadığı üçün itirilməsinin qarşısını alır.
+  const keepDiscoveryItems=(items=[])=>dedupe((Array.isArray(items)?items:[]).filter(item=>{
+    const host=itemDomain(item);
+    if(!host) return false;
+    if(allowedDomains.some(domain=>host===domain || host.endsWith(`.${domain}`))) return true;
+    return host.endsWith('.az') || host==='az';
+  }));
+
   // Arxiv discovery aktiv açar söz bankının shard-a düşən frazalarını da Google News-də yoxlayır.
-  // Yalnız admin paneldə konfiqurasiya olunmuş media domenlərindən gələn nəticələr saxlanılır.
+  // Discovery genişdir; qəbul mərhələsi isə sərt rayon/kənd + mövzu filtri ilə qorunur.
   const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,8);
   const allGoogleQueries=[...new Set([...googleQueries,...keywordGoogleQueries])].slice(0,10);
   if(!DIRECT_ONLY) for (const q of allGoogleQueries) {
     try {
       const g = await googleNews(q);
-      googleItems.push(...keepConfiguredDomainItems(g.items));
+      googleItems.push(...keepDiscoveryItems(g.items));
       if (g.errors.length) console.log(`[${org.short_name}] Google locale xətaları (${q}): ${g.errors.join(' | ')}`);
     } catch (e) {
       totalFailures++; console.log(`[${org.short_name}] Google News xəta (${q}):`, e?.message||e);
@@ -794,8 +806,8 @@ for (const org of plan.organizations) {
       // düşməsinə səbəb olurdu. Hər shard fərqli sorğu işlədiyi üçün 3 səhifəyə qədər
       // oxumaq artıq həm təhlükəsizdir, həm də köhnə materialları tapma şansını artırır.
       for (let page=0; page<3; page++) {
-        broadWebItems.push(...keepConfiguredDomainItems(await bingNews(q,page)));
-        broadWebItems.push(...keepConfiguredDomainItems(await bingWeb(q,page)));
+        broadWebItems.push(...keepDiscoveryItems(await bingNews(q,page)));
+        broadWebItems.push(...keepDiscoveryItems(await bingWeb(q,page)));
       }
     } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
   }

@@ -2235,7 +2235,14 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // sözlər bu qayda ilə qəbul edilmir.
   const curatedBankHits = bankKeywordHits.filter(term=>{
     const words=term.split(/\s+/).filter(Boolean);
-    return words.length >= 2 && term.length >= 8;
+    if (words.length < 2 || term.length < 8) return false;
+    // Konkret açar fraza yalnız təşkilatın öz ərazisinə bağlıdırsa təkbaşına
+    // qəbul siqnalı ola bilər. Məsələn başqa rayonun "Arpaçay su anbarı" kimi
+    // xəbəri sırf ümumi suvarma açar sözünə görə Bərdə monitorinqinə düşməməlidir.
+    if (district && term.includes(district)) return true;
+    if (villageTerms.some(v=>term.includes(v))) return true;
+    if (direct.some(name=>name && term.includes(name))) return true;
+    return locationHit;
   });
 
   const raw:any = item.raw || {};
