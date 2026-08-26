@@ -69,22 +69,42 @@ async function fetchText(url, {timeoutMs = 15000, retries = 1, minGapMs = 1200} 
   throw lastError || new Error('fetch failed');
 }
 
-async function callMonitor(body, timeoutMs = 35000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(MONITOR_URL, {
-      method: 'POST',
-      headers: {'content-type': 'application/json', 'x-monitor-secret': MONITOR_SECRET},
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = {ok:false,error:text.slice(0,500)}; }
-    if (!res.ok) throw new Error(`monitor-worker HTTP ${res.status}: ${text.slice(0,500)}`);
-    return data;
-  } finally { clearTimeout(timer); }
+async function callMonitor(body, timeoutMs = 35000, retries = 2) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(MONITOR_URL, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', 'x-monitor-secret': MONITOR_SECRET},
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = {ok:false,error:text.slice(0,500)}; }
+      if (!res.ok) {
+        const err = new Error(`monitor-worker HTTP ${res.status}: ${text.slice(0,500)}`);
+        err.status = res.status;
+        err.retryAfter = Number(res.headers.get('retry-after') || 0);
+        throw err;
+      }
+      return data;
+    } catch (e) {
+      lastError = e;
+      const status = Number(e?.status || 0);
+      const retryable = status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || e?.name === 'AbortError';
+      if (!retryable || attempt >= retries) throw e;
+      const retryAfterMs = Number(e?.retryAfter || 0) * 1000;
+      const delay = Math.max(retryAfterMs, 1800 * (attempt + 1));
+      console.log(`monitor-worker müvəqqəti xəta (${status || e?.name || 'network'}), təkrar cəhd ${attempt+2}/${retries+1}...`);
+      await sleep(Math.min(delay, 6500));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError || new Error('monitor-worker çağırışı uğursuz oldu');
 }
 
 function chunks(items, size = 10) {

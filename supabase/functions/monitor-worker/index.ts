@@ -2284,7 +2284,14 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
 
   // Aidiyyəti video təşkilat filtrlərindən artıq keçibsə, onun bütün rəyləri saxlanılır.
   // Rəyin özündə "Bərdə" və ya "suvarma" sözünün təkrarlanmaması vacib məlumatı itirməsin.
-  const positiveTopic = strongHits.length>0 || scopedKeywordHits.length>0 || bankKeywordHits.length>0 || flexibleBankHits.length>0;
+  // Web materialında açar-söz bankının öz uyğunluğunu "mövzu" kimi saymırıq.
+  // Əks halda Bərdə + ümumi bank frazası (məs. qəbul, işıq, məktəb və s.) dairəvi
+  // şəkildə positiveTopic yaradıb əlaqəsiz xəbəri qəbul edə bilirdi. Güclü mövzu
+  // siqnalı ayrıca suvarma/meliorasiya terminlərindən gəlməlidir.
+  const coreTopicHit = strongHits.length > 0;
+  const positiveTopic = webLike
+    ? coreTopicHit
+    : (coreTopicHit || scopedKeywordHits.length>0 || bankKeywordHits.length>0 || flexibleBankHits.length>0);
 
   const exactExclusionHits = excludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
   const exclusionHits = [...new Set([...exactExclusionHits,...flexibleExcludeHits])].slice(0,12);
@@ -2310,11 +2317,16 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // Əks halda "sistem", "kanal" və s. ümumi sözlər xəstəxana, idman və başqa
   // əlaqəsiz xəbərləri qəbul edə bilir. Elastik bank uyğunluğu yalnız ərazi siqnalı
   // (rayon/kənd) və ya güclü suvarma-meliorasiya mövzusu ilə birlikdə qəbul olunur.
-  const safeFlexibleBankHit = flexibleBankHits.length>0 && (!webLike || locationHit || strongHits.length>0);
+  // Web-də elastik və dəqiq bank uyğunluğu yalnız ərazi + real su/meliorasiya
+  // mövzusu ilə təhlükəsizdir. Bu qayda Bərdə adı keçən nazir qəbulu, elektrik,
+  // məktəb, hərbi və s. xəbərlərin bankdakı ümumi sözlərə görə düşməsini dayandırır.
+  // Təşkilatın tam adı/qısa adı ayrıca güclü siqnal kimi əvvəlki davranışı saxlayır.
+  const safeFlexibleBankHit = flexibleBankHits.length>0 && (!webLike || (locationHit && coreTopicHit));
+  const safeCuratedBankHit = curatedBankHits.length>0 && (!webLike || (locationHit && coreTopicHit));
 
   const accepted = !ownPortalNoise && !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
-    curatedBankHits.length>0 ||
+    safeCuratedBankHit ||
     safeFlexibleBankHit ||
     (districtWide && locationHit && positiveTopic) ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
@@ -2338,7 +2350,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     reason:accepted
       ? (trustedParentComment?'aidiyyəti-videonun-rəyi'
         :directMatches.length?'təşkilat-adı-uyğunluğu'
-        :curatedBankHits.length?'açar-söz-bankı-dəqiq-uyğunluğu'
+        :safeCuratedBankHit?'açar-söz-bankı-dəqiq-uyğunluğu'
         :safeFlexibleBankHit?'açar-söz-bankı-elastik-uyğunluğu'
         :(districtHit&&positiveTopic)?'rayon-mövzu-uyğunluğu'
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
