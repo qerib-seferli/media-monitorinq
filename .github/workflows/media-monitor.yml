@@ -2,11 +2,15 @@ name: Media Monitorinq Worker
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: media-monitoring-worker
+  cancel-in-progress: false
 
 jobs:
   youtube-monitor:
