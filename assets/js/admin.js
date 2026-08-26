@@ -736,7 +736,7 @@ async function configureBarda() {
   await refresh();
 }
 
-function renderBardaStatus() {
+async function renderBardaStatus() {
   const el = document.querySelector('#barda-status');
   if (!el) return;
   const org = orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
@@ -750,6 +750,16 @@ function renderBardaStatus() {
     webSources.length ? '<span class="badge info">RSS avtomatik aşkarlanır</span>' : ''
   ].filter(Boolean);
   el.innerHTML = bits.join(' ');
+
+  const [web, youtube, latest] = await Promise.all([
+    supabase.from('mentions').select('id',{count:'exact',head:true}).eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0),
+    supabase.from('mentions').select('id',{count:'exact',head:true}).eq('organization_id',org.id).ilike('source_platform','youtube').gt('relevance_score',0),
+    supabase.from('mentions').select('detected_at').eq('organization_id',org.id).gt('relevance_score',0).order('detected_at',{ascending:false}).limit(1).maybeSingle()
+  ]);
+  if (!web.error && !youtube.error) {
+    const last = latest?.data?.detected_at ? fmtDate(latest.data.detected_at) : '—';
+    el.insertAdjacentHTML('beforeend', `<span class="badge info">Bazadakı nəticə: Web ${web.count||0} / YouTube ${youtube.count||0}</span><span class="badge info">Son yeni nəticə: ${escapeHtml(last)}</span>`);
+  }
 }
 
 
@@ -764,8 +774,7 @@ async function runMonitorNow() {
   btn.textContent = old;
   if (error || data?.ok === false) return toast(error?.message || data?.error || 'Monitorinq işə salınmadı', 'error');
   toast(`Monitorinq tamamlandı: ${data?.new_mentions || 0} yeni nəticə`, 'success');
-  const el = document.querySelector('#barda-status');
-  if (el) el.insertAdjacentHTML('beforeend', `<span class="badge info">Son yoxlama: ${data?.checked_sources || 0} mənbə / ${data?.new_mentions || 0} yeni</span>`);
+  await renderBardaStatus();
 }
 
 document.querySelector('#position-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('positions').insert({name:document.querySelector('#position-name').value.trim(),organization_id:document.querySelector('#position-org').value||null}); toast(error?error.message:'Vəzifə əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };

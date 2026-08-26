@@ -1530,33 +1530,48 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
 }
 
 async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],villages:string[],limit=300){
+  // Web arxivi YouTube kimi yığılan tarixçədir: uyğun material bir dəfə təsdiqlənibsə
+  // sonrakı run-larda açar söz bankının dəyişməsi onu monitorinqdən çıxarmır.
+  // relevance_score=0 olmuş köhnə qeydlər də yenidən yoxlanır; cari məntiqə uyğundursa bərpa edilir.
   const result:any=await admin.from('mentions')
     .select('id,title,original_text,source_url,published_at,author_name,raw_payload,relevance_score,source_platform')
     .eq('organization_id',org.id)
     .in('source_platform',['Web','Google News'])
-    .gt('relevance_score',0)
+    .gte('relevance_score',0)
     .order('published_at',{ascending:false,nullsFirst:false})
     .limit(Math.max(1,limit));
   if(result?.error)throw result.error;
-  let checked=0,filteredOut=0;
+  let checked=0,filteredOut=0,restored=0,preserved=0,confirmed=0;
   const samples:any[]=[];
   for(const row of result?.data||[]){
+    const raw=row?.raw_payload||{};
+    const alreadyAccepted=raw?.monitor_acceptance?.accepted===true;
+    if(alreadyAccepted && Number(row?.relevance_score||0)>0){preserved++;continue;}
     const item:Item={
       title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',
       published_at:row?.published_at||null,author:row?.author_name||null,
-      raw:{...(row?.raw_payload||{}),kind:String(row?.raw_payload?.kind||'configured_web'),provider:String(row?.raw_payload?.provider||'web')}
+      raw:{...raw,kind:String(raw?.kind||'configured_web'),provider:String(raw?.provider||'web')}
     };
     const match=evaluateMatch(org,item,keywords,villages);
     checked++;
-    if(!match.accepted){
-      const update:any=await admin.from('mentions').update({relevance_score:0}).eq('id',row.id);
-      if(!update?.error){
-        filteredOut++;
-        if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});
-      }
+    if(match.accepted){
+      const currentScore=Number(row?.relevance_score||0);
+      const patch:any={raw_payload:{...raw,monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches}}};
+      if(currentScore<=0){patch.relevance_score=Math.min(100,Math.max(50,40+Math.min(4,(match.matches||[]).length)*10));restored++;}
+      else confirmed++;
+      const update:any=await admin.from('mentions').update(patch).eq('id',row.id);
+      if(update?.error && samples.length<8)samples.push({title:row?.title||'',reason:'bərpa/təsdiq xətası'});
+      continue;
+    }
+    if(Number(row?.relevance_score||0)>0){
+      const update:any=await admin.from('mentions').update({
+        relevance_score:0,
+        raw_payload:{...raw,monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]}}
+      }).eq('id',row.id);
+      if(!update?.error){filteredOut++;if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});}
     }
   }
-  return {checked,filtered_out:filteredOut,samples};
+  return {checked,filtered_out:filteredOut,restored,preserved,confirmed,samples};
 }
 
 async function storedYoutubeCommentItems(
@@ -1918,7 +1933,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
 
   // Eyni material hər run-da yenidən aşkarlana bilər. Əvvəlcə yeni content_hash ilə yoxla.
   let { data:existing, error:existingError } = await admin.from('mentions')
-    .select('id')
+    .select('id,raw_payload')
     .eq('organization_id',org.id)
     .eq('content_hash',hash)
     .maybeSingle();
@@ -1928,7 +1943,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   // həmin köhnə materialı bir dəfə də insert etməmək üçün başlıq+tarix üzrə fallback axtarış edilir.
   if (!existing?.id && isWebNews && item.title) {
     let legacyQuery:any = admin.from('mentions')
-      .select('id')
+      .select('id,raw_payload')
       .eq('organization_id',org.id)
       .in('source_platform',['Web','Google News'])
       .eq('title',item.title)
@@ -1953,7 +1968,11 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
       unavailable_since:null,
       unavailable_reason:null,
       consecutive_misses:0,
-      raw_payload:item.raw || item
+      raw_payload:{
+        ...((existing as any)?.raw_payload || {}),
+        ...(item.raw || item),
+        monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches}
+      }
     };
     if (item.author) refresh.author_name=item.author;
     if (item.published_at) refresh.published_at=item.published_at;
@@ -1985,7 +2004,10 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     relevance_score:ai?.relevance_score ? clamp(ai.relevance_score) : relevance,
     published_at:item.published_at || null,
     content_hash:hash,
-    raw_payload:item.raw || item,
+    raw_payload:{
+      ...(item.raw || item),
+      monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches}
+    },
     source_status:'active',
     last_seen_at:new Date().toISOString(),
     last_verified_at:new Date().toISOString(),
