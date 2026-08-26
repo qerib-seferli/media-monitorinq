@@ -751,14 +751,21 @@ async function renderBardaStatus() {
   ].filter(Boolean);
   el.innerHTML = bits.join(' ');
 
-  const [web, youtube, latest] = await Promise.all([
+  const recentCutoff = new Date(Date.now() - 90 * 86400000).toISOString();
+  const [web, youtube, latest, recentWeb, oldestWeb] = await Promise.all([
     supabase.from('mentions').select('id',{count:'exact',head:true}).eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0),
     supabase.from('mentions').select('id',{count:'exact',head:true}).eq('organization_id',org.id).ilike('source_platform','youtube').gt('relevance_score',0),
-    supabase.from('mentions').select('detected_at').eq('organization_id',org.id).gt('relevance_score',0).order('detected_at',{ascending:false}).limit(1).maybeSingle()
+    supabase.from('mentions').select('detected_at').eq('organization_id',org.id).gt('relevance_score',0).order('detected_at',{ascending:false}).limit(1).maybeSingle(),
+    supabase.from('mentions').select('id',{count:'exact',head:true}).eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0).gte('published_at',recentCutoff),
+    supabase.from('mentions').select('published_at').eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0).not('published_at','is',null).order('published_at',{ascending:true}).limit(1).maybeSingle()
   ]);
   if (!web.error && !youtube.error) {
     const last = latest?.data?.detected_at ? fmtDate(latest.data.detected_at) : '—';
-    el.insertAdjacentHTML('beforeend', `<span class="badge info">Bazadakı nəticə: Web ${web.count||0} / YouTube ${youtube.count||0}</span><span class="badge info">Son yeni nəticə: ${escapeHtml(last)}</span>`);
+    const totalWeb = Number(web.count || 0);
+    const currentWeb = recentWeb?.error ? 0 : Number(recentWeb.count || 0);
+    const archiveWeb = Math.max(0, totalWeb - currentWeb);
+    const oldest = oldestWeb?.data?.published_at ? fmtDate(oldestWeb.data.published_at) : '—';
+    el.insertAdjacentHTML('beforeend', `<span class="badge info">Bazadakı nəticə: Web ${totalWeb} / YouTube ${youtube.count||0}</span><span class="badge info">Web arxiv: ${archiveWeb} / son 90 gün: ${currentWeb}</span><span class="badge info">Ən köhnə Web: ${escapeHtml(oldest)}</span><span class="badge info">Son yeni nəticə: ${escapeHtml(last)}</span><span class="badge ok">Dərin arxiv backfill aktivdir</span>`);
   }
 }
 

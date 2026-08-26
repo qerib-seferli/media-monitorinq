@@ -14,6 +14,11 @@ import { join } from 'node:path';
 let lastExternalFetchAt = 0;
 let gdeltBlockedUntil = 0;
 const DIRECT_ONLY = ['1','true','yes'].includes(String(process.env.NEWS_DIRECT_ONLY || '').toLowerCase());
+const DEEP_BACKFILL = ['1','true','yes'].includes(String(process.env.NEWS_DEEP_BACKFILL || '').toLowerCase());
+const REFILTER_EXISTING = ['1','true','yes'].includes(String(process.env.NEWS_REFILTER_EXISTING || '').toLowerCase());
+const ARCHIVE_YEAR_START = Math.max(2000, Math.min(new Date().getFullYear(), Number(process.env.NEWS_ARCHIVE_YEAR_START || 2000)));
+const ARCHIVE_YEAR_END = Math.max(ARCHIVE_YEAR_START, Math.min(new Date().getFullYear(), Number(process.env.NEWS_ARCHIVE_YEAR_END || new Date().getFullYear())));
+const BING_PAGE_LIMIT = Math.max(1, Math.min(10, Number(process.env.NEWS_BING_PAGE_LIMIT || (DEEP_BACKFILL ? 6 : 3))));
 const SOURCE_BATCH_SIZE = Math.max(4, Math.min(40, Number(process.env.NEWS_SOURCE_BATCH || (DIRECT_ONLY ? 24 : 8))));
 const DOMAIN_SEARCH_BATCH = Math.max(0, Math.min(SOURCE_BATCH_SIZE, Number(process.env.NEWS_DOMAIN_SEARCH_BATCH ?? (DIRECT_ONLY ? 0 : 6))));
 const BROAD_QUERY_LIMIT = Math.max(0, Math.min(12, Number(process.env.NEWS_BROAD_QUERY_LIMIT ?? (DIRECT_ONLY ? 0 : 2))));
@@ -255,7 +260,7 @@ function rotate(items, count, salt='') {
 
 function rotateSources(items, count, salt='') {
   if (!Array.isArray(items) || !items.length || count <= 0) return [];
-  const bucket = Math.floor(Date.now()/(DIRECT_ONLY ? 45000 : 300000));
+  const bucket = Math.floor(Date.now()/(DIRECT_ONLY ? 45000 : (DEEP_BACKFILL ? 3600000 : 300000)));
   let hash = 0;
   for (const c of String(salt)) hash = ((hash << 5) - hash + c.charCodeAt(0)) | 0;
   const start = Math.abs(bucket * Math.max(1,count) + hash) % items.length;
@@ -630,7 +635,7 @@ async function directWebsite(source, org) {
         const xml=await fetchText(sm,{timeoutMs:8000,retries:0,minGapMs:350});
         const parsed=parseSitemap(xml);
         let urls=[...parsed.urls];
-        for(const idx of rotatingIndexes(parsed.indexes,6,`${org?.id||''}-${origin}`)){
+        for(const idx of rotatingIndexes(parsed.indexes,DEEP_BACKFILL?24:6,`${org?.id||''}-${origin}-${archiveYearForShard(org?.id||origin)}`)){
           try{
             const nested=await fetchText(idx,{timeoutMs:6000,retries:0,minGapMs:300});
             urls.push(...parseSitemap(nested).urls);
@@ -639,7 +644,7 @@ async function directWebsite(source, org) {
         const relevant=urls.filter(row=>relevantSitemapUrl(row.url,org));
         const chosen=(relevant.length?relevant:urls)
           .sort((a,b)=>String(b.lastmod||'').localeCompare(String(a.lastmod||'')))
-          .slice(0,relevant.length?80:24);
+          .slice(0,relevant.length?(DEEP_BACKFILL?260:80):(DEEP_BACKFILL?100:24));
         for(const row of chosen) out.push({
           title:row.url.split('/').filter(Boolean).pop()?.replace(/[-_]+/g,' ')||row.url,
           text:'',url:row.url,published_at:row.lastmod||null,image:null,author:null,
@@ -662,7 +667,7 @@ async function directWebsite(source, org) {
       }catch{}
     }
   } catch(e){ console.log(`[${orgName}] Birbaşa sayt discovery xəta: ${base} — ${e?.message||e}`); }
-  return dedupe(out).slice(0,100);
+  return dedupe(out).slice(0,DEEP_BACKFILL?320:100);
 }
 
 async function directFeed(source, org) {
@@ -676,6 +681,36 @@ async function directFeed(source, org) {
     console.log(`[${orgName}] Mənbə RSS xəta: ${source.url} — ${e?.message||e}`);
     return [];
   }
+}
+
+function archiveYearForShard(salt='') {
+  const years=[];
+  for(let y=ARCHIVE_YEAR_END;y>=ARCHIVE_YEAR_START;y--) years.push(y);
+  if(!years.length) return new Date().getFullYear();
+  let hash=0;
+  for(const c of String(salt)) hash=((hash<<5)-hash+c.charCodeAt(0))|0;
+  const cycle=Math.floor(Date.now()/(2*60*60*1000));
+  const idx=Math.abs(cycle*SOURCE_SHARD_COUNT + SOURCE_SHARD_INDEX + hash)%years.length;
+  return years[idx];
+}
+function withArchiveWindow(query, org) {
+  if(!DEEP_BACKFILL) return query;
+  const year=archiveYearForShard(`${org?.id||''}-${query}`);
+  // Google/Bing hər ikisi bu date operatorlarını qəbul edir. Sorgunun sonunda il də
+  // saxlanılır ki, operatoru nəzərə almayan indexlərdə belə tarixi nəticə pəncərəsi dəyişsin.
+  return `${query} after:${year}-01-01 before:${year+1}-01-01 ${year}`;
+}
+function deepArchiveQueries(org, baseQueries=[]) {
+  if(!DEEP_BACKFILL) return baseQueries;
+  const district=String(org?.district||'').trim();
+  const year=archiveYearForShard(org?.id||district);
+  const core=district ? [
+    `\"${district}\" (suvarma OR meliorasiya OR subartezian OR artezian)`,
+    `\"${district}\" (kanal OR arx OR drenaj OR kollektor OR nasos OR quyu)`,
+    `\"${district}\" (\"su təchizatı\" OR \"içməli su\" OR \"su problemi\" OR fermer OR əkin)`,
+    `\"${district}\" (\"Su İdarəsi\" OR SMSİİ OR sukanal OR \"Suvarma Sistemləri\")`
+  ] : [];
+  return [...new Set([...baseQueries,...core].map(q=>withArchiveWindow(q,org)))];
 }
 
 function shardQueryWindow(items, limit, shardIndex = 0, shardCount = 1) {
@@ -710,6 +745,7 @@ try {
   throw e;
 }
 if (!plan?.ok || !Array.isArray(plan.organizations)) throw new Error(`News plan alınmadı: ${JSON.stringify(plan).slice(0,800)}`);
+console.log(`NEWS_GATEWAY_MODE ${DIRECT_ONLY?'FAST_WATCH':DEEP_BACKFILL?'DEEP_BACKFILL':'ARCHIVE_DISCOVERY'} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} | bing_pages=${BING_PAGE_LIMIT}${DEEP_BACKFILL?` | archive_year=${archiveYearForShard('run')}`:''}`);
 
 let totalReceived=0, totalAccepted=0, totalRejected=0, totalInserted=0, totalFailures=0;
 let gdeltUsedThisRun=false;
@@ -718,7 +754,7 @@ for (const org of plan.organizations) {
   // Yalnız 1-ci shard əvvəlki Web qeydlərini cari axtarılmamalı sözlərlə yenidən yoxlayır.
   // Beləliklə əvvəlki yumşaq filtrdən keçmiş uyğunsuz xəbərlər relevance_score=0 olur
   // və Monitorinq/Hesabat/Bildirişlər ekranından avtomatik çıxır.
-  if (!DIRECT_ONLY && SOURCE_SHARD_INDEX === 0) {
+  if (!DIRECT_ONLY && REFILTER_EXISTING && SOURCE_SHARD_INDEX === 0) {
     try {
       const cleaned = await callMonitor({mode:'news_refilter', organization_id:org.id}, 45000);
       if (cleaned?.ok) console.log(`[${org.short_name}] Web təmizləmə: checked=${cleaned.checked||0}, filtered_out=${cleaned.filtered_out||0}`);
@@ -760,18 +796,24 @@ for (const org of plan.organizations) {
     ...azDomainQueries,
     ...directDomainQueries
   ].filter(Boolean))];
-  const webQueries = DIRECT_ONLY ? [] : shardQueryWindow(
+  const selectedDiscoveryQueries = DIRECT_ONLY ? [] : shardQueryWindow(
     shardDiscoveryPool,
     Math.max(1,BROAD_QUERY_LIMIT),
     SOURCE_SHARD_INDEX,
     SOURCE_SHARD_COUNT
   ).slice(0,Math.max(1,BROAD_QUERY_LIMIT));
+  const webQueries = DEEP_BACKFILL
+    ? deepArchiveQueries(org, selectedDiscoveryQueries).slice(0,Math.max(4,BROAD_QUERY_LIMIT+4))
+    : selectedDiscoveryQueries;
   // Google News də shard üzrə fərqli sorğular görür. Əsas rayon sorğusu qorunur,
   // ikinci/üçüncü sorğular isə həmin shard-ın açar söz pəncərəsindən seçilir.
-  const googleQueries = DIRECT_ONLY ? [] : [...new Set([
+  const googleBaseQueries = DIRECT_ONLY ? [] : [...new Set([
     ...(broadDistrict.length ? broadDistrict : topicCore.slice(0,1)),
     ...shardQueryWindow([...rotatingQueries,...keywordQueries], 3, SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT)
   ].filter(Boolean))].slice(0,4);
+  const googleQueries = DEEP_BACKFILL
+    ? deepArchiveQueries(org, googleBaseQueries).slice(0,8)
+    : googleBaseQueries;
   console.log(`[${org.short_name}] Açar söz bankı: ${Number(org.keyword_count||keywordBank.length)} aktiv | bu shard: ${keywordQueries.length} sorğu`);
   console.log(`[${org.short_name}] Web discovery sorğuları: ${webQueries.join(' || ')}`);
   console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
@@ -809,8 +851,8 @@ for (const org of plan.organizations) {
 
   // Arxiv discovery aktiv açar söz bankının shard-a düşən frazalarını da Google News-də yoxlayır.
   // Discovery genişdir; qəbul mərhələsi isə sərt rayon/kənd + mövzu filtri ilə qorunur.
-  const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,8);
-  const allGoogleQueries=[...new Set([...googleQueries,...keywordGoogleQueries])].slice(0,10);
+  const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,DEEP_BACKFILL?12:8).map(q=>DEEP_BACKFILL?withArchiveWindow(q,org):q);
+  const allGoogleQueries=[...new Set([...googleQueries,...keywordGoogleQueries])].slice(0,DEEP_BACKFILL?16:10);
   if(!DIRECT_ONLY) for (const q of allGoogleQueries) {
     try {
       const g = await googleNews(q);
@@ -825,7 +867,7 @@ for (const org of plan.organizations) {
       // Arxiv run-da ilk səhifə ilə kifayətlənmək eyni populyar nəticələrin təkrar
       // düşməsinə səbəb olurdu. Hər shard fərqli sorğu işlədiyi üçün 3 səhifəyə qədər
       // oxumaq artıq həm təhlükəsizdir, həm də köhnə materialları tapma şansını artırır.
-      for (let page=0; page<3; page++) {
+      for (let page=0; page<BING_PAGE_LIMIT; page++) {
         broadWebItems.push(...keepDiscoveryItems(await bingNews(q,page)));
         broadWebItems.push(...keepDiscoveryItems(await bingWeb(q,page)));
       }
