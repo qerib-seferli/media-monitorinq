@@ -2299,10 +2299,16 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0 && (!villageHits.length || ambiguousVillageHit);
 
   const districtWide = org.show_district_wide !== false;
+  // Web-də minlərlə açar söz bankından gələn elastik uyğunluq təkbaşına kifayət etmir.
+  // Əks halda "sistem", "kanal" və s. ümumi sözlər xəstəxana, idman və başqa
+  // əlaqəsiz xəbərləri qəbul edə bilir. Elastik bank uyğunluğu yalnız ərazi siqnalı
+  // (rayon/kənd) və ya güclü suvarma-meliorasiya mövzusu ilə birlikdə qəbul olunur.
+  const safeFlexibleBankHit = flexibleBankHits.length>0 && (!webLike || locationHit || strongHits.length>0);
+
   const accepted = !ownPortalNoise && !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
     curatedBankHits.length>0 ||
-    flexibleBankHits.length>0 ||
+    safeFlexibleBankHit ||
     (districtWide && locationHit && positiveTopic) ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
   )));
@@ -2326,7 +2332,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
       ? (trustedParentComment?'aidiyyəti-videonun-rəyi'
         :directMatches.length?'təşkilat-adı-uyğunluğu'
         :curatedBankHits.length?'açar-söz-bankı-dəqiq-uyğunluğu'
-        :flexibleBankHits.length?'açar-söz-bankı-elastik-uyğunluğu'
+        :safeFlexibleBankHit?'açar-söz-bankı-elastik-uyğunluğu'
         :(districtHit&&positiveTopic)?'rayon-mövzu-uyğunluğu'
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
         :'mövzu-uyğunluğu')

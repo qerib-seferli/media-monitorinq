@@ -698,7 +698,7 @@ for (const org of plan.organizations) {
   // Yalnız 1-ci shard əvvəlki Web qeydlərini cari axtarılmamalı sözlərlə yenidən yoxlayır.
   // Beləliklə əvvəlki yumşaq filtrdən keçmiş uyğunsuz xəbərlər relevance_score=0 olur
   // və Monitorinq/Hesabat/Bildirişlər ekranından avtomatik çıxır.
-  if (SOURCE_SHARD_INDEX === 0) {
+  if (!DIRECT_ONLY && SOURCE_SHARD_INDEX === 0) {
     try {
       const cleaned = await callMonitor({mode:'news_refilter', organization_id:org.id}, 45000);
       if (cleaned?.ok) console.log(`[${org.short_name}] Web təmizləmə: checked=${cleaned.checked||0}, filtered_out=${cleaned.filtered_out||0}`);
