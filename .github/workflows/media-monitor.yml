@@ -123,7 +123,9 @@ jobs:
   web-deep-backfill:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 */2 * * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 14
+    # Dərin arxiv 1000+ namizəd toplaya bildiyi üçün 14 dəqiqəlik limit
+    # bəzi shard-ları yarıda kəsirdi. İş məntiqinə toxunmadan yalnız vaxt limiti artırılır.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
