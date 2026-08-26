@@ -2,8 +2,7 @@ name: Media Monitorinq Worker
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-    - cron: '*/15 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -11,7 +10,7 @@ permissions:
 
 jobs:
   youtube-monitor:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
@@ -37,7 +36,7 @@ jobs:
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
 
   web-fast-watch:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -78,7 +77,7 @@ jobs:
         run: node scripts/news-gateway.mjs
 
   web-archive-discovery:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
