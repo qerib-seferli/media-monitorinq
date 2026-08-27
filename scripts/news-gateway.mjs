@@ -35,6 +35,7 @@ const SITEMAP_INDEX_LIMIT = Math.max(2, Math.min(20, Number(process.env.NEWS_SIT
 const SITEMAP_URL_LIMIT = Math.max(40, Math.min(1200, Number(process.env.NEWS_SITEMAP_URL_LIMIT || (RECENT_PRIORITY ? 700 : DEEP_BACKFILL ? 450 : 140))));
 const SITEMAP_PROBE_LIMIT = Math.max(0, Math.min(180, Number(process.env.NEWS_SITEMAP_PROBE_LIMIT || (RECENT_PRIORITY ? 50 : DEEP_BACKFILL ? 30 : 0))));
 const INGEST_CHUNK_SIZE = Math.max(1, Math.min(6, Number(process.env.NEWS_INGEST_CHUNK_SIZE || (SITEMAP_FOCUS ? 3 : 4))));
+const DOMAIN_PAGE_LIMIT = Math.max(1, Math.min(3, Number(process.env.NEWS_DOMAIN_PAGE_LIMIT || (RECENT_PRIORITY ? 2 : 1))));
 const SOURCE_SHARD_COUNT = Math.max(1, Math.min(20, Number(process.env.NEWS_SOURCE_SHARD_COUNT || 1)));
 const SOURCE_SHARD_INDEX = Math.max(0, Math.min(SOURCE_SHARD_COUNT - 1, Number(process.env.NEWS_SOURCE_SHARD_INDEX || 0)));
 
@@ -479,7 +480,31 @@ async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {
   const window=archiveWindowForShard(`${org?.id||''}-probe`);
   const preferred=rows.filter(item=>sitemapRowInArchiveWindow({url:item.url,lastmod:item.published_at},org));
   const pool=preferred.length?preferred:rows;
-  const chosen=rotate(pool,Math.min(limit,pool.length),`sitemap-probe-${org?.id||''}-${window.label}-${SOURCE_SHARD_INDEX}`);
+
+  // Sitemap-lərdə minlərlə URL olur. Əvvəlki tam rotasiya Bərdə/su siqnalı olan
+  // URL-ləri təsadüfi 120-lik blokun kənarında saxlaya bilirdi. İndi URL slug-u,
+  // rayon, mövzu və lastmod siqnalı ilə ən perspektivli səhifələr əvvəl açılır,
+  // qalan yerlər isə rotasiya ilə doldurulur ki, bütün arxiv mərhələli gəzinilsin.
+  const district=asciiToken(org?.district||'');
+  const topicRoots=['suvar','melior','subartez','artez','drenaj','kollektor','kanal','arx','nasos','quyu','su','fermer','ekin'];
+  const scored=pool.map((item,index)=>{
+    const hay=asciiToken(`${item?.title||''} ${item?.url||''}`);
+    let score=0;
+    if(district && hay.includes(district)) score+=80;
+    score+=Math.min(4,topicRoots.filter(root=>hay.includes(root)).length)*20;
+    if(relevantSitemapUrl(item?.url||'',org)) score+=90;
+    if(item?.published_at){
+      const ts=new Date(item.published_at).getTime();
+      if(Number.isFinite(ts)) score+=Math.max(0,20-Math.floor((Date.now()-ts)/86400000/90));
+    }
+    return {item,index,score};
+  }).sort((a,b)=>b.score-a.score || a.index-b.index);
+  const strong=scored.filter(x=>x.score>=80).map(x=>x.item);
+  const strongTake=strong.slice(0,Math.min(strong.length,Math.max(1,Math.ceil(limit*0.65))));
+  const strongUrls=new Set(strongTake.map(x=>canonicalUrlKey(x?.url||'')));
+  const remainder=pool.filter(x=>!strongUrls.has(canonicalUrlKey(x?.url||'')));
+  const fill=rotate(remainder,Math.max(0,Math.min(limit,pool.length)-strongTake.length),`sitemap-probe-${org?.id||''}-${window.label}-${SOURCE_SHARD_INDEX}`);
+  const chosen=dedupe([...strongTake,...fill]).slice(0,Math.min(limit,pool.length));
   const enriched=[];
   for(let i=0;i<chosen.length;i++){
     const full=await enrichPage(chosen[i]);
@@ -865,14 +890,26 @@ function withArchiveWindow(query, org) {
 function deepArchiveQueries(org, baseQueries=[]) {
   if(!DEEP_BACKFILL) return baseQueries;
   const district=String(org?.district||'').trim();
-  const year=archiveYearForShard(org?.id||district);
+  const orgName=String(org?.name||'').trim();
+  const shortName=String(org?.short_name||'').trim();
   const core=district ? [
     `\"${district}\" (suvarma OR meliorasiya OR subartezian OR artezian)`,
     `\"${district}\" (kanal OR arx OR drenaj OR kollektor OR nasos OR quyu)`,
     `\"${district}\" (\"su təchizatı\" OR \"içməli su\" OR \"su problemi\" OR fermer OR əkin)`,
-    `\"${district}\" (\"Su İdarəsi\" OR SMSİİ OR sukanal OR \"Suvarma Sistemləri\")`
+    `\"${district}\" (\"Su İdarəsi\" OR SMSİİ OR sukanal OR \"Suvarma Sistemləri\")`,
+    `\"${district}\" \"Su Meliorasiya Sistemlərinin İstismarı İdarəsi\"`,
+    `\"${district}\" \"Suvarma Sistemləri İdarəsi\"`,
+    `\"${district}\" \"Su İdarəsi\"`,
+    `\"${district}\" sukanal`
   ] : [];
-  return [...new Set([...baseQueries,...core].map(q=>withArchiveWindow(q,org)))];
+  // Rəsmi təşkilat adı və qısa ad böyük açar-söz bankının rotasiyasını gözləmədən
+  // hər prioritet arxiv run-da ayrıca yoxlanılır. Bu, 2024–2026 xəbərlərinin
+  // aylarla gecikməsinin qarşısını alır; aylıq pəncərə yenə dublikatları azaldır.
+  const official=[orgName,shortName]
+    .filter(Boolean)
+    .filter((v,i,a)=>a.findIndex(x=>asciiToken(x)===asciiToken(v))===i)
+    .map(v=>`\"${v.replace(/[\"“”]+/g,' ').trim()}\"`);
+  return [...new Set([...official,...baseQueries,...core].map(q=>withArchiveWindow(q,org)))];
 }
 
 function shardQueryWindow(items, limit, shardIndex = 0, shardCount = 1) {
@@ -1059,19 +1096,23 @@ for (const org of plan.organizations) {
     let found=[];
     for (let qi=0; qi<queries.length; qi++) {
       try {
-        // Bing Web RSS bir sıra Azərbaycan media domenlərində site: filtrini zəif
-        // tətbiq edir və raw=10 olsa da exact=0 qalır. Eyni sorğunu Bing News RSS-də
-        // də yoxlayırıq; news nəticələri publisher URL-ni verdiyi üçün real xəbər
-        // arxivini tapmaq ehtimalı xeyli artır.
-        const [newsRaw,webRaw]=await Promise.all([
-          bingNews(queries[qi],0).catch(()=>[]),
-          bingWeb(queries[qi],0).catch(()=>[])
-        ]);
-        const raw=dedupe([...(newsRaw||[]),...(webRaw||[])]);
-        const exact=keepDomain(raw,domain);
-        found.push(...exact);
-        console.log(`[${org.short_name}] Domen axtarışı: ${domain} | ${qi+1}/${queries.length} | news=${newsRaw.length} web=${webRaw.length} exact=${exact.length} | ${queries[qi]}`);
-        if(dedupe(found).length >= 4) break;
+        let qNews=0,qWeb=0,qExact=0;
+        // Prioritet 2024–2026 backfill-də domen üzrə ikinci nəticə səhifəsi də
+        // oxunur. Bu, birinci səhifədə təkrar/populyar xəbərlərə ilişməyi azaldır.
+        // Normal fast-watch bir səhifədə qalır; performans və quota davranışı qorunur.
+        for(let page=0; page<DOMAIN_PAGE_LIMIT; page++){
+          const [newsRaw,webRaw]=await Promise.all([
+            bingNews(queries[qi],page).catch(()=>[]),
+            bingWeb(queries[qi],page).catch(()=>[])
+          ]);
+          qNews+=newsRaw.length; qWeb+=webRaw.length;
+          const raw=dedupe([...(newsRaw||[]),...(webRaw||[])]);
+          const exact=keepDomain(raw,domain);
+          qExact+=exact.length; found.push(...exact);
+          if(raw.length===0) break;
+        }
+        console.log(`[${org.short_name}] Domen axtarışı: ${domain} | ${qi+1}/${queries.length} | pages=${DOMAIN_PAGE_LIMIT} news=${qNews} web=${qWeb} exact=${qExact} | ${queries[qi]}`);
+        if(dedupe(found).length >= 6) break;
       } catch(e) {
         console.log(`[${org.short_name}] Domen axtarışı xəta (${domain}): ${e?.message||e}`);
       }

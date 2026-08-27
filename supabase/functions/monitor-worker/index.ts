@@ -2212,7 +2212,8 @@ function flexibleExcludeMatch(normalizedText:string, normalizedTerm:string) {
 }
 
 function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] = []) {
-  const normalized = normalizeForMatch(`${item.title || ''} ${item.text || ''}`);
+  const urlSignal = (()=>{ try { const u=new URL(String(item.url||'')); return decodeURIComponent(`${u.pathname} ${u.search}`); } catch { return String(item.url||''); } })();
+  const normalized = normalizeForMatch(`${item.title || ''} ${item.text || ''} ${urlSignal}`);
   const direct = [String(org.name||''),String(org.short_name||'')]
     .map(normalizeForMatch).filter(Boolean);
   const normalizedKeywords = Array.isArray(org.__normalized_keywords) ? org.__normalized_keywords : keywords.map(normalizeForMatch).filter(Boolean);
@@ -2351,10 +2352,12 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const negativeOnly = !webLike && exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
 
   const foreignDistricts = [
+    'abseron','baki','gence','sumqayit','mingecevir','sirvan','naftalan',
     'agcabedi','agdam','agdas','agsu','astara','balaken','beyleqan','bilesuvar','celilabad','daskesen',
     'fuzuli','gedebey','goranboy','goycay','goygol','haciqabul','imisli','ismayilli','kurdemir','lerik',
     'masalli','neftcala','oguz','qebele','qax','qazax','qusar','saatli','sabirabad','salyan','samaxi',
-    'samkir','siyazan','terter','ucar','yardimli','yevlax','zerdab'
+    'samkir','siyazan','terter','ucar','yardimli','yevlax','zerdab','susa','lacin','kelbecer','qubadli',
+    'zengilan','xocali','xocavend'
   ];
   const foreignNamesHit = foreignDistricts.filter(name=>contains(normalized,name));
   const ambiguousVillageHit = foreignNamesHit.some(name=>villageTerms.includes(name));
@@ -2377,7 +2380,11 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // backfill + real su/meliorasiya mövzusu olduqda işləyir; başqa rayon və exclude veto-su qalır.
   const discoveryQuery = normalizeForMatch(String(raw?.discovery_query || ''));
   const historicalScopedQuery = Boolean(historicalBackfill && district && (contains(discoveryQuery,district) || (district.length>=5 && discoveryQuery.split(/\s+/).some(token=>token.startsWith(district)))));
-  const historicalQueryTopicHit = historicalScopedQuery && coreTopicHit;
+  // Axtarış sorğusunda Bərdə yazılması nəticənin özünün Bərdəyə aid olduğunu
+  // sübut etmir. Bing/Google bəzən sorğuya Abşeron, Mingəçevir və başqa rayon
+  // xəbərləri qaytarırdı. Arxiv sorğusu yalnız nəticənin öz başlıq/mətn/URL-ində
+  // rayon/təşkilat siqnalı olduqda əlavə qəbul səbəbi yaradır.
+  const historicalQueryTopicHit = historicalScopedQuery && coreTopicHit && (locationHit || directMatches.length>0);
 
   const accepted = !ownPortalNoise && !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
     directMatches.length>0 ||
