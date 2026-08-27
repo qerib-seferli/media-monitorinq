@@ -1,6 +1,6 @@
 # Web/Xəbər canlı izləmə və dedupe patch
 
-Dəyişən hissələr:
+Dəyişən hissələr: 
 - GitHub gateway Web/Xəbər discovery-ni .az domenləri və təşkilatın birbaşa saytları ilə genişləndirir.
 - Bərdə SMSİİ üçün `berdesmsii.az` avtomatik birbaşa Web mənbəsi kimi yoxlanır; SQL onu `sources` cədvəlinə də əlavə edir.
 - Sitemap / RSS / Atom / ana səhifə daxili link discovery dəstəyi əlavə olunub.
