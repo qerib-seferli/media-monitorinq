@@ -765,7 +765,9 @@ async function renderBardaStatus() {
     const currentWeb = recentWeb?.error ? 0 : Number(recentWeb.count || 0);
     const archiveWeb = Math.max(0, totalWeb - currentWeb);
     const oldest = oldestWeb?.data?.published_at ? fmtDate(oldestWeb.data.published_at) : '—';
-    el.insertAdjacentHTML('beforeend', `<span class="badge info">Bazadakı nəticə: Web ${totalWeb} / YouTube ${youtube.count||0}</span><span class="badge info">Web arxiv: ${archiveWeb} / son 90 gün: ${currentWeb}</span><span class="badge info">Ən köhnə Web: ${escapeHtml(oldest)}</span><span class="badge info">Son yeni nəticə: ${escapeHtml(last)}</span><span class="badge ok">Dərin arxiv backfill aktivdir</span>`);
+    const currentYear = new Date().getFullYear();
+    const recentStart = currentYear - 2;
+    el.insertAdjacentHTML('beforeend', `<span class="badge info">Bazadakı nəticə: Web ${totalWeb} / YouTube ${youtube.count||0}</span><span class="badge info">Web arxiv: ${archiveWeb} / son 90 gün: ${currentWeb}</span><span class="badge info">Ən köhnə Web: ${escapeHtml(oldest)}</span><span class="badge info">Son yeni nəticə: ${escapeHtml(last)}</span><span class="badge ok">Prioritet Web backfill: ${recentStart}–${currentYear}</span><span class="badge ok">Tarixi arxiv backfill: 2000–${recentStart-1}</span>`);
   }
 }
 

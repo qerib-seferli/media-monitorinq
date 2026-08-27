@@ -15,9 +15,12 @@ let lastExternalFetchAt = 0;
 let gdeltBlockedUntil = 0;
 const DIRECT_ONLY = ['1','true','yes'].includes(String(process.env.NEWS_DIRECT_ONLY || '').toLowerCase());
 const DEEP_BACKFILL = ['1','true','yes'].includes(String(process.env.NEWS_DEEP_BACKFILL || '').toLowerCase());
+const RECENT_PRIORITY = ['1','true','yes'].includes(String(process.env.NEWS_RECENT_PRIORITY || '').toLowerCase());
 const REFILTER_EXISTING = ['1','true','yes'].includes(String(process.env.NEWS_REFILTER_EXISTING || '').toLowerCase());
-const ARCHIVE_YEAR_START = Math.max(2000, Math.min(new Date().getFullYear(), Number(process.env.NEWS_ARCHIVE_YEAR_START || 2000)));
-const ARCHIVE_YEAR_END = Math.max(ARCHIVE_YEAR_START, Math.min(new Date().getFullYear(), Number(process.env.NEWS_ARCHIVE_YEAR_END || new Date().getFullYear())));
+const CURRENT_YEAR = new Date().getFullYear();
+const DEFAULT_RECENT_YEAR_START = Math.max(2000, CURRENT_YEAR - 2);
+const ARCHIVE_YEAR_START = Math.max(2000, Math.min(CURRENT_YEAR, Number(process.env.NEWS_ARCHIVE_YEAR_START || (RECENT_PRIORITY ? DEFAULT_RECENT_YEAR_START : 2000))));
+const ARCHIVE_YEAR_END = Math.max(ARCHIVE_YEAR_START, Math.min(CURRENT_YEAR, Number(process.env.NEWS_ARCHIVE_YEAR_END || (RECENT_PRIORITY ? CURRENT_YEAR : CURRENT_YEAR))));
 const BING_PAGE_LIMIT = Math.max(1, Math.min(10, Number(process.env.NEWS_BING_PAGE_LIMIT || (DEEP_BACKFILL ? 6 : 3))));
 const SOURCE_BATCH_SIZE = Math.max(4, Math.min(40, Number(process.env.NEWS_SOURCE_BATCH || (DIRECT_ONLY ? 24 : 8))));
 const DOMAIN_SEARCH_BATCH = Math.max(0, Math.min(SOURCE_BATCH_SIZE, Number(process.env.NEWS_DOMAIN_SEARCH_BATCH ?? (DIRECT_ONLY ? 0 : 6))));
@@ -747,7 +750,7 @@ try {
   throw e;
 }
 if (!plan?.ok || !Array.isArray(plan.organizations)) throw new Error(`News plan alınmadı: ${JSON.stringify(plan).slice(0,800)}`);
-console.log(`NEWS_GATEWAY_MODE ${DIRECT_ONLY?'FAST_WATCH':DEEP_BACKFILL?'DEEP_BACKFILL':'ARCHIVE_DISCOVERY'} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} | bing_pages=${BING_PAGE_LIMIT}${DEEP_BACKFILL?` | archive_year=${archiveYearForShard('run')}`:''}`);
+console.log(`NEWS_GATEWAY_MODE ${DIRECT_ONLY?'FAST_WATCH':RECENT_PRIORITY?'RECENT_PRIORITY':DEEP_BACKFILL?'HISTORICAL_BACKFILL':'ARCHIVE_DISCOVERY'} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} | bing_pages=${BING_PAGE_LIMIT}${DEEP_BACKFILL?` | year_window=${ARCHIVE_YEAR_START}-${ARCHIVE_YEAR_END} | archive_year=${archiveYearForShard('run')}`:''}`);
 
 let totalReceived=0, totalAccepted=0, totalRejected=0, totalInserted=0, totalFailures=0;
 let gdeltUsedThisRun=false;
@@ -967,7 +970,7 @@ for (const org of plan.organizations) {
     ...broadWebItems
   ]);
   const unifiedWebItems=allWebCandidates
-    .map(item=>DEEP_BACKFILL ? ({...item,raw:{...(item?.raw||{}),historical_backfill:true}}) : item)
+    .map(item=>DEEP_BACKFILL ? ({...item,raw:{...(item?.raw||{}),historical_backfill:true,recent_priority:RECENT_PRIORITY,archive_year_start:ARCHIVE_YEAR_START,archive_year_end:ARCHIVE_YEAR_END}}) : item)
     .map((item,index)=>({item,index,score:relevanceRank(item)}))
     .sort((a,b)=>b.score-a.score || a.index-b.index)
     .slice(0,MAX_INGEST_ITEMS)
