@@ -33,7 +33,8 @@ const MAX_SCREENSHOTS = Math.max(1, Math.min(12, Number(process.env.NEWS_MAX_SCR
 const SITEMAP_FOCUS = ['1','true','yes'].includes(String(process.env.NEWS_SITEMAP_FOCUS || '').toLowerCase());
 const SITEMAP_INDEX_LIMIT = Math.max(2, Math.min(20, Number(process.env.NEWS_SITEMAP_INDEX_LIMIT || (RECENT_PRIORITY ? 10 : DEEP_BACKFILL ? 8 : 5))));
 const SITEMAP_URL_LIMIT = Math.max(40, Math.min(1200, Number(process.env.NEWS_SITEMAP_URL_LIMIT || (RECENT_PRIORITY ? 700 : DEEP_BACKFILL ? 450 : 140))));
-const SITEMAP_PROBE_LIMIT = Math.max(0, Math.min(120, Number(process.env.NEWS_SITEMAP_PROBE_LIMIT || (RECENT_PRIORITY ? 50 : DEEP_BACKFILL ? 30 : 0))));
+const SITEMAP_PROBE_LIMIT = Math.max(0, Math.min(180, Number(process.env.NEWS_SITEMAP_PROBE_LIMIT || (RECENT_PRIORITY ? 50 : DEEP_BACKFILL ? 30 : 0))));
+const INGEST_CHUNK_SIZE = Math.max(1, Math.min(6, Number(process.env.NEWS_INGEST_CHUNK_SIZE || (SITEMAP_FOCUS ? 3 : 4))));
 const SOURCE_SHARD_COUNT = Math.max(1, Math.min(20, Number(process.env.NEWS_SOURCE_SHARD_COUNT || 1)));
 const SOURCE_SHARD_INDEX = Math.max(0, Math.min(SOURCE_SHARD_COUNT - 1, Number(process.env.NEWS_SOURCE_SHARD_INDEX || 0)));
 
@@ -126,35 +127,56 @@ function chunks(items, size = 10) {
   return out;
 }
 
+function mergeIngestResult(aggregate, result) {
+  aggregate.received += Number(result?.received || 0);
+  aggregate.accepted += Number(result?.accepted || 0);
+  aggregate.rejected += Number(result?.rejected || 0);
+  aggregate.inserted += Number(result?.inserted || 0);
+  if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
+  if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
+  if (Array.isArray(result?.accepted_targets)) aggregate.accepted_targets.push(...result.accepted_targets);
+  if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
+}
+
+async function ingestPartAdaptive({org, platform, label, part, aggregate, depth=0, partLabel=''}) {
+  if (!part.length) return;
+  try {
+    const result = await callMonitor({
+      mode:'news_ingest', organization_id:org.id, source_platform:platform,
+      source_label:label, items:part
+    });
+    mergeIngestResult(aggregate, result);
+    console.log(`[${org.short_name}] ${label}: ${partLabel || 'paket'} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
+  } catch (e) {
+    const status = Number(e?.status || 0);
+    const resourceLimited = status === 546 || /WORKER_RESOURCE_LIMIT|compute resources|AbortError|timeout/i.test(String(e?.message || e));
+    if (resourceLimited && part.length > 1 && depth < 4) {
+      const mid = Math.ceil(part.length / 2);
+      console.log(`[${org.short_name}] ${label}: ${partLabel || 'paket'} resource limit — ${part.length} material ${mid}+${part.length-mid} bölünür.`);
+      await sleep(650);
+      await ingestPartAdaptive({org,platform,label,part:part.slice(0,mid),aggregate,depth:depth+1,partLabel:`${partLabel || 'paket'}.a`});
+      await ingestPartAdaptive({org,platform,label,part:part.slice(mid),aggregate,depth:depth+1,partLabel:`${partLabel || 'paket'}.b`});
+      return;
+    }
+    aggregate.chunk_failures++;
+    console.log(`[${org.short_name}] ${label}: ${partLabel || 'paket'} ingest xəta — ${e?.message||e}`);
+    // Tək material belə Edge limitinə düşərsə bütün workflow-u dayandırmırıq.
+    // Növbəti run həmin URL-i yenidən görəcək; duplicate qoruması mövcuddur.
+    await sleep(700);
+  }
+}
+
 async function ingestInChunks({org, platform, label, items}) {
-  const pieces = chunks(items, 6);
+  const pieces = chunks(items, INGEST_CHUNK_SIZE);
   const aggregate = {
     received: 0, accepted: 0, rejected: 0, inserted: 0,
     sample_results: [], screenshot_targets: [], accepted_targets: [], errors: [], chunk_failures: 0
   };
   for (let i = 0; i < pieces.length; i++) {
-    const part = pieces[i];
-    try {
-      const result = await callMonitor({
-        mode:'news_ingest', organization_id:org.id, source_platform:platform,
-        source_label:label, items:part
-      });
-      aggregate.received += Number(result?.received || 0);
-      aggregate.accepted += Number(result?.accepted || 0);
-      aggregate.rejected += Number(result?.rejected || 0);
-      aggregate.inserted += Number(result?.inserted || 0);
-      if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
-      if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
-      if (Array.isArray(result?.accepted_targets)) aggregate.accepted_targets.push(...result.accepted_targets);
-      if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
-      console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
-    } catch (e) {
-      aggregate.chunk_failures++;
-      console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} ingest xəta — ${e?.message||e}`);
-      // Bir paket Edge resource limit/timeout alsa bütün GitHub job dayanmasın.
-      // Növbəti run eyni discovery nəticələrini yenidən görəcək və duplicate qoruması var.
-      await sleep(900);
-    }
+    await ingestPartAdaptive({
+      org, platform, label, part:pieces[i], aggregate,
+      partLabel:`paket ${i+1}/${pieces.length}`
+    });
   }
   aggregate.screenshot_targets = dedupe(aggregate.screenshot_targets.map(x=>({ ...x, url:String(x?.url||'') }))).filter(x=>x.url);
   aggregate.accepted_targets = dedupe(aggregate.accepted_targets.map(x=>({ ...x, url:String(x?.url||'') }))).filter(x=>x.url);
@@ -426,6 +448,28 @@ async function enrichPage(item) {
       raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url}
     };
   } catch { return item; }
+}
+
+function gatewaySitemapSignal(item, org) {
+  const hay = asciiToken(`${item?.title||''} ${item?.text||''} ${item?.url||''}`);
+  if (!hay) return {keep:false,reason:'boş-mətn'};
+  const tokens = hay.split(/\s+/).filter(Boolean);
+  const district = asciiToken(org?.district||'');
+  const directNames = [org?.name, org?.short_name].map(asciiToken).filter(x=>x.length>=4);
+  const locationHit = Boolean(district && (hay.includes(district) || tokens.some(t=>t.length>district.length && t.startsWith(district))));
+  const directHit = directNames.some(name=>hay.includes(name));
+  const topicRoots = [
+    'suvar','melior','subartez','artez','drenaj','kollektor','hidrotex','irriqas',
+    'nasos','quyu','su teminat','icmeli su','su xett','su kemer','su sebek',
+    'su problem','su catism','susuz','kanaliz','lilden temiz','arx temiz','kanal temiz',
+    'fermer','ekin sah'
+  ];
+  const topicHits = topicRoots.filter(root=>hay.includes(root));
+  // Sitemap mərhələsində məqsəd worker-i əvəz etmək deyil; minlərlə açıq-aşkar əlaqəsiz
+  // səhifəni Edge Function-a göndərmədən əvvəl yalnız Bərdə/təşkilat + su-meliorasiya
+  // siqnalı olan məqalələri buraxırıq. Son sərt qərarı yenə monitor-worker verir.
+  const keep = directHit || (locationHit && topicHits.length>0);
+  return {keep,reason:directHit?'təşkilat-adı':locationHit&&topicHits.length?'rayon+mövzu':'lokal-siqnal-yoxdur',topicHits:topicHits.slice(0,5)};
 }
 
 async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {
@@ -1082,9 +1126,23 @@ for (const org of plan.organizations) {
   // Dərin qat seçilmiş sitemap səhifələrinin özünü əvvəlcədən açıb real başlıq/mətni
   // çıxarır; sonra həmin tam mətn normal sərt worker filtrindən keçir.
   const sitemapProbeItems=await probeSitemapCandidates(directWebItems,org,SITEMAP_PROBE_LIMIT);
+  const sitemapPreFiltered = SITEMAP_FOCUS
+    ? sitemapProbeItems.filter(item=>gatewaySitemapSignal(item,org).keep)
+    : sitemapProbeItems;
+  if (SITEMAP_FOCUS) {
+    const rejectedAtGateway = sitemapProbeItems.length - sitemapPreFiltered.length;
+    console.log(`[${org.short_name}] Sitemap prefilter: açılan=${sitemapProbeItems.length}, worker-ə gedəcək=${sitemapPreFiltered.length}, gateway-rədd=${rejectedAtGateway}`);
+    for (const sample of sitemapProbeItems.filter(item=>!gatewaySitemapSignal(item,org).keep).slice(0,3)) {
+      const signal=gatewaySitemapSignal(sample,org);
+      console.log(`[${org.short_name}] Sitemap prefilter sample: REJECT | ${signal.reason} | ${String(sample?.title||sample?.url||'').slice(0,120)}`);
+    }
+  }
+  const nonSitemapDirect = SITEMAP_FOCUS
+    ? directWebItems.filter(item=>!String(item?.raw?.kind||'').includes('configured_site_sitemap'))
+    : directWebItems;
   const allWebCandidates=dedupe([
-    ...sitemapProbeItems,
-    ...directWebItems,
+    ...sitemapPreFiltered,
+    ...nonSitemapDirect,
     ...domainWebItems,
     ...googleItems,
     ...broadWebItems
@@ -1096,7 +1154,7 @@ for (const org of plan.organizations) {
     .slice(0,MAX_INGEST_ITEMS)
     .map(x=>x.item);
   const rankedPositive=allWebCandidates.filter(item=>relevanceRank(item)>=70).length;
-  console.log(`[${org.short_name}] Web namizədlər: direct=${directWebItems.length} sitemap-probe=${sitemapProbeItems.length} domain=${domainWebItems.length} google=${googleItems.length} broad=${broadWebItems.length} all=${allWebCandidates.length} yüksək-siqnal=${rankedPositive} unified=${unifiedWebItems.length}`);
+  console.log(`[${org.short_name}] Web namizədlər: direct=${directWebItems.length} sitemap-probe=${sitemapProbeItems.length}${SITEMAP_FOCUS?` sitemap-kept=${sitemapPreFiltered.length}`:''} domain=${domainWebItems.length} google=${googleItems.length} broad=${broadWebItems.length} all=${allWebCandidates.length} yüksək-siqnal=${rankedPositive} unified=${unifiedWebItems.length}`);
 
   const batches = [
     {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}
