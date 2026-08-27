@@ -3,6 +3,7 @@ name: Media Monitorinq Worker
 on:
   schedule:
     - cron: '*/15 * * * *'
+    - cron: '7,37 * * * *'
     - cron: '17 */2 * * *'
   workflow_dispatch:
 
@@ -120,11 +121,54 @@ jobs:
           NEWS_MAX_SCREENSHOTS: '3'
         run: node scripts/news-gateway.mjs
 
+  web-recent-priority-backfill:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '7,37 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    concurrency:
+      group: media-monitor-web-recent-priority-${{ matrix.shard }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check monitor secret
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          if [ -z "$MONITOR_SECRET" ]; then
+            echo "MONITOR_SECRET təyin edilməyib; 2024–2026 prioritet Web backfill buraxılır."
+            exit 0
+          fi
+
+      - name: Recent priority Web backfill 2024-2026
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_DIRECT_ONLY: '0'
+          NEWS_DEEP_BACKFILL: '1'
+          NEWS_RECENT_PRIORITY: '1'
+          NEWS_REFILTER_EXISTING: '0'
+          NEWS_ARCHIVE_YEAR_START: '2024'
+          NEWS_ARCHIVE_YEAR_END: '2026'
+          NEWS_SOURCE_SHARD_COUNT: '5'
+          NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
+          NEWS_SOURCE_BATCH: '40'
+          NEWS_DOMAIN_SEARCH_BATCH: '10'
+          NEWS_BROAD_QUERY_LIMIT: '8'
+          NEWS_BING_PAGE_LIMIT: '8'
+          NEWS_MAX_INGEST_ITEMS: '180'
+          NEWS_MAX_ENRICH_ITEMS: '6'
+          NEWS_MAX_SCREENSHOTS: '2'
+        run: node scripts/news-gateway.mjs
+
   web-deep-backfill:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 */2 * * *'
     runs-on: ubuntu-latest
-    # Dərin arxiv 1000+ namizəd toplaya bildiyi üçün 14 dəqiqəlik limit
-    # bəzi shard-ları yarıda kəsirdi. İş məntiqinə toxunmadan yalnız vaxt limiti artırılır.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -146,14 +190,16 @@ jobs:
             exit 0
           fi
 
-      - name: Deep historical Web backfill
+      - name: Deep historical Web backfill 2000-2023
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
           NEWS_DIRECT_ONLY: '0'
           NEWS_DEEP_BACKFILL: '1'
+          NEWS_RECENT_PRIORITY: '0'
           NEWS_REFILTER_EXISTING: '0'
           NEWS_ARCHIVE_YEAR_START: '2000'
+          NEWS_ARCHIVE_YEAR_END: '2023'
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_SOURCE_BATCH: '40'
@@ -164,4 +210,3 @@ jobs:
           NEWS_MAX_ENRICH_ITEMS: '4'
           NEWS_MAX_SCREENSHOTS: '1'
         run: node scripts/news-gateway.mjs
-
