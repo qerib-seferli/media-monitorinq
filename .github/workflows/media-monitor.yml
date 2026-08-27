@@ -153,13 +153,14 @@ jobs:
           NEWS_DIRECT_ONLY: '0'
           NEWS_DEEP_BACKFILL: '1'
           NEWS_RECENT_PRIORITY: '1'
-          NEWS_REFILTER_EXISTING: '0'
+          NEWS_REFILTER_EXISTING: '1'
           NEWS_ARCHIVE_YEAR_START: '2024'
           NEWS_ARCHIVE_YEAR_END: '2026'
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_SOURCE_BATCH: '40'
           NEWS_DOMAIN_SEARCH_BATCH: '16'
+          NEWS_DOMAIN_PAGE_LIMIT: '2'
           NEWS_BROAD_QUERY_LIMIT: '10'
           NEWS_BING_PAGE_LIMIT: '5'
           NEWS_MAX_INGEST_ITEMS: '320'
@@ -209,6 +210,7 @@ jobs:
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_SOURCE_BATCH: '40'
           NEWS_DOMAIN_SEARCH_BATCH: '0'
+          NEWS_DOMAIN_PAGE_LIMIT: '1'
           NEWS_BROAD_QUERY_LIMIT: '0'
           NEWS_BING_PAGE_LIMIT: '1'
           NEWS_MAX_INGEST_ITEMS: '180'
