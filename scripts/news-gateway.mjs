@@ -462,7 +462,7 @@ function gatewaySitemapSignal(item, org) {
   const topicRoots = [
     'suvar','melior','subartez','artez','drenaj','kollektor','hidrotex','irriqas',
     'nasos','quyu','su teminat','icmeli su','su xett','su kemer','su sebek',
-    'su problem','su catism','susuz','kanaliz','lilden temiz','arx temiz','kanal temiz',
+    'su problem','su catism','susuz','sukanal','su kanal','kanaliz','lilden temiz','arx temiz','kanal temiz',
     'fermer','ekin sah'
   ];
   const topicHits = topicRoots.filter(root=>hay.includes(root));
@@ -668,7 +668,7 @@ function relevantSitemapUrl(url='', org={}) {
   const district=asciiToken(org?.district||'').replace(/\s+/g,'');
   const districtSpaced=asciiToken(org?.district||'');
   const locationHit=Boolean((district && hay.replace(/\s+/g,'').includes(district)) || (districtSpaced && hay.includes(districtSpaced)));
-  const topicTokens=['suvarma','meliorasiya','subartezian','artezian','drenaj','kanal','arx','su teminati','su problemi','su catismamazligi','fermer','ekin'];
+  const topicTokens=['suvarma','meliorasiya','subartezian','artezian','drenaj','kanal','arx','sukanal','su kanal','su teminati','icmeli su','su problemi','su catismamazligi','fermer','ekin','nasos','quyu'];
   return locationHit && topicTokens.some(t=>hay.includes(t));
 }
 function archiveWindows() {
@@ -1157,8 +1157,15 @@ for (const org of plan.organizations) {
     const q=normalizeTitleKey(String(item?.raw?.discovery_query||''));
     if(districtNorm && q.includes(districtNorm)) score+=15;
     if(item?.published_at){
-      const ageDays=(Date.now()-new Date(item.published_at).getTime())/86400000;
+      const published=new Date(item.published_at);
+      const ageDays=(Date.now()-published.getTime())/86400000;
       if(Number.isFinite(ageDays)) score+=ageDays<=2?12:ageDays<=30?6:0;
+      // Prioritet backfill-də 2024–2026 materiallarını hovuzun əvvəlində saxla.
+      // Bu yalnız sıralamadır; aidiyyət qərarını yenə monitor-worker verir.
+      const year=published.getUTCFullYear();
+      if(RECENT_PRIORITY && year>=ARCHIVE_YEAR_START && year<=ARCHIVE_YEAR_END){
+        score += year===CURRENT_YEAR ? 24 : year===CURRENT_YEAR-1 ? 16 : 10;
+      }
     }
     return score;
   };

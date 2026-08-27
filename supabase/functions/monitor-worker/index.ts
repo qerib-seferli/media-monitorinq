@@ -255,7 +255,7 @@ Deno.serve(async (req) => {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_refilter',error:'Təşkilat tapılmadı'},200);
 
-      const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
+      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
       const keywords = activeKeywordRows
         .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
         .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
@@ -282,7 +282,7 @@ Deno.serve(async (req) => {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_ingest',error:'Təşkilat tapılmadı'},200);
 
-      const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
+      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
       const keywords = activeKeywordRows
         .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
         .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
@@ -760,6 +760,71 @@ async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRo
     rows.push(...batch);
     if (batch.length < pageSize) break;
   }
+  return rows;
+}
+
+
+// Web ingest/refilter üçün minlərlə kombinasiyanı hər 1–3 materiallıq Edge çağırışında
+// yenidən RAM-a yükləmək Supabase WORKER_RESOURCE_LIMIT (HTTP 546) yaradırdı.
+// Discovery planı tam bankı oxumağa davam edir, amma qəbul/filtr mərhələsi yalnız:
+//   1) bütün aktiv exclude qaydalarını,
+//   2) rayon/təşkilat adı daşıyan ən konkret frazaları,
+//   3) son əlavə edilmiş məhdud sayda müsbət frazanı
+// götürür. Əsas Bərdə + su/meliorasiya elastikliyi evaluateMatch daxilindəki
+// rayon və güclü mövzu kökləri ilə işləyir; buna görə düzgün xəbərlər itmir,
+// Edge invocation isə bir neçə min sətirlik bankdan asılı qalmır.
+async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=900):Promise<any[]> {
+  const organizationId=String(org?.id || '');
+  if (!organizationId) return [];
+  const maxPos=Math.max(120,Math.min(1200,Number(maxPositive||900)));
+  const district=String(org?.districts?.name || '').trim();
+  const shortName=String(org?.short_name || '').trim();
+
+  const [excludeResult, districtResult, recentResult] = await Promise.all([
+    admin.from('keywords')
+      .select('value,kind,is_active,created_at')
+      .eq('organization_id', organizationId)
+      .eq('is_active', true)
+      .eq('kind','exclude')
+      .order('created_at',{ascending:false})
+      .limit(500),
+    district
+      ? admin.from('keywords')
+          .select('value,kind,is_active,created_at')
+          .eq('organization_id', organizationId)
+          .eq('is_active', true)
+          .neq('kind','exclude')
+          .ilike('value',`%${district}%`)
+          .order('created_at',{ascending:false})
+          .limit(Math.ceil(maxPos*0.7))
+      : Promise.resolve({data:[],error:null}),
+    admin.from('keywords')
+      .select('value,kind,is_active,created_at')
+      .eq('organization_id', organizationId)
+      .eq('is_active', true)
+      .neq('kind','exclude')
+      .order('created_at',{ascending:false})
+      .limit(Math.ceil(maxPos*0.45))
+  ]);
+
+  for (const result of [excludeResult,districtResult,recentResult]) {
+    if (result?.error) throw result.error;
+  }
+  const seen=new Set<string>();
+  const rows:any[]=[];
+  const push=(row:any)=>{
+    const value=String(row?.value || '').trim();
+    const key=normalizeForMatch(value);
+    if(!value || !key || seen.has(key)) return;
+    seen.add(key);
+    rows.push({value,kind:String(row?.kind || 'phrase'),is_active:true,created_at:row?.created_at || null});
+  };
+  for(const row of (excludeResult?.data || [])) push(row);
+  for(const row of (districtResult?.data || [])) push(row);
+  for(const row of (recentResult?.data || [])) push(row);
+
+  // Qısa adın konkret variantı DB pəncərəsinə düşməsə belə match bankında saxlanır.
+  if(shortName) push({value:shortName,kind:'phrase'});
   return rows;
 }
 
@@ -2253,7 +2318,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'icmeli su','su tapmir','su teminati','su verilisi','su itkisi','ekin sahesi',
     'fermer su','lilden temizlen','soranlasma','su xetti','boru xetti','su kemeri',
     'su qezasi','qeza berpa','su sebekesi','kanalizasiya','tullanti su','yagis suyu',
-    'su saygaci','suolcen','hidrometrik','hidropost','su anbari','su menbeyi',
+    'su saygaci','suolcen','hidrometrik','hidropost','su anbari','su menbeyi','sukanal','su kanal',
     'nasos','derinlik nasosu','quyu temiri','kanal temizlen','arx temizlen',
     'kollektor','irriqasiya','su bolgusu','suvarma movsumu','suvarma qrafiki'
   ].map(normalizeForMatch);
@@ -2360,8 +2425,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'zengilan','xocali','xocavend'
   ];
   const foreignNamesHit = foreignDistricts.filter(name=>contains(normalized,name));
-  const ambiguousVillageHit = foreignNamesHit.some(name=>villageTerms.includes(name));
-  const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0 && (!villageHits.length || ambiguousVillageHit);
+  const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0;
 
   const districtWide = org.show_district_wide !== false;
   // Web-də minlərlə açar söz bankından gələn elastik uyğunluq təkbaşına kifayət etmir.
