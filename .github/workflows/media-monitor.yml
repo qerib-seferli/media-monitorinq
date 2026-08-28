@@ -5,6 +5,7 @@ on:
     # Canlı monitorinq əsas prioritetdir. Ağır arxiv işləri eyni dəqiqədə başlamır.
     - cron: '*/15 * * * *'
     - cron: '7 * * * *'
+    - cron: '17 * * * *'
     - cron: '37 * * * *'
     - cron: '23 */2 * * *'
     - cron: '41 */6 * * *'
@@ -44,6 +45,33 @@ jobs:
             -d '{"mode":"scheduled","debug":false,"quick_youtube_comments":true,"verify_existing":false}' \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
 
+  youtube-global-rotation:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check monitor secret
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          if [ -z "$MONITOR_SECRET" ]; then
+            echo "MONITOR_SECRET təyin edilməyib; qlobal YouTube rotasiyası buraxılır."
+            exit 0
+          fi
+
+      - name: Global YouTube district rotation
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          ROTATION_BUCKET=$(( $(date +%s) / 3600 ))
+          curl --fail-with-body --silent --show-error \
+            --max-time 55 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-monitor-secret: $MONITOR_SECRET" \
+            -d "{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":false,\"force_youtube\":true,\"include_archived\":true,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":2,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":2,\"verify_existing\":false}" \
+            "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
+
   web-fast-watch:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
     runs-on: ubuntu-latest
@@ -72,6 +100,11 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_GLOBAL_ORGS: '1'
+          NEWS_ORG_SHARD_COUNT: '5'
+          NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
+          NEWS_ORG_BATCH: '3'
+          NEWS_ORG_ROTATION_MINUTES: '15'
           NEWS_DIRECT_ONLY: '1'
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
@@ -114,6 +147,11 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_GLOBAL_ORGS: '1'
+          NEWS_ORG_SHARD_COUNT: '5'
+          NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
+          NEWS_ORG_BATCH: '3'
+          NEWS_ORG_ROTATION_MINUTES: '15'
           NEWS_DIRECT_ONLY: '0'
           # Yalnız archive-discovery shard 0 mövcud Web nəticələrini cari sərt filtrlə
           # yenidən yoxlayır. Düzgün arxiv qalır, həqiqi yanlış material relevance_score=0 olur.
@@ -157,6 +195,11 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_GLOBAL_ORGS: '1'
+          NEWS_ORG_SHARD_COUNT: '5'
+          NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
+          NEWS_ORG_BATCH: '3'
+          NEWS_ORG_ROTATION_MINUTES: '15'
           NEWS_DIRECT_ONLY: '0'
           NEWS_DEEP_BACKFILL: '1'
           NEWS_RECENT_PRIORITY: '1'
@@ -205,6 +248,11 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_GLOBAL_ORGS: '1'
+          NEWS_ORG_SHARD_COUNT: '5'
+          NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
+          NEWS_ORG_BATCH: '3'
+          NEWS_ORG_ROTATION_MINUTES: '15'
           NEWS_DIRECT_ONLY: '0'
           NEWS_DEEP_BACKFILL: '1'
           NEWS_RECENT_PRIORITY: '1'
@@ -254,6 +302,11 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_GLOBAL_ORGS: '1'
+          NEWS_ORG_SHARD_COUNT: '5'
+          NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
+          NEWS_ORG_BATCH: '3'
+          NEWS_ORG_ROTATION_MINUTES: '15'
           NEWS_DIRECT_ONLY: '0'
           NEWS_DEEP_BACKFILL: '1'
           NEWS_RECENT_PRIORITY: '0'
