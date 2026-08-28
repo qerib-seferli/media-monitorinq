@@ -33,9 +33,7 @@ const MAX_SCREENSHOTS = Math.max(1, Math.min(12, Number(process.env.NEWS_MAX_SCR
 const SITEMAP_FOCUS = ['1','true','yes'].includes(String(process.env.NEWS_SITEMAP_FOCUS || '').toLowerCase());
 const SITEMAP_INDEX_LIMIT = Math.max(2, Math.min(20, Number(process.env.NEWS_SITEMAP_INDEX_LIMIT || (RECENT_PRIORITY ? 10 : DEEP_BACKFILL ? 8 : 5))));
 const SITEMAP_URL_LIMIT = Math.max(40, Math.min(1200, Number(process.env.NEWS_SITEMAP_URL_LIMIT || (RECENT_PRIORITY ? 700 : DEEP_BACKFILL ? 450 : 140))));
-const SITEMAP_PROBE_LIMIT = Math.max(0, Math.min(180, Number(process.env.NEWS_SITEMAP_PROBE_LIMIT || (RECENT_PRIORITY ? 50 : DEEP_BACKFILL ? 30 : 0))));
-const INGEST_CHUNK_SIZE = Math.max(1, Math.min(6, Number(process.env.NEWS_INGEST_CHUNK_SIZE || (SITEMAP_FOCUS ? 3 : 4))));
-const DOMAIN_PAGE_LIMIT = Math.max(1, Math.min(3, Number(process.env.NEWS_DOMAIN_PAGE_LIMIT || (RECENT_PRIORITY ? 2 : 1))));
+const SITEMAP_PROBE_LIMIT = Math.max(0, Math.min(120, Number(process.env.NEWS_SITEMAP_PROBE_LIMIT || (RECENT_PRIORITY ? 50 : DEEP_BACKFILL ? 30 : 0))));
 const SOURCE_SHARD_COUNT = Math.max(1, Math.min(20, Number(process.env.NEWS_SOURCE_SHARD_COUNT || 1)));
 const SOURCE_SHARD_INDEX = Math.max(0, Math.min(SOURCE_SHARD_COUNT - 1, Number(process.env.NEWS_SOURCE_SHARD_INDEX || 0)));
 
@@ -128,56 +126,35 @@ function chunks(items, size = 10) {
   return out;
 }
 
-function mergeIngestResult(aggregate, result) {
-  aggregate.received += Number(result?.received || 0);
-  aggregate.accepted += Number(result?.accepted || 0);
-  aggregate.rejected += Number(result?.rejected || 0);
-  aggregate.inserted += Number(result?.inserted || 0);
-  if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
-  if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
-  if (Array.isArray(result?.accepted_targets)) aggregate.accepted_targets.push(...result.accepted_targets);
-  if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
-}
-
-async function ingestPartAdaptive({org, platform, label, part, aggregate, depth=0, partLabel=''}) {
-  if (!part.length) return;
-  try {
-    const result = await callMonitor({
-      mode:'news_ingest', organization_id:org.id, source_platform:platform,
-      source_label:label, items:part
-    });
-    mergeIngestResult(aggregate, result);
-    console.log(`[${org.short_name}] ${label}: ${partLabel || 'paket'} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
-  } catch (e) {
-    const status = Number(e?.status || 0);
-    const resourceLimited = status === 546 || /WORKER_RESOURCE_LIMIT|compute resources|AbortError|timeout/i.test(String(e?.message || e));
-    if (resourceLimited && part.length > 1 && depth < 4) {
-      const mid = Math.ceil(part.length / 2);
-      console.log(`[${org.short_name}] ${label}: ${partLabel || 'paket'} resource limit — ${part.length} material ${mid}+${part.length-mid} bölünür.`);
-      await sleep(650);
-      await ingestPartAdaptive({org,platform,label,part:part.slice(0,mid),aggregate,depth:depth+1,partLabel:`${partLabel || 'paket'}.a`});
-      await ingestPartAdaptive({org,platform,label,part:part.slice(mid),aggregate,depth:depth+1,partLabel:`${partLabel || 'paket'}.b`});
-      return;
-    }
-    aggregate.chunk_failures++;
-    console.log(`[${org.short_name}] ${label}: ${partLabel || 'paket'} ingest xəta — ${e?.message||e}`);
-    // Tək material belə Edge limitinə düşərsə bütün workflow-u dayandırmırıq.
-    // Növbəti run həmin URL-i yenidən görəcək; duplicate qoruması mövcuddur.
-    await sleep(700);
-  }
-}
-
 async function ingestInChunks({org, platform, label, items}) {
-  const pieces = chunks(items, INGEST_CHUNK_SIZE);
+  const pieces = chunks(items, 6);
   const aggregate = {
     received: 0, accepted: 0, rejected: 0, inserted: 0,
     sample_results: [], screenshot_targets: [], accepted_targets: [], errors: [], chunk_failures: 0
   };
   for (let i = 0; i < pieces.length; i++) {
-    await ingestPartAdaptive({
-      org, platform, label, part:pieces[i], aggregate,
-      partLabel:`paket ${i+1}/${pieces.length}`
-    });
+    const part = pieces[i];
+    try {
+      const result = await callMonitor({
+        mode:'news_ingest', organization_id:org.id, source_platform:platform,
+        source_label:label, items:part
+      });
+      aggregate.received += Number(result?.received || 0);
+      aggregate.accepted += Number(result?.accepted || 0);
+      aggregate.rejected += Number(result?.rejected || 0);
+      aggregate.inserted += Number(result?.inserted || 0);
+      if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
+      if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
+      if (Array.isArray(result?.accepted_targets)) aggregate.accepted_targets.push(...result.accepted_targets);
+      if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
+      console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
+    } catch (e) {
+      aggregate.chunk_failures++;
+      console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} ingest xəta — ${e?.message||e}`);
+      // Bir paket Edge resource limit/timeout alsa bütün GitHub job dayanmasın.
+      // Növbəti run eyni discovery nəticələrini yenidən görəcək və duplicate qoruması var.
+      await sleep(900);
+    }
   }
   aggregate.screenshot_targets = dedupe(aggregate.screenshot_targets.map(x=>({ ...x, url:String(x?.url||'') }))).filter(x=>x.url);
   aggregate.accepted_targets = dedupe(aggregate.accepted_targets.map(x=>({ ...x, url:String(x?.url||'') }))).filter(x=>x.url);
@@ -451,28 +428,6 @@ async function enrichPage(item) {
   } catch { return item; }
 }
 
-function gatewaySitemapSignal(item, org) {
-  const hay = asciiToken(`${item?.title||''} ${item?.text||''} ${item?.url||''}`);
-  if (!hay) return {keep:false,reason:'boş-mətn'};
-  const tokens = hay.split(/\s+/).filter(Boolean);
-  const district = asciiToken(org?.district||'');
-  const directNames = [org?.name, org?.short_name].map(asciiToken).filter(x=>x.length>=4);
-  const locationHit = Boolean(district && (hay.includes(district) || tokens.some(t=>t.length>district.length && t.startsWith(district))));
-  const directHit = directNames.some(name=>hay.includes(name));
-  const topicRoots = [
-    'suvar','melior','subartez','artez','drenaj','kollektor','hidrotex','irriqas',
-    'nasos','quyu','su teminat','icmeli su','su xett','su kemer','su sebek',
-    'su problem','su catism','susuz','sukanal','su kanal','kanaliz','lilden temiz','arx temiz','kanal temiz',
-    'fermer','ekin sah'
-  ];
-  const topicHits = topicRoots.filter(root=>hay.includes(root));
-  // Sitemap mərhələsində məqsəd worker-i əvəz etmək deyil; minlərlə açıq-aşkar əlaqəsiz
-  // səhifəni Edge Function-a göndərmədən əvvəl yalnız Bərdə/təşkilat + su-meliorasiya
-  // siqnalı olan məqalələri buraxırıq. Son sərt qərarı yenə monitor-worker verir.
-  const keep = directHit || (locationHit && topicHits.length>0);
-  return {keep,reason:directHit?'təşkilat-adı':locationHit&&topicHits.length?'rayon+mövzu':'lokal-siqnal-yoxdur',topicHits:topicHits.slice(0,5)};
-}
-
 async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {
   if(!DEEP_BACKFILL || limit<=0) return [];
   const rows=dedupe((Array.isArray(items)?items:[]).filter(item=>String(item?.raw?.kind||'').includes('configured_site_sitemap')));
@@ -480,31 +435,7 @@ async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {
   const window=archiveWindowForShard(`${org?.id||''}-probe`);
   const preferred=rows.filter(item=>sitemapRowInArchiveWindow({url:item.url,lastmod:item.published_at},org));
   const pool=preferred.length?preferred:rows;
-
-  // Sitemap-lərdə minlərlə URL olur. Əvvəlki tam rotasiya Bərdə/su siqnalı olan
-  // URL-ləri təsadüfi 120-lik blokun kənarında saxlaya bilirdi. İndi URL slug-u,
-  // rayon, mövzu və lastmod siqnalı ilə ən perspektivli səhifələr əvvəl açılır,
-  // qalan yerlər isə rotasiya ilə doldurulur ki, bütün arxiv mərhələli gəzinilsin.
-  const district=asciiToken(org?.district||'');
-  const topicRoots=['suvar','melior','subartez','artez','drenaj','kollektor','kanal','arx','nasos','quyu','su','fermer','ekin'];
-  const scored=pool.map((item,index)=>{
-    const hay=asciiToken(`${item?.title||''} ${item?.url||''}`);
-    let score=0;
-    if(district && hay.includes(district)) score+=80;
-    score+=Math.min(4,topicRoots.filter(root=>hay.includes(root)).length)*20;
-    if(relevantSitemapUrl(item?.url||'',org)) score+=90;
-    if(item?.published_at){
-      const ts=new Date(item.published_at).getTime();
-      if(Number.isFinite(ts)) score+=Math.max(0,20-Math.floor((Date.now()-ts)/86400000/90));
-    }
-    return {item,index,score};
-  }).sort((a,b)=>b.score-a.score || a.index-b.index);
-  const strong=scored.filter(x=>x.score>=80).map(x=>x.item);
-  const strongTake=strong.slice(0,Math.min(strong.length,Math.max(1,Math.ceil(limit*0.65))));
-  const strongUrls=new Set(strongTake.map(x=>canonicalUrlKey(x?.url||'')));
-  const remainder=pool.filter(x=>!strongUrls.has(canonicalUrlKey(x?.url||'')));
-  const fill=rotate(remainder,Math.max(0,Math.min(limit,pool.length)-strongTake.length),`sitemap-probe-${org?.id||''}-${window.label}-${SOURCE_SHARD_INDEX}`);
-  const chosen=dedupe([...strongTake,...fill]).slice(0,Math.min(limit,pool.length));
+  const chosen=rotate(pool,Math.min(limit,pool.length),`sitemap-probe-${org?.id||''}-${window.label}-${SOURCE_SHARD_INDEX}`);
   const enriched=[];
   for(let i=0;i<chosen.length;i++){
     const full=await enrichPage(chosen[i]);
@@ -668,7 +599,7 @@ function relevantSitemapUrl(url='', org={}) {
   const district=asciiToken(org?.district||'').replace(/\s+/g,'');
   const districtSpaced=asciiToken(org?.district||'');
   const locationHit=Boolean((district && hay.replace(/\s+/g,'').includes(district)) || (districtSpaced && hay.includes(districtSpaced)));
-  const topicTokens=['suvarma','meliorasiya','subartezian','artezian','drenaj','kanal','arx','sukanal','su kanal','su teminati','icmeli su','su problemi','su catismamazligi','fermer','ekin','nasos','quyu'];
+  const topicTokens=['suvarma','meliorasiya','subartezian','artezian','drenaj','kanal','arx','su teminati','su problemi','su catismamazligi','fermer','ekin'];
   return locationHit && topicTokens.some(t=>hay.includes(t));
 }
 function archiveWindows() {
@@ -890,26 +821,14 @@ function withArchiveWindow(query, org) {
 function deepArchiveQueries(org, baseQueries=[]) {
   if(!DEEP_BACKFILL) return baseQueries;
   const district=String(org?.district||'').trim();
-  const orgName=String(org?.name||'').trim();
-  const shortName=String(org?.short_name||'').trim();
+  const year=archiveYearForShard(org?.id||district);
   const core=district ? [
     `\"${district}\" (suvarma OR meliorasiya OR subartezian OR artezian)`,
     `\"${district}\" (kanal OR arx OR drenaj OR kollektor OR nasos OR quyu)`,
     `\"${district}\" (\"su təchizatı\" OR \"içməli su\" OR \"su problemi\" OR fermer OR əkin)`,
-    `\"${district}\" (\"Su İdarəsi\" OR SMSİİ OR sukanal OR \"Suvarma Sistemləri\")`,
-    `\"${district}\" \"Su Meliorasiya Sistemlərinin İstismarı İdarəsi\"`,
-    `\"${district}\" \"Suvarma Sistemləri İdarəsi\"`,
-    `\"${district}\" \"Su İdarəsi\"`,
-    `\"${district}\" sukanal`
+    `\"${district}\" (\"Su İdarəsi\" OR SMSİİ OR sukanal OR \"Suvarma Sistemləri\")`
   ] : [];
-  // Rəsmi təşkilat adı və qısa ad böyük açar-söz bankının rotasiyasını gözləmədən
-  // hər prioritet arxiv run-da ayrıca yoxlanılır. Bu, 2024–2026 xəbərlərinin
-  // aylarla gecikməsinin qarşısını alır; aylıq pəncərə yenə dublikatları azaldır.
-  const official=[orgName,shortName]
-    .filter(Boolean)
-    .filter((v,i,a)=>a.findIndex(x=>asciiToken(x)===asciiToken(v))===i)
-    .map(v=>`\"${v.replace(/[\"“”]+/g,' ').trim()}\"`);
-  return [...new Set([...official,...baseQueries,...core].map(q=>withArchiveWindow(q,org)))];
+  return [...new Set([...baseQueries,...core].map(q=>withArchiveWindow(q,org)))];
 }
 
 function shardQueryWindow(items, limit, shardIndex = 0, shardCount = 1) {
@@ -946,7 +865,7 @@ try {
 if (!plan?.ok || !Array.isArray(plan.organizations)) throw new Error(`News plan alınmadı: ${JSON.stringify(plan).slice(0,800)}`);
 console.log(`NEWS_GATEWAY_MODE ${SITEMAP_FOCUS?'SITEMAP_ARCHIVE':DIRECT_ONLY?'FAST_WATCH':RECENT_PRIORITY?'RECENT_PRIORITY':DEEP_BACKFILL?'HISTORICAL_BACKFILL':'ARCHIVE_DISCOVERY'} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} | bing_pages=${BING_PAGE_LIMIT}${DEEP_BACKFILL?` | year_window=${ARCHIVE_YEAR_START}-${ARCHIVE_YEAR_END} | archive_slice=${archiveWindowForShard('run').label}`:''}${SITEMAP_FOCUS?` | sitemap_indexes=${SITEMAP_INDEX_LIMIT} sitemap_urls=${SITEMAP_URL_LIMIT} probes=${SITEMAP_PROBE_LIMIT}`:''}`);
 
-let totalReceived=0, totalAccepted=0, totalRejected=0, totalInserted=0, totalFailures=0;
+let totalReceived=0, totalAccepted=0, totalRejected=0, totalInserted=0, totalFailures=0, totalChunkFailures=0;
 let gdeltUsedThisRun=false;
 
 for (const org of plan.organizations) {
@@ -1096,23 +1015,19 @@ for (const org of plan.organizations) {
     let found=[];
     for (let qi=0; qi<queries.length; qi++) {
       try {
-        let qNews=0,qWeb=0,qExact=0;
-        // Prioritet 2024–2026 backfill-də domen üzrə ikinci nəticə səhifəsi də
-        // oxunur. Bu, birinci səhifədə təkrar/populyar xəbərlərə ilişməyi azaldır.
-        // Normal fast-watch bir səhifədə qalır; performans və quota davranışı qorunur.
-        for(let page=0; page<DOMAIN_PAGE_LIMIT; page++){
-          const [newsRaw,webRaw]=await Promise.all([
-            bingNews(queries[qi],page).catch(()=>[]),
-            bingWeb(queries[qi],page).catch(()=>[])
-          ]);
-          qNews+=newsRaw.length; qWeb+=webRaw.length;
-          const raw=dedupe([...(newsRaw||[]),...(webRaw||[])]);
-          const exact=keepDomain(raw,domain);
-          qExact+=exact.length; found.push(...exact);
-          if(raw.length===0) break;
-        }
-        console.log(`[${org.short_name}] Domen axtarışı: ${domain} | ${qi+1}/${queries.length} | pages=${DOMAIN_PAGE_LIMIT} news=${qNews} web=${qWeb} exact=${qExact} | ${queries[qi]}`);
-        if(dedupe(found).length >= 6) break;
+        // Bing Web RSS bir sıra Azərbaycan media domenlərində site: filtrini zəif
+        // tətbiq edir və raw=10 olsa da exact=0 qalır. Eyni sorğunu Bing News RSS-də
+        // də yoxlayırıq; news nəticələri publisher URL-ni verdiyi üçün real xəbər
+        // arxivini tapmaq ehtimalı xeyli artır.
+        const [newsRaw,webRaw]=await Promise.all([
+          bingNews(queries[qi],0).catch(()=>[]),
+          bingWeb(queries[qi],0).catch(()=>[])
+        ]);
+        const raw=dedupe([...(newsRaw||[]),...(webRaw||[])]);
+        const exact=keepDomain(raw,domain);
+        found.push(...exact);
+        console.log(`[${org.short_name}] Domen axtarışı: ${domain} | ${qi+1}/${queries.length} | news=${newsRaw.length} web=${webRaw.length} exact=${exact.length} | ${queries[qi]}`);
+        if(dedupe(found).length >= 4) break;
       } catch(e) {
         console.log(`[${org.short_name}] Domen axtarışı xəta (${domain}): ${e?.message||e}`);
       }
@@ -1157,15 +1072,8 @@ for (const org of plan.organizations) {
     const q=normalizeTitleKey(String(item?.raw?.discovery_query||''));
     if(districtNorm && q.includes(districtNorm)) score+=15;
     if(item?.published_at){
-      const published=new Date(item.published_at);
-      const ageDays=(Date.now()-published.getTime())/86400000;
+      const ageDays=(Date.now()-new Date(item.published_at).getTime())/86400000;
       if(Number.isFinite(ageDays)) score+=ageDays<=2?12:ageDays<=30?6:0;
-      // Prioritet backfill-də 2024–2026 materiallarını hovuzun əvvəlində saxla.
-      // Bu yalnız sıralamadır; aidiyyət qərarını yenə monitor-worker verir.
-      const year=published.getUTCFullYear();
-      if(RECENT_PRIORITY && year>=ARCHIVE_YEAR_START && year<=ARCHIVE_YEAR_END){
-        score += year===CURRENT_YEAR ? 24 : year===CURRENT_YEAR-1 ? 16 : 10;
-      }
     }
     return score;
   };
@@ -1174,23 +1082,9 @@ for (const org of plan.organizations) {
   // Dərin qat seçilmiş sitemap səhifələrinin özünü əvvəlcədən açıb real başlıq/mətni
   // çıxarır; sonra həmin tam mətn normal sərt worker filtrindən keçir.
   const sitemapProbeItems=await probeSitemapCandidates(directWebItems,org,SITEMAP_PROBE_LIMIT);
-  const sitemapPreFiltered = SITEMAP_FOCUS
-    ? sitemapProbeItems.filter(item=>gatewaySitemapSignal(item,org).keep)
-    : sitemapProbeItems;
-  if (SITEMAP_FOCUS) {
-    const rejectedAtGateway = sitemapProbeItems.length - sitemapPreFiltered.length;
-    console.log(`[${org.short_name}] Sitemap prefilter: açılan=${sitemapProbeItems.length}, worker-ə gedəcək=${sitemapPreFiltered.length}, gateway-rədd=${rejectedAtGateway}`);
-    for (const sample of sitemapProbeItems.filter(item=>!gatewaySitemapSignal(item,org).keep).slice(0,3)) {
-      const signal=gatewaySitemapSignal(sample,org);
-      console.log(`[${org.short_name}] Sitemap prefilter sample: REJECT | ${signal.reason} | ${String(sample?.title||sample?.url||'').slice(0,120)}`);
-    }
-  }
-  const nonSitemapDirect = SITEMAP_FOCUS
-    ? directWebItems.filter(item=>!String(item?.raw?.kind||'').includes('configured_site_sitemap'))
-    : directWebItems;
   const allWebCandidates=dedupe([
-    ...sitemapPreFiltered,
-    ...nonSitemapDirect,
+    ...sitemapProbeItems,
+    ...directWebItems,
     ...domainWebItems,
     ...googleItems,
     ...broadWebItems
@@ -1202,7 +1096,7 @@ for (const org of plan.organizations) {
     .slice(0,MAX_INGEST_ITEMS)
     .map(x=>x.item);
   const rankedPositive=allWebCandidates.filter(item=>relevanceRank(item)>=70).length;
-  console.log(`[${org.short_name}] Web namizədlər: direct=${directWebItems.length} sitemap-probe=${sitemapProbeItems.length}${SITEMAP_FOCUS?` sitemap-kept=${sitemapPreFiltered.length}`:''} domain=${domainWebItems.length} google=${googleItems.length} broad=${broadWebItems.length} all=${allWebCandidates.length} yüksək-siqnal=${rankedPositive} unified=${unifiedWebItems.length}`);
+  console.log(`[${org.short_name}] Web namizədlər: direct=${directWebItems.length} sitemap-probe=${sitemapProbeItems.length} domain=${domainWebItems.length} google=${googleItems.length} broad=${broadWebItems.length} all=${allWebCandidates.length} yüksək-siqnal=${rankedPositive} unified=${unifiedWebItems.length}`);
 
   const batches = [
     {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}
@@ -1221,6 +1115,7 @@ for (const org of plan.organizations) {
     totalAccepted += Number(result?.accepted||0);
     totalRejected += Number(result?.rejected||0);
     totalInserted += Number(result?.inserted||0);
+    totalChunkFailures += Number(result?.chunk_failures||0);
     console.log(`[${org.short_name}] ${batch.label}: received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
     logIngestSamples(org.short_name,batch.label,result);
 
@@ -1267,4 +1162,12 @@ for (const org of plan.organizations) {
   }
 }
 
-console.log(`NEWS_GATEWAY_SUMMARY received=${totalReceived} accepted=${totalAccepted} rejected=${totalRejected} inserted=${totalInserted} fetch_failures=${totalFailures}`);
+console.log(`NEWS_GATEWAY_SUMMARY received=${totalReceived} accepted=${totalAccepted} rejected=${totalRejected} inserted=${totalInserted} fetch_failures=${totalFailures} ingest_chunk_failures=${totalChunkFailures}`);
+
+// Yaşıl GitHub status yalnız bütün ingest paketləri Supabase-a çatanda verilməlidir.
+// Discovery mənbəsinin müvəqqəti fetch xətası növbəti run-da təkrar olunur, amma ingest
+// paketinin itməsi həmin run-ın yarımçıq olması deməkdir və artıq səssizcə yaşıl qalmır.
+if (totalChunkFailures > 0) {
+  throw new Error(`INCOMPLETE_RUN: ${totalChunkFailures} ingest paketi Supabase-a çatmadı. GitHub bu run-ı qırmızı göstərir və növbəti schedule yenidən yoxlayacaq.`);
+}
+console.log('NEWS_GATEWAY_HEALTH OK — bütün ingest paketləri tamamlandı.');
