@@ -6,7 +6,7 @@ export async function requireAuth({ superAdmin = false } = {}) {
   if (!ctx.profile) { location.href = './index.html?error=profile'; return null; }
   if (!ctx.profile.is_active) { location.href = './blocked.html?reason=user'; return null; }
   if (superAdmin && ctx.profile.system_role !== 'super_admin') { location.href = './app.html'; return null; }
-  if (!superAdmin && ctx.profile.system_role !== 'super_admin') {
+  if (!superAdmin && ctx.profile.system_role !== 'super_admin' && ctx.profile.access_scope !== 'all') {
     const status = ctx.organization?.service_status;
     if (!['active','grace'].includes(status)) { location.href = './blocked.html?reason=organization'; return null; }
   }

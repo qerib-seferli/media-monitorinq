@@ -37,7 +37,6 @@ export function renderShell(profile, active='dashboard') {
     ['admin.html#users','users','İstifadəçilər','users'],
     ['admin.html#catalogs','catalogs','Ərazi & Vəzifə','catalogs'],
     ['admin.html#monitoring','monitoring','Monitorinq','monitoring'],
-    ['admin.html#billing','billing','Abunəlik','billing'],
     ['admin.html#audit','audit','Audit Log','audit']
   ] : [
     ['app.html','dashboard','Əsas','dashboard'],

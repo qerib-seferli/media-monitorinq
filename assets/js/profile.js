@@ -22,7 +22,7 @@ const removeBtn = document.querySelector('#avatar-remove');
 function renderProfile() {
   const full = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'İstifadəçi';
   nameEl.textContent = full;
-  metaEl.textContent = `${profile.positions?.name || 'İstifadəçi'} • ${profile.organizations?.short_name || ''}`;
+  metaEl.textContent = `${profile.positions?.name || 'İstifadəçi'} • ${profile.access_scope === 'all' ? 'ADSEA / Bütün sistem' : (profile.organizations?.short_name || 'Təşkilat seçilməyib')}`;
   emailEl.value = profile.email || ctx.session.user.email || '';
   const currentPhone = String(profile.phone || '');
   phoneEl.value = currentPhone.includes('@') ? '' : currentPhone;

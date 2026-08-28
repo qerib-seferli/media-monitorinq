@@ -18,7 +18,8 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
     if (body.action === 'create') {
-      if (!body.email || !body.password || !body.organization_id) throw new Error('Məcburi sahələr çatışmır');
+      const accessScope = body.access_scope === 'all' ? 'all' : 'organization';
+      if (!body.email || !body.password || (accessScope !== 'all' && !body.organization_id)) throw new Error('Məcburi sahələr çatışmır');
       if (String(body.password).length < 8) throw new Error('Şifrə ən az 8 simvol olmalıdır');
       const { data, error } = await admin.auth.admin.createUser({
         email: body.email,
@@ -29,7 +30,8 @@ Deno.serve(async (req) => {
       if (error) throw error;
       const profileRow = {
         auth_user_id: data.user.id,
-        organization_id: body.organization_id,
+        organization_id: accessScope === 'all' ? null : body.organization_id,
+        access_scope: accessScope,
         position_id: body.position_id || null,
         first_name: body.first_name || '',
         last_name: body.last_name || '',
@@ -42,7 +44,7 @@ Deno.serve(async (req) => {
         await admin.auth.admin.deleteUser(data.user.id).catch(()=>{});
         throw pError;
       }
-      await admin.from('audit_logs').insert({actor_profile_id:profile.id,actor_email:profile.email,organization_id:body.organization_id,action:'İstifadəçi yaradıldı',entity_type:'profile',entity_id:data.user.id,details:{email:body.email,role:body.system_role}});
+      await admin.from('audit_logs').insert({actor_profile_id:profile.id,actor_email:profile.email,organization_id:accessScope === 'all' ? null : body.organization_id,action:'İstifadəçi yaradıldı',entity_type:'profile',entity_id:data.user.id,details:{email:body.email,role:body.system_role,access_scope:accessScope}});
       return json({ ok: true, message: 'İstifadəçi hesabı yaradıldı', user_id: data.user.id });
     }
 

@@ -1,6 +1,6 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
-import { supabase, escapeHtml, fmtDate, money, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
+import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile?.system_role==='super_admin') renderShell(cachedProfile, location.hash.replace('#','')||'dashboard'); showPageLoader();
 const ctx = await requireAuth({ superAdmin: true });
@@ -17,13 +17,14 @@ let sources = [];
 let sourceIndex = [];
 const SOURCE_PAGE_SIZE = 100;
 let auditRows = [];
+let aliases = [];
 
 const STATUS_LABELS = { active: 'Aktiv', grace: 'Möhlət', suspended: 'Dayandırılıb', archived: 'Arxiv' };
 const ROLE_LABELS = { super_admin: 'Super Admin', organization_admin: 'Təşkilat admini', manager: 'Menecer', analyst: 'Analitik', viewer: 'Baxış' };
 
 function currentView() {
   const value = location.hash.replace('#','').trim();
-  return ['organizations','users','catalogs','monitoring','billing','audit'].includes(value) ? value : 'dashboard';
+  return ['organizations','users','catalogs','monitoring','audit'].includes(value) ? value : 'dashboard';
 }
 
 function route() {
@@ -52,34 +53,13 @@ route();
 hidePageLoader();
 
 async function loadKeywordStats() {
-  const targets = [
-    ...orgs.map(o => ({ organization_id:o.id, name:o.short_name || o.name || 'Təşkilat' })),
-    { organization_id:null, name:'Qlobal' }
-  ];
-
-  const jobs = [];
-  for (const target of targets) {
-    let positive = supabase.from('keywords').select('id', { count:'exact', head:true }).neq('kind','exclude');
-    let excluded = supabase.from('keywords').select('id', { count:'exact', head:true }).eq('kind','exclude');
-    if (target.organization_id) {
-      positive = positive.eq('organization_id', target.organization_id);
-      excluded = excluded.eq('organization_id', target.organization_id);
-    } else {
-      positive = positive.is('organization_id', null);
-      excluded = excluded.is('organization_id', null);
-    }
-    jobs.push(Promise.all([positive, excluded]).then(([p,e]) => ({
-      ...target,
-      positive_count: p.error ? 0 : (p.count || 0),
-      excluded_count: e.error ? 0 : (e.count || 0),
-      error: p.error || e.error || null
-    })));
-  }
-
-  const rows = await Promise.all(jobs);
-  const firstError = rows.find(x => x.error)?.error;
-  if (firstError) toast(firstError.message, 'error');
-  keywordStats = rows;
+  const target = { organization_id:null, name:'Qlobal' };
+  const [positive, excluded] = await Promise.all([
+    supabase.from('keywords').select('id',{count:'exact',head:true}).is('organization_id',null).eq('is_active',true).neq('kind','exclude'),
+    supabase.from('keywords').select('id',{count:'exact',head:true}).is('organization_id',null).eq('is_active',true).eq('kind','exclude')
+  ]);
+  if (positive.error || excluded.error) toast((positive.error || excluded.error).message,'error');
+  keywordStats = [{...target,positive_count:positive.count||0,excluded_count:excluded.count||0,error:positive.error||excluded.error||null}];
 }
 
 async function refresh() {
@@ -88,10 +68,11 @@ async function refresh() {
     supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
-    supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100)
+    supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100),
+    supabase.from('organization_aliases').select('*').order('alias')
   ]);
 
-  const [o,u,p,d,a] = results;
+  const [o,u,p,d,a,al] = results;
   const fatal = results.find(r => r.error);
   if (fatal?.error) toast(fatal.error.message, 'error');
 
@@ -99,9 +80,10 @@ async function refresh() {
   users = u.data || [];
   positions = p.data || [];
   districts = d.data || [];
-  keywords = []; // Minlərlə açar sözü səhifə açılan kimi RAM-a yükləmirik.
+  keywords = [];
   sources = [];
   auditRows = a.data || [];
+  aliases = al.data || [];
 
   await Promise.all([loadKeywordStats(), loadSourceIndex()]);
 
@@ -111,7 +93,7 @@ async function refresh() {
   renderCatalogs();
   renderKeywords();
   renderSources();
-  renderBilling();
+  renderAliases();
   renderAudit();
   fillSelects();
   renderBardaStatus();
@@ -122,12 +104,12 @@ function renderMetrics() {
   const active = orgs.filter(x => x.service_status === 'active').length;
   const suspended = orgs.filter(x => x.service_status === 'suspended').length;
   const orgUsers = users.filter(x => x.system_role !== 'super_admin').length;
-  const portfolio = orgs.reduce((sum,x)=>sum+Number(x.monthly_price||0),0);
+  const globalSources = sourceIndex.filter(x=>x.is_active!==false).length;
   const items = [
     ['Aktiv təşkilat', active, '●', 'ok'],
     ['Dayandırılıb', suspended, 'Ⅱ', suspended ? 'danger' : 'muted'],
     ['İstifadəçilər', orgUsers, '👥', 'info'],
-    ['Aylıq portfel', money(portfolio), '₼', 'gold']
+    ['Qlobal mənbələr', globalSources, '◎', 'gold']
   ];
   document.querySelector('#metrics').innerHTML = items.map(([label,value,icon,tone]) => `
     <article class="card metric metric-pro ${tone}">
@@ -141,6 +123,10 @@ function statusBadge(status) {
   return `<span class="badge ${tone}">${STATUS_LABELS[status] || escapeHtml(status || '—')}</span>`;
 }
 
+function organizationTypeLabel(value='') {
+  return ({district:'Rayon idarəsi',regional_unit:'Regional vahid',special_unit:'Xüsusi idarə',central_service:'Mərkəzi xidmət'})[value] || value || 'Rayon idarəsi';
+}
+
 function renderOrgs() {
   const desktop = document.querySelector('#org-body');
   const mobile = document.querySelector('#org-mobile-list');
@@ -148,24 +134,27 @@ function renderOrgs() {
   desktop.innerHTML = orgs.map(o => `
     <tr>
       <td><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></td>
+      <td>${escapeHtml(organizationTypeLabel(o.organization_type))}</td>
       <td>${escapeHtml(o.districts?.name || '—')}</td>
       <td>${statusBadge(o.service_status)}</td>
-      <td>${money(o.monthly_price)}</td>
-      <td>${o.next_payment_at ? fmtDate(o.next_payment_at) : '—'}</td>
-      <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Aktivləşdir' : 'Dayandır'}</button></div></td>
-    </tr>`).join('') || '<tr><td colspan="6" class="empty">Təşkilat yoxdur.</td></tr>';
+      <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button></div></td>
+    </tr>`).join('') || '<tr><td colspan="5" class="empty">Təşkilat yoxdur.</td></tr>';
 
   mobile.innerHTML = orgs.map(o => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
-      <div class="record-grid"><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div><div><span>Aylıq</span><b>${money(o.monthly_price)}</b></div><div><span>Növbəti ödəniş</span><b>${o.next_payment_at ? fmtDate(o.next_payment_at) : '—'}</b></div></div>
-      <div class="record-actions two"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></div>
+      <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
+      <div class="record-actions two"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></div>
     </article>`).join('') || '<div class="empty">Təşkilat yoxdur.</div>';
 }
 
 function userName(u) {
   const full = `${u.first_name || ''} ${u.last_name || ''}`.trim();
   return full || u.email || 'İstifadəçi';
+}
+
+function userScopeLabel(u) {
+  return u.access_scope === 'all' ? 'Bütün sistem / Nazirlik' : (u.organizations?.short_name || 'Təşkilat seçilməyib');
 }
 
 function renderUsers() {
@@ -175,7 +164,7 @@ function renderUsers() {
   desktop.innerHTML = users.map(u => `
     <tr>
       <td><strong>${escapeHtml(userName(u))}</strong><br><span class="muted table-sub">${escapeHtml(u.email || '')}</span></td>
-      <td>${escapeHtml(u.organizations?.short_name || 'Sistem')}</td>
+      <td>${escapeHtml(userScopeLabel(u))}</td>
       <td>${escapeHtml(u.positions?.name || '—')}</td>
       <td>${escapeHtml(ROLE_LABELS[u.system_role] || u.system_role || '—')}</td>
       <td><span class="badge ${u.is_active ? 'ok' : 'danger'}">${u.is_active ? 'Aktiv' : 'Deaktiv'}</span></td>
@@ -185,16 +174,17 @@ function renderUsers() {
   mobile.innerHTML = users.map(u => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(userName(u))}</strong><small>${escapeHtml(u.email || '')}</small></div><span class="badge ${u.is_active ? 'ok' : 'danger'}">${u.is_active ? 'Aktiv' : 'Deaktiv'}</span></div>
-      <div class="record-grid"><div><span>Təşkilat</span><b>${escapeHtml(u.organizations?.short_name || 'Sistem')}</b></div><div><span>Vəzifə</span><b>${escapeHtml(u.positions?.name || '—')}</b></div><div><span>Rol</span><b>${escapeHtml(ROLE_LABELS[u.system_role] || u.system_role || '—')}</b></div></div>
+      <div class="record-grid"><div><span>Əhatə</span><b>${escapeHtml(userScopeLabel(u))}</b></div><div><span>Vəzifə</span><b>${escapeHtml(u.positions?.name || '—')}</b></div><div><span>Rol</span><b>${escapeHtml(ROLE_LABELS[u.system_role] || u.system_role || '—')}</b></div></div>
       ${u.system_role !== 'super_admin' ? `<div class="record-actions"><button class="btn ghost" data-user-edit="${u.id}">Redaktə et</button><button class="btn secondary" data-user-toggle="${u.id}" data-active="${u.is_active}">${u.is_active ? 'Blokla' : 'Aktiv et'}</button><button class="btn ghost" data-reset="${u.auth_user_id}">Şifrə</button></div>` : '<div class="record-actions"><span class="badge info">Super Admin qorunur</span></div>'}
     </article>`).join('') || '<div class="empty">İstifadəçi yoxdur.</div>';
 }
 
 function fillSelects() {
   const orgOptions = '<option value="">Seçin</option>' + orgs.map(o => `<option value="${o.id}">${escapeHtml(o.short_name)}</option>`).join('');
-  ['#keyword-org','#exclude-org','#source-org'].forEach(sel => { const el = document.querySelector(sel); if (el) el.innerHTML = orgOptions; });
   const posOrg = document.querySelector('#position-org');
   if (posOrg) posOrg.innerHTML = '<option value="">Qlobal</option>' + orgs.map(o => `<option value="${o.id}">${escapeHtml(o.short_name)}</option>`).join('');
+  const aliasOrg = document.querySelector('#alias-org');
+  if (aliasOrg) aliasOrg.innerHTML = orgOptions;
   const villageDistrict = document.querySelector('#village-district');
   if (villageDistrict) villageDistrict.innerHTML = '<option value="">Rayon seçin</option>' + districts.map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
 }
@@ -336,30 +326,20 @@ async function loadSourceIndex() {
   sourceIndex = rows;
 }
 
-function sourceGroupSummary(org) {
-  const rows = sourceIndex.filter(x => x.organization_id === org.id);
-  const counts = new Map();
-  for (const row of rows) {
-    const key = normalizeSourcePlatform(row.platform);
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  const order = ['youtube','facebook','instagram','tiktok','linkedin','x','web','digər'];
-  const platformGroups = order.filter(key => counts.get(key)).map(key => `
-    <details class="source-platform-group" data-source-platform-group data-org-id="${org.id}" data-platform-key="${key}" data-total="${counts.get(key)}">
-      <summary><span><strong>${sourcePlatformLabel(key)}</strong><small>${counts.get(key)} mənbə</small></span><span class="badge info">${counts.get(key)}</span></summary>
-      <div class="source-platform-body" data-source-platform-body><div class="empty compact">Açdıqda yüklənəcək.</div></div>
-    </details>`).join('');
-  return `<details class="keyword-group source-org-group" data-source-org-group>
-    <summary><span><strong>${escapeHtml(org.short_name || org.name || 'Təşkilat')}</strong><small>${rows.length} izlənilən mənbə</small></span><span class="badge info">${rows.length}</span></summary>
-    <div class="source-org-body">${platformGroups || '<div class="empty compact">Mənbə yoxdur.</div>'}</div>
-  </details>`;
-}
-
 function renderSources() {
   const el = document.querySelector('#source-list');
   if (!el) return;
-  const groups = orgs.filter(o => sourceIndex.some(x => x.organization_id === o.id));
-  el.innerHTML = groups.map(sourceGroupSummary).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
+  const counts = new Map();
+  for (const row of sourceIndex) {
+    const key = normalizeSourcePlatform(row.platform);
+    counts.set(key,(counts.get(key)||0)+1);
+  }
+  const order = ['youtube','facebook','instagram','tiktok','linkedin','x','web','digər'];
+  el.innerHTML = order.filter(key=>counts.get(key)).map(key=>`
+    <details class="source-platform-group" data-source-platform-group data-platform-key="${key}" data-total="${counts.get(key)}">
+      <summary><span><strong>${sourcePlatformLabel(key)}</strong><small>${counts.get(key)} qlobal mənbə</small></span><span class="badge info">${counts.get(key)}</span></summary>
+      <div class="source-platform-body" data-source-platform-body><div class="empty compact">Açdıqda yüklənəcək.</div></div>
+    </details>`).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
 
   el.querySelectorAll('[data-source-platform-group]').forEach(group => {
     group.addEventListener('toggle', () => {
@@ -374,15 +354,13 @@ async function loadSourcePlatformGroup(group, offset=0, append=false) {
   group.dataset.loading = '1';
   if (!append) body.innerHTML = '<div class="empty compact">Yüklənir…</div>';
 
-  const orgId = group.dataset.orgId;
   const platformKey = group.dataset.platformKey;
   const actualPlatforms = [...new Set(sourceIndex
-    .filter(x => x.organization_id === orgId && normalizeSourcePlatform(x.platform) === platformKey)
+    .filter(x => normalizeSourcePlatform(x.platform) === platformKey)
     .map(x => String(x.platform || 'Web')))].filter(Boolean);
 
   let q = supabase.from('sources')
     .select('id,organization_id,platform,url,is_active,created_at')
-    .eq('organization_id',orgId)
     .order('created_at',{ascending:false})
     .range(offset, offset + SOURCE_PAGE_SIZE - 1);
   if (actualPlatforms.length === 1) q = q.eq('platform', actualPlatforms[0]);
@@ -396,7 +374,7 @@ async function loadSourcePlatformGroup(group, offset=0, append=false) {
   const html = rows.map(x => {
     const rawUrl = String(x.url || '');
     return `<div class="source-item">
-      <div class="source-item-main"><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl || 'URL yoxdur')}</a><small>${escapeHtml(x.platform || sourcePlatformLabel(platformKey))}</small></div>
+      <div class="source-item-main"><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl || 'URL yoxdur')}</a><small>${escapeHtml(x.platform || sourcePlatformLabel(platformKey))}${x.organization_id ? ' • köhnə tenant mənbəsi, qlobal hovuzda istifadə olunur' : ' • qlobal'}</small></div>
       <span class="source-item-actions"><span class="badge source-status-badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span><button class="icon-btn source-delete" type="button" title="Mənbəni sil" aria-label="Mənbəni sil" data-source-delete="${x.id}">×</button></span>
     </div>`;
   }).join('');
@@ -415,11 +393,15 @@ async function loadSourcePlatformGroup(group, offset=0, append=false) {
   bindDynamicActions();
 }
 
-function renderBilling() {
-  const el = document.querySelector('#billing-list');
+function renderAliases() {
+  const el = document.querySelector('#alias-list');
   if (!el) return;
-  el.innerHTML = orgs.map(o => `
-    <article class="billing-card"><div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div><div class="billing-amount">${money(o.monthly_price)}</div><div class="record-grid"><div><span>Növbəti ödəniş</span><b>${o.next_payment_at ? fmtDate(o.next_payment_at) : 'Təyin edilməyib'}</b></div><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div></div><div class="record-actions two"><button class="btn ghost" data-org-edit="${o.id}">Məlumatları redaktə et</button><button class="btn ${o.service_status === 'suspended' ? '' : 'secondary'}" data-org-toggle="${o.id}">${o.service_status === 'suspended' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></div></article>`).join('') || '<div class="empty">Abunə qeydi yoxdur.</div>';
+  const grouped = orgs.map(org=>({org,rows:aliases.filter(a=>a.organization_id===org.id&&a.is_active!==false)})).filter(x=>x.rows.length);
+  el.innerHTML = grouped.map(({org,rows})=>`
+    <details class="keyword-group alias-group">
+      <summary><span><strong>${escapeHtml(org.short_name || org.name)}</strong><small>${rows.length} aktiv ad variantı</small></span><span class="keyword-count">${rows.length}</span></summary>
+      <div class="keyword-group-body">${rows.map(a=>`<div class="keyword-item"><span>${escapeHtml(a.alias)}</span><span class="keyword-item-actions"><span class="badge info">${escapeHtml(a.alias_type || 'alias')}</span><button class="icon-btn keyword-delete" type="button" title="Ad variantını sil" data-alias-delete="${a.id}">×</button></span></div>`).join('')}</div>
+    </details>`).join('') || '<div class="empty compact">Ad variantı yoxdur.</div>';
 }
 
 function auditActor(row) {
@@ -525,6 +507,19 @@ function bindDynamicActions() {
     });
   });
 
+  document.querySelectorAll('[data-alias-delete]').forEach(btn=>{
+    if (btn.dataset.bound) return;
+    btn.dataset.bound='1';
+    btn.addEventListener('click', async ()=>{
+      if (!confirm('Bu təşkilat ad variantını silmək istəyirsiniz?')) return;
+      btn.disabled = true;
+      const { error } = await supabase.from('organization_aliases').delete().eq('id',btn.dataset.aliasDelete);
+      btn.disabled = false;
+      toast(error ? error.message : 'Ad variantı silindi', error ? 'error' : 'success');
+      if (!error) await refresh();
+    });
+  });
+
   document.querySelectorAll('[data-org-toggle]').forEach(b => b.onclick = () => toggleOrg(b.dataset.orgToggle));
   document.querySelectorAll('[data-org-edit]').forEach(b => b.onclick = () => modal('org', { organization_id:b.dataset.orgEdit }));
   document.querySelectorAll('[data-user-edit]').forEach(b => b.onclick = () => modal('user', { user_id:b.dataset.userEdit }));
@@ -536,7 +531,7 @@ function bindDynamicActions() {
 async function toggleOrg(id) {
   const org = orgs.find(x => x.id === id);
   if (!org) return;
-  const next = org.service_status === 'suspended' ? 'active' : 'suspended';
+  const next = ['suspended','archived'].includes(org.service_status) ? 'active' : 'suspended';
   const affected = users.filter(u => u.organization_id === id && u.is_active).length;
   const msg = next === 'suspended'
     ? `${org.short_name} üzrə xidmət dayandırılsın? ${affected} aktiv istifadəçi təşkilat açılana qədər sistemə daxil ola bilməyəcək. Məlumatlar silinməyəcək.`
@@ -594,20 +589,36 @@ function modal(type, preset={}) {
   if (type === 'org') {
     const editing = preset.organization_id ? orgs.find(o => o.id === preset.organization_id) : null;
     const title = editing ? 'Təşkilatı redaktə et' : 'Yeni təşkilat';
-    const eyebrow = editing ? 'Müştəri məlumatları' : 'Yeni müştəri';
     const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Təşkilat yarat';
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="org-form" data-org-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">${eyebrow}</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" value="${escapeHtml(editing?.name || '')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" value="${escapeHtml(editing?.short_name || '')}" required></div><div class="field"><label>Rayon</label><select class="select" id="org-district">${districts.map(d=>`<option value="${d.id}" ${editing?.district_id===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Aylıq xidmət (AZN)</label><input class="input" id="org-price" type="number" min="0" step="0.01" value="${Number(editing?.monthly_price || 0)}"></div><div class="field"><label>Növbəti ödəniş</label><input class="input" id="org-next" type="date" value="${editing?.next_payment_at ? String(editing.next_payment_at).slice(0,10) : ''}"></div><div class="field"><label>Xidmət statusu</label><select class="select" id="org-status"><option value="active" ${editing?.service_status==='active'?'selected':''}>Aktiv</option><option value="grace" ${editing?.service_status==='grace'?'selected':''}>Möhlət</option><option value="suspended" ${editing?.service_status==='suspended'?'selected':''}>Dayandırılıb</option><option value="archived" ${editing?.service_status==='archived'?'selected':''}>Arxiv</option></select></div><div class="field field-toggle"><label>Rayon üzrə geniş monitorinq</label><label class="switch-row"><input type="checkbox" id="org-district-wide" ${editing?.show_district_wide!==false?'checked':''}><span class="switch-ui"></span><span>Suvarma və su təsərrüfatına aid rayon məlumatlarını göstər</span></label></div></div><div class="modal-note">Aylıq qiymət, növbəti ödəniş, rayon və xidmət statusu buradan dəyişdirilir. Təşkilat dayandırıldıqda ona bağlı bütün aktiv istifadəçilərin girişinə avtomatik maneə qoyulur.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    const typeValue = editing?.organization_type || 'district';
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="org-form" data-org-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat kataloqu</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" value="${escapeHtml(editing?.name || '')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" value="${escapeHtml(editing?.short_name || '')}" required></div><div class="field"><label>Təşkilat növü</label><select class="select" id="org-type"><option value="district" ${typeValue==='district'?'selected':''}>Rayon idarəsi</option><option value="regional_unit" ${typeValue==='regional_unit'?'selected':''}>Regional vahid</option><option value="special_unit" ${typeValue==='special_unit'?'selected':''}>Xüsusi idarə</option><option value="central_service" ${typeValue==='central_service'?'selected':''}>Mərkəzi xidmət</option></select></div><div class="field"><label>Rayon / ərazi</label><select class="select" id="org-district"><option value="">Mərkəzi / rayonsuz</option>${districts.map(d=>`<option value="${d.id}" ${editing?.district_id===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Xidmət statusu</label><select class="select" id="org-status"><option value="active" ${editing?.service_status==='active'?'selected':''}>Aktiv</option><option value="grace" ${editing?.service_status==='grace'?'selected':''}>Möhlət</option><option value="suspended" ${editing?.service_status==='suspended'?'selected':''}>Dayandırılıb</option><option value="archived" ${editing?.service_status==='archived'?'selected':''}>Arxiv</option></select></div><div class="field field-toggle"><label>Rayon üzrə geniş monitorinq</label><label class="switch-row"><input type="checkbox" id="org-district-wide" ${editing?.show_district_wide!==false?'checked':''}><span class="switch-ui"></span><span>Təşkilatın rayonuna aid ümumi su və meliorasiya materiallarını da göstər</span></label></div></div><div class="modal-note">Ad, qısa ad, təşkilat növü və rayon gələcək struktur dəyişikliklərində buradan yenilənə bilər. Köhnə və alternativ adlar ayrıca “Təşkilat ad variantları” bölməsində idarə olunur.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     document.querySelector('#org-form').onsubmit = saveOrg;
   } else {
     const editing = preset.user_id ? users.find(u => u.id === preset.user_id) : null;
     if (editing?.system_role === 'super_admin') return toast('Super Admin sistem hesabı redaktə edilə bilməz.', 'error');
-    const defaultOrg = editing?.organization_id || preset.organization_id || orgs.find(o => o.short_name?.toLowerCase().includes('bərdə'))?.id || orgs[0]?.id || '';
+    const defaultScope = editing?.access_scope || preset.access_scope || 'organization';
+    const defaultOrg = editing?.organization_id || preset.organization_id || orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'))?.id || '';
     const posOptions = positionOptionsForOrg(defaultOrg, editing?.position_id || preset.position_id || '');
     const title = editing ? 'İstifadəçini redaktə et' : 'Yeni istifadəçi';
     const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Hesab yarat';
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat hesabı</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Təşkilat</label><select class="select" id="u-org" required>${orgs.map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">${editing ? 'Ad, soyad, təşkilat, vəzifə və rol yenilənə bilər. E-mail dəyişdirilmir; şifrə ayrıca “Şifrə” düyməsindən dəyişdirilir.' : 'Hesab yalnız seçilən təşkilatın məlumatlarını görəcək. Təşkilat xidməti dayandırılarsa bu hesab da avtomatik bloklanacaq.'}</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Giriş və məlumat əhatəsi</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Məlumat əhatəsi</label><select class="select" id="u-scope"><option value="organization" ${defaultScope!=='all'?'selected':''}>Yalnız seçilən təşkilat</option><option value="all" ${defaultScope==='all'?'selected':''}>Bütün sistem / Nazirlik</option></select></div><div class="field"><label>Təşkilat</label><select class="select" id="u-org"><option value="">Mərkəzi / təşkilatsız</option>${orgs.map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">“Bütün sistem / Nazirlik” seçildikdə istifadəçi bütün təşkilatların nəticələrini görür və təşkilat filtrindən istifadə edir. “Yalnız seçilən təşkilat” seçildikdə profilə bağlanan idarənin məlumatları avtomatik göstərilir.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     const orgSelect = document.querySelector('#u-org');
-    orgSelect.onchange = () => { document.querySelector('#u-position').innerHTML = positionOptionsForOrg(orgSelect.value); };
+    const scopeSelect = document.querySelector('#u-scope');
+    const positionSelect = document.querySelector('#u-position');
+    const syncScope = () => {
+      const central = scopeSelect.value === 'all';
+      orgSelect.disabled = central;
+      if (central) {
+        orgSelect.value = '';
+        positionSelect.innerHTML = positionOptionsForOrg('');
+      } else {
+        if (!orgSelect.value && defaultOrg) orgSelect.value = defaultOrg;
+        positionSelect.innerHTML = positionOptionsForOrg(orgSelect.value, editing?.position_id || '');
+      }
+    };
+    orgSelect.onchange = () => { positionSelect.innerHTML = positionOptionsForOrg(orgSelect.value); };
+    scopeSelect.onchange = syncScope;
+    syncScope();
     document.querySelector('#user-form').onsubmit = editing ? updateUser : createUser;
   }
   document.querySelector('#close-modal').onclick = closeModal;
@@ -624,8 +635,7 @@ async function saveOrg(e) {
     name: document.querySelector('#org-name').value.trim(),
     short_name: document.querySelector('#org-short').value.trim(),
     district_id: document.querySelector('#org-district').value || null,
-    monthly_price: Number(document.querySelector('#org-price').value || 0),
-    next_payment_at: document.querySelector('#org-next').value || null,
+    organization_type: document.querySelector('#org-type').value,
     service_status: document.querySelector('#org-status').value,
     show_district_wide: document.querySelector('#org-district-wide')?.checked !== false
   };
@@ -640,10 +650,14 @@ async function updateUser(e) {
   const id = e.currentTarget.dataset.userId;
   const target = users.find(u => u.id === id);
   if (!target || target.system_role === 'super_admin') return toast('Super Admin sistem hesabı dəyişdirilə bilməz.', 'error');
+  const access_scope = document.querySelector('#u-scope').value;
+  const organization_id = access_scope === 'all' ? null : (document.querySelector('#u-org').value || null);
+  if (access_scope !== 'all' && !organization_id) return toast('Təşkilat səviyyəli istifadəçi üçün təşkilat seçilməlidir.', 'error');
   const row = {
     first_name:document.querySelector('#u-first').value.trim(),
     last_name:document.querySelector('#u-last').value.trim(),
-    organization_id:document.querySelector('#u-org').value,
+    access_scope,
+    organization_id,
     position_id:document.querySelector('#u-position').value || null,
     system_role:document.querySelector('#u-role').value
   };
@@ -654,13 +668,17 @@ async function updateUser(e) {
 
 async function createUser(e) {
   e.preventDefault();
+  const access_scope = document.querySelector('#u-scope').value;
+  const organization_id = access_scope === 'all' ? null : (document.querySelector('#u-org').value || null);
+  if (access_scope !== 'all' && !organization_id) return toast('Təşkilat səviyyəli istifadəçi üçün təşkilat seçilməlidir.', 'error');
   const body = {
     action:'create',
     email:document.querySelector('#u-email').value.trim(),
     password:document.querySelector('#u-pass').value,
     first_name:document.querySelector('#u-first').value.trim(),
     last_name:document.querySelector('#u-last').value.trim(),
-    organization_id:document.querySelector('#u-org').value,
+    access_scope,
+    organization_id,
     position_id:document.querySelector('#u-position').value || null,
     system_role:document.querySelector('#u-role').value
   };
@@ -697,42 +715,35 @@ async function loadOrganizationKeywordValues(organizationId) {
 }
 
 async function configureBarda() {
-  const org = orgs.find(o => ['bərdə smsii','bərdə smsİİ','bərdə smsii'].includes(String(o.short_name||'').toLocaleLowerCase('az-AZ')) || String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
+  const org = orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
   const district = districts.find(d => String(d.name||'').toLocaleLowerCase('az-AZ') === 'bərdə');
   if (!org || !district) return toast('Bərdə SMSİİ təşkilatı və Bərdə rayonu tapılmalıdır.', 'error');
 
   const desiredPositions = ['İdarə rəisi','İdarə rəisinin müavini','Baş mühəndis','Mətbuat üzrə məsul şəxs','Operator'];
-  const desiredKeywords = ['Bərdə SMSİİ','Bərdə SMSII','Bərdə Suvarma Sistemlərinin İstismarı İdarəsi','Bərdə Suvarma İdarəsi','Bərdə suvarma','Bərdə kanal','Bərdə arx','Bərdə fermer su','su gəlmir','su çatışmazlığı','suvarma suyu verilmir'];
+  const desiredAliases = [
+    ['Bərdə SMSİİ','short'],['Bərdə SMSII','ascii_short'],['Berde SMSII','ascii_short'],
+    ['Bərdə Su Meliorasiya Sistemlərinin İstismarı İdarəsi','current'],
+    ['Bərdə Suvarma Sistemlərinin İstismarı İdarəsi','legacy'],
+    ['Bərdə Suvarma Sistemləri İdarəsi','legacy'],['Bərdə Suvarma İdarəsi','legacy'],
+    ['Bərdə Subartezian Quyularının İstismarı İdarəsi','legacy']
+  ];
   let changed = 0;
-
-  const orgPatch = {};
-  if (org.district_id !== district.id) orgPatch.district_id = district.id;
-  if (org.service_status !== 'active') orgPatch.service_status = 'active';
-  if (Object.keys(orgPatch).length) {
-    const { error } = await supabase.from('organizations').update(orgPatch).eq('id', org.id);
-    if (error) return toast(error.message,'error');
-    changed++;
-  }
+  const orgPatch = { district_id:district.id, organization_type:'district', service_status:'active' };
+  const { error:orgError } = await supabase.from('organizations').update(orgPatch).eq('id',org.id);
+  if (orgError) return toast(orgError.message,'error');
 
   const pRes = await insertMissing('positions', positions, desiredPositions.map(name=>({name,organization_id:org.id})), (a,b)=>a.name===b.name && (a.organization_id===b.organization_id || !a.organization_id));
   if (pRes.error) return toast(pRes.error.message,'error');
   changed += pRes.count;
 
-  // Konfiqurasiya düyməsi mövcud açar sözləri yenidən POST etməməlidir.
-  // Unique index lower(trim(value)) olduğuna görə təşkilatın mövcud dəyərlərini yalnız
-  // bu düymə basılanda səhifəli oxuyuruq və eyni normalizə olunmuş sözə POST etmirik.
-  // Beləliklə Network/Console-da 409 duplicate sorğusu yaranmır.
-  const existingKeywordResult = await loadOrganizationKeywordValues(org.id);
-  if (existingKeywordResult.error) return toast(existingKeywordResult.error.message,'error');
-  const existingNormalized = new Set(existingKeywordResult.values.map(value => String(value || '').trim().toLocaleLowerCase('az-AZ')));
-  const missingKeywords = desiredKeywords.filter(value => !existingNormalized.has(value.trim().toLocaleLowerCase('az-AZ')));
-  for (const value of missingKeywords) {
-    const { error } = await supabase.from('keywords').insert({organization_id:org.id,value,kind:'phrase',is_active:true});
+  const existing = new Set(aliases.filter(a=>a.organization_id===org.id).map(a=>String(a.alias||'').trim().toLocaleLowerCase('az-AZ')));
+  for (const [alias,alias_type] of desiredAliases) {
+    if (existing.has(alias.toLocaleLowerCase('az-AZ'))) continue;
+    const { error } = await supabase.from('organization_aliases').insert({organization_id:org.id,alias,alias_type,is_active:true});
     if (error && error.code !== '23505') return toast(error.message,'error');
     if (!error) changed++;
   }
-
-  toast(changed ? `Bərdə SMSİİ konfiqurasiyası tamamlandı: ${changed} dəyişiklik.` : 'Bərdə SMSİİ artıq düzgün konfiqurasiya olunub.', 'success');
+  toast(changed ? `Bərdə SMSİİ qlobal monitorinq üçün hazırlandı: ${changed} yeni qeyd.` : 'Bərdə SMSİİ qlobal monitorinq üçün artıq hazırdır.', 'success');
   await refresh();
 }
 
@@ -742,11 +753,13 @@ async function renderBardaStatus() {
   const org = orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
   if (!org) { el.innerHTML = '<span class="badge danger">Bərdə SMSİİ tapılmadı</span>'; return; }
   const hasDirector = positions.some(p => p.name === 'İdarə rəisi' && (!p.organization_id || p.organization_id === org.id));
-  const webSources = sourceIndex.filter(s => s.organization_id===org.id && ['web','rss'].some(kind=>String(s.platform||'').toLowerCase().includes(kind)) && s.is_active !== false);
+  const webSources = sourceIndex.filter(s => ['web','rss'].some(kind=>String(s.platform||'').toLowerCase().includes(kind)) && s.is_active !== false);
+  const globalStats = keywordStats[0] || {positive_count:0,excluded_count:0};
   const bits = [
     statusBadge(org.service_status),
     hasDirector ? '<span class="badge ok">Vəzifələr hazırdır</span>' : '<span class="badge warn">Vəzifə tamamlanmalıdır</span>',
-    webSources.length ? `<span class="badge ok">Web mənbələri hazırdır (${webSources.length})</span>` : '<span class="badge warn">Web mənbəsi əlavə edilməlidir</span>',
+    webSources.length ? `<span class="badge ok">Qlobal Web mənbələri (${webSources.length})</span>` : '<span class="badge warn">Qlobal Web mənbəsi əlavə edilməlidir</span>',
+    `<span class="badge info">Qlobal söz bankı: ${globalStats.positive_count} / filtr ${globalStats.excluded_count}</span>`,
     webSources.length ? '<span class="badge info">RSS avtomatik aşkarlanır</span>' : ''
   ].filter(Boolean);
   el.innerHTML = bits.join(' ');
@@ -766,8 +779,7 @@ async function renderBardaStatus() {
     const archiveWeb = Math.max(0, totalWeb - currentWeb);
     const oldest = oldestWeb?.data?.published_at ? fmtDate(oldestWeb.data.published_at) : '—';
     const currentYear = new Date().getFullYear();
-    const recentStart = currentYear - 2;
-    el.insertAdjacentHTML('beforeend', `<span class="badge info">Bazadakı nəticə: Web ${totalWeb} / YouTube ${youtube.count||0}</span><span class="badge info">Web arxiv: ${archiveWeb} / son 90 gün: ${currentWeb}</span><span class="badge info">Ən köhnə Web: ${escapeHtml(oldest)}</span><span class="badge info">Son yeni nəticə: ${escapeHtml(last)}</span><span class="badge ok">Prioritet Web backfill: ${recentStart}–${currentYear}</span><span class="badge ok">Tarixi arxiv backfill: 2000–${recentStart-1}</span>`);
+    el.insertAdjacentHTML('beforeend', `<span class="badge info">Bərdə nəticəsi: Web ${totalWeb} / YouTube ${youtube.count||0}</span><span class="badge info">Web arxiv: ${archiveWeb} / son 90 gün: ${currentWeb}</span><span class="badge info">Ən köhnə Web: ${escapeHtml(oldest)}</span><span class="badge info">Son yeni nəticə: ${escapeHtml(last)}</span><span class="badge ok">Əsas Web backfill: 2020–${currentYear}</span><span class="badge ok">Tarixi arxiv: 2000–2019</span>`);
   }
 }
 
@@ -789,33 +801,45 @@ async function runMonitorNow() {
 document.querySelector('#position-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('positions').insert({name:document.querySelector('#position-name').value.trim(),organization_id:document.querySelector('#position-org').value||null}); toast(error?error.message:'Vəzifə əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
 document.querySelector('#district-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('districts').insert({name:document.querySelector('#district-name').value.trim()}); toast(error?error.message:'Rayon əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
 document.querySelector('#village-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('villages').insert({district_id:document.querySelector('#village-district').value,name:document.querySelector('#village-name').value.trim()}); toast(error?error.message:'Kənd əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
-document.querySelector('#keyword-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('keywords').insert({organization_id:document.querySelector('#keyword-org').value,value:document.querySelector('#keyword-value').value.trim(),kind:'phrase',is_active:true}); toast(error?error.message:'Açar söz əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
+document.querySelector('#keyword-form').onsubmit = async e => {
+  e.preventDefault();
+  const value=document.querySelector('#keyword-value').value.trim();
+  if (!value) return;
+  const { error } = await supabase.from('keywords').insert({organization_id:null,value,kind:'phrase',is_active:true});
+  toast(error?.code==='23505'?'Bu qlobal açar söz artıq mövcuddur.':(error?.message||'Qlobal açar söz əlavə edildi'),error?'error':'success');
+  if(!error){e.target.reset();await refresh();}
+};
 document.querySelector('#exclude-form').onsubmit = async e => {
   e.preventDefault();
-  const organization_id = document.querySelector('#exclude-org').value;
   const value = document.querySelector('#exclude-value').value.trim();
   if (!value) return;
-  const { error } = await supabase.from('keywords').insert({organization_id,value,kind:'exclude',is_active:true});
-  const message = error?.code === '23505' ? 'Bu filtr artıq mövcuddur.' : (error?.message || 'Axtarılmamalı söz əlavə edildi');
-  toast(message, error ? 'error' : 'success');
+  const { error } = await supabase.from('keywords').insert({organization_id:null,value,kind:'exclude',is_active:true});
+  toast(error?.code==='23505'?'Bu qlobal filtr artıq mövcuddur.':(error?.message||'Qlobal axtarılmamalı söz əlavə edildi'), error ? 'error' : 'success');
   if (!error) { e.target.reset(); await refresh(); }
 };
 document.querySelector('#source-form').onsubmit = async e => {
   e.preventDefault();
-  const organization_id = document.querySelector('#source-org').value;
   const platform = document.querySelector('#source-platform').value.trim();
   const url = document.querySelector('#source-url').value.trim();
   const googleNews = url.includes('news.google.com/rss/');
   const urlNoSlash = url.replace(/\/+$/,'');
-  let duplicateQuery = supabase.from('sources').select('id',{count:'exact',head:true}).eq('organization_id',organization_id);
-  duplicateQuery = googleNews
-    ? duplicateQuery.ilike('url','%news.google.com/rss/%')
-    : duplicateQuery.in('url',[urlNoSlash,`${urlNoSlash}/`]);
+  let duplicateQuery = supabase.from('sources').select('id',{count:'exact',head:true});
+  duplicateQuery = googleNews ? duplicateQuery.ilike('url','%news.google.com/rss/%') : duplicateQuery.in('url',[urlNoSlash,`${urlNoSlash}/`]);
   const duplicateResult = await duplicateQuery;
   if (duplicateResult.error) return toast(duplicateResult.error.message,'error');
-  if ((duplicateResult.count || 0) > 0) return toast(googleNews ? 'Bu təşkilat üçün Google News RSS artıq mövcuddur.' : 'Bu mənbə artıq mövcuddur.', 'error');
-  const { error } = await supabase.from('sources').insert({organization_id,platform,url,is_active:true});
-  toast(error ? error.message : 'Mənbə əlavə edildi',error?'error':'success');
+  if ((duplicateResult.count || 0) > 0) return toast(googleNews ? 'Qlobal Google News RSS artıq mövcuddur.' : 'Bu qlobal mənbə artıq mövcuddur.', 'error');
+  const { error } = await supabase.from('sources').insert({organization_id:null,platform,url,is_active:true});
+  toast(error ? error.message : 'Qlobal mənbə əlavə edildi',error?'error':'success');
+  if(!error){e.target.reset();await refresh();}
+};
+document.querySelector('#alias-form').onsubmit = async e => {
+  e.preventDefault();
+  const organization_id=document.querySelector('#alias-org').value;
+  const alias=document.querySelector('#alias-value').value.trim();
+  const alias_type=document.querySelector('#alias-type').value;
+  if(!organization_id||!alias) return;
+  const {error}=await supabase.from('organization_aliases').insert({organization_id,alias,alias_type,is_active:true});
+  toast(error?.code==='23505'?'Bu ad variantı artıq mövcuddur.':(error?.message||'Ad variantı əlavə edildi'),error?'error':'success');
   if(!error){e.target.reset();await refresh();}
 };
 

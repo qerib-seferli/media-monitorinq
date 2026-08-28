@@ -2,10 +2,13 @@ import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 import { startLiveMonitor } from './live-monitor.js';
+import { applyOrganizationScope, isCentralScope, setupOrganizationFilter } from './scope.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'monitoring'); showPageLoader();
 const ctx=await requireAuth(); if(!ctx) throw new Error('auth'); renderShell(ctx.profile,'monitoring'); hidePageLoader();
 
+const organizationFilter=document.querySelector('#organization-filter');
+await setupOrganizationFilter(ctx.profile, organizationFilter);
 const list=document.querySelector('#list');
 const platform=document.querySelector('#platform');
 const sentiment=document.querySelector('#sentiment');
@@ -74,7 +77,7 @@ function primaryMediaUrl(m){return orderedMedia(m).find(x=>x?.url)?.url||'./asse
 function mediaImg(url,cls='detail-media'){return `<img src=\"${url}\" data-media=\"${url}\" class=\"${cls}\" alt=\"Media\" loading=\"lazy\" onerror=\"this.closest('figure')?.classList.add('media-load-error')\">`;}
 function card(m){
   const comment=isComment(m);
-  return `<article class="mention-card${comment?' is-comment':''}"><img class="thumb" src="${primaryMediaUrl(m)}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.original_text||m.summary||'')}</p><div class="mention-meta"><span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${comment?'<span class="badge comment-badge">✉ Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${fmtDate(publishedDate(m))}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
+  return `<article class="mention-card${comment?' is-comment':''}"><img class="thumb" src="${primaryMediaUrl(m)}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.original_text||m.summary||'')}</p><div class="mention-meta">${isCentralScope(ctx.profile)&&m.organizations?.short_name?`<span class="badge ok">${escapeHtml(m.organizations.short_name)}</span>`:''}<span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${comment?'<span class="badge comment-badge">✉ Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${fmtDate(publishedDate(m))}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
 }
 function render(append=false){
   if(!append) list.innerHTML='';
@@ -92,11 +95,12 @@ async function load({reset=false}={}){
     let safety=0;
     while(!done && rows.length-before<PAGE_SIZE && safety<6){
       const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
-      let q=supabase.from('mentions').select('*, districts(name), villages(name), mention_media(*)')
+      let q=supabase.from('mentions').select('*, organizations(short_name), districts(name), villages(name), mention_media(*)')
         .gt('relevance_score',0)
         .or(`and(published_at.gte.${range.from},published_at.lte.${range.to}),and(published_at.is.null,detected_at.gte.${range.from},detected_at.lte.${range.to})`)
         .order('published_at',{ascending:false,nullsFirst:false})
         .order('detected_at',{ascending:false}).range(from,to);
+      q=applyOrganizationScope(q,ctx.profile,organizationFilter?.value||'');
       if(platform.value) q=q.ilike('source_platform',platform.value);
       if(sentiment.value) q=q.eq('sentiment',sentiment.value);
       if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
@@ -171,7 +175,7 @@ stage.addEventListener('touchstart',e=>{if(e.touches.length===2){pinchStart=Math
 stage.addEventListener('touchmove',e=>{if(e.touches.length===2&&pinchStart){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);scale=Math.max(.75,Math.min(4,pinchScale*(d/pinchStart)));applyTransform()}},{passive:true});
 stage.addEventListener('touchend',()=>{pinchStart=0});
 
-const reset=()=>load({reset:true}); platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{presetDates(period.value);updateDateInputs();reset();}; dateFrom.onchange=()=>{period.value='custom';reset();};dateTo.onchange=()=>{period.value='custom';reset();};
+const reset=()=>load({reset:true}); if(organizationFilter) organizationFilter.onchange=reset; platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{presetDates(period.value);updateDateInputs();reset();}; dateFrom.onchange=()=>{period.value='custom';reset();};dateTo.onchange=()=>{period.value='custom';reset();};
 new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)load();},{rootMargin:'500px'}).observe(sentinel);
 if(commentOnly){
   const h1=document.querySelector('.monitor-head h1');
@@ -189,4 +193,4 @@ if(commentOnly){
 updateDateInputs(); await load({reset:true});
 const openId=new URLSearchParams(location.search).get('id'); if(openId)await openDetail(openId);
 
-startLiveMonitor({organizationId:ctx.profile.organization_id,fullFirst:commentOnly,onNew:()=>load({reset:true})});
+if(!isCentralScope(ctx.profile)) startLiveMonitor({organizationId:ctx.profile.organization_id,fullFirst:commentOnly,onNew:()=>load({reset:true})});

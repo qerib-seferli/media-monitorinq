@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
 
     currentStage = 'organizations';
     let orgQuery:any = admin.from('organizations')
-      .select('id,name,short_name,district_id,districts(name),show_district_wide')
+      .select('id,name,short_name,district_id,districts(name),show_district_wide,organization_type')
       .in('service_status',['active','grace']);
     if (callerOrganizationId) orgQuery = orgQuery.eq('id', callerOrganizationId);
     const orgResult:any = await orgQuery;
@@ -82,6 +82,7 @@ Deno.serve(async (req) => {
     for (const org of orgs) {
       const sourceMode = options.mode === 'news_plan' || options.edge_news_probe ? 'all' : 'youtube';
       org.sources = await fetchOrganizationSources(admin, String(org.id), sourceMode, 3000);
+      org.aliases = await fetchOrganizationAliases(admin, String(org.id), 500);
     }
 
     // Web/Xəbər xarici şəbəkə sorğuları Supabase Edge datacenter-lərində Google News
@@ -171,10 +172,7 @@ Deno.serve(async (req) => {
         let contentRelevant=true;
         if (options.news_text || options.news_title) {
           const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
-          const positiveKeywords = activeKeywordRows.filter((k:any)=>String(k?.kind||'').toLowerCase()!=='exclude').map((k:any)=>String(k?.value||'').trim()).filter(Boolean);
-          org.__exclude_terms = activeKeywordRows.filter((k:any)=>String(k?.kind||'').toLowerCase()==='exclude').map((k:any)=>String(k?.value||'').trim()).filter(Boolean);
-          org.__normalized_keywords=[...new Set(positiveKeywords.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
-          org.__normalized_excludes=[...new Set(org.__exclude_terms.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+          const positiveKeywords = installKeywordContext(org, activeKeywordRows);
           let villageNames:string[]=[];
           if(org.district_id){
             const vr:any=await admin.from('villages').select('name').eq('district_id',org.district_id).order('name');
@@ -287,15 +285,7 @@ Deno.serve(async (req) => {
       if (!org) return json({ok:false,run_id:runId,mode:'news_refilter',error:'Təşkilat tapılmadı'},200);
 
       const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
-      const keywords = activeKeywordRows
-        .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
-        .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
-      const excludeTerms = activeKeywordRows
-        .filter((k:any)=>String(k?.kind || '').toLowerCase() === 'exclude')
-        .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
-      org.__exclude_terms = excludeTerms;
-      org.__normalized_keywords = [...new Set(keywords.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
-      org.__normalized_excludes = [...new Set(excludeTerms.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+      const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
 
       let villageNames:string[] = [];
@@ -314,15 +304,7 @@ Deno.serve(async (req) => {
       if (!org) return json({ok:false,run_id:runId,mode:'news_ingest',error:'Təşkilat tapılmadı'},200);
 
       const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
-      const keywords = activeKeywordRows
-        .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
-        .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
-      const excludeTerms = activeKeywordRows
-        .filter((k:any)=>String(k?.kind || '').toLowerCase() === 'exclude')
-        .map((k:any)=>String(k?.value || '').trim()).filter(Boolean);
-      org.__exclude_terms = excludeTerms;
-      org.__normalized_keywords = [...new Set(keywords.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
-      org.__normalized_excludes = [...new Set(excludeTerms.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+      const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
 
       let villageNames:string[] = [];
@@ -376,17 +358,7 @@ Deno.serve(async (req) => {
       // Açar söz bankı minlərlə sətrə çata bilər. Embedded relation və PostgREST
       // limitlərinə ilişməmək üçün təşkilat üzrə səhifəli şəkildə ayrıca oxuyuruq.
       const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
-      const keywords = activeKeywordRows
-        .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
-        .map((k:any)=>String(k?.value || '').trim())
-        .filter(Boolean);
-      const excludeTerms = activeKeywordRows
-        .filter((k:any)=>String(k?.kind || '').toLowerCase() === 'exclude')
-        .map((k:any)=>String(k?.value || '').trim())
-        .filter(Boolean);
-      org.__exclude_terms = excludeTerms;
-      org.__normalized_keywords = [...new Set(keywords.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
-      org.__normalized_excludes = [...new Set(excludeTerms.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+      const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
       const sources = (Array.isArray(org.sources) ? org.sources : []).filter((s:any)=>s?.is_active !== false);
 
@@ -755,13 +727,15 @@ async function gdeltNewsItems(org:any, keywords:string[], villages:string[]=[]):
   return {items:dedupeItems(items),queries,failures,transport};
 }
 
-async function fetchOrganizationSources(admin:any, organizationId:string, mode:'all'|'youtube'='all', maxRows=3000):Promise<any[]> {
+async function fetchOrganizationSources(admin:any, _organizationId:string, mode:'all'|'youtube'='all', maxRows=3000):Promise<any[]> {
+  // Mənbələr artıq təşkilatlara bölünmür: bütün aktiv Web/RSS/YouTube mənbələri qlobal hovuzdur.
+  // Köhnə organization_id dəyərləri silinmir; sadəcə discovery onları birlikdə istifadə edir.
   const rows:any[] = [];
+  const seen=new Set<string>();
   const pageSize = 1000;
   for (let from = 0; from < maxRows; from += pageSize) {
     let q:any = admin.from('sources')
       .select('*')
-      .eq('organization_id', organizationId)
       .eq('is_active', true)
       .order('created_at', {ascending:false})
       .range(from, Math.min(from + pageSize - 1, maxRows - 1));
@@ -769,94 +743,86 @@ async function fetchOrganizationSources(admin:any, organizationId:string, mode:'
     const result:any = await q;
     if (result?.error) throw result.error;
     const batch = Array.isArray(result?.data) ? result.data : [];
-    rows.push(...batch);
+    for(const row of batch){
+      const key=`${String(row?.platform||'').toLowerCase()}|${String(row?.url||'').replace(/\/+$/,'').toLowerCase()}`;
+      if(!row?.url || seen.has(key)) continue;
+      seen.add(key); rows.push(row);
+    }
     if (batch.length < pageSize) break;
   }
   return rows;
+}
+
+async function fetchOrganizationAliases(admin:any, organizationId:string, maxRows=500):Promise<any[]> {
+  const result:any=await admin.from('organization_aliases')
+    .select('alias,alias_type,is_active')
+    .eq('organization_id',organizationId)
+    .eq('is_active',true)
+    .order('alias')
+    .limit(maxRows);
+  if(result?.error){
+    // SQL migration hələ run edilməyibsə köhnə sistemin işləməsini dayandırmırıq.
+    if(String(result.error?.code||'')==='42P01') return [];
+    throw result.error;
+  }
+  return Array.isArray(result?.data)?result.data:[];
 }
 
 async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRows=12000):Promise<any[]> {
-  const pageSize = 1000;
-  const rows:any[] = [];
-  for (let from=0; from<maxRows; from+=pageSize) {
-    const to = Math.min(from + pageSize - 1, maxRows - 1);
-    const result:any = await admin.from('keywords')
+  // Global bank + varsa təşkilata xüsusi istisnalar. Yeni modeldə əsas bank organization_id=NULL-dır.
+  const rows:any[]=[]; const seen=new Set<string>();
+  const push=(row:any)=>{
+    const value=String(row?.value||'').trim(); const key=`${String(row?.kind||'phrase').toLowerCase()}|${normalizeForMatch(value)}`;
+    if(!value||seen.has(key)) return; seen.add(key); rows.push(row);
+  };
+  const globalResult:any=await admin.from('keywords')
+    .select('id,organization_id,value,kind,is_active,created_at')
+    .is('organization_id',null).eq('is_active',true).order('created_at',{ascending:true}).limit(Math.min(maxRows,5000));
+  if(globalResult?.error) throw globalResult.error;
+  for(const row of (globalResult?.data||[])) push(row);
+  if(organizationId){
+    const orgResult:any=await admin.from('keywords')
       .select('id,organization_id,value,kind,is_active,created_at')
-      .eq('organization_id', organizationId)
-      .eq('is_active', true)
-      .order('created_at', {ascending:true})
-      .range(from, to);
-    if (!result || result.error) throw (result?.error || new Error('Açar söz bankı oxunmadı'));
-    const batch = Array.isArray(result.data) ? result.data : [];
-    rows.push(...batch);
-    if (batch.length < pageSize) break;
+      .eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:true}).limit(Math.min(maxRows,5000));
+    if(orgResult?.error) throw orgResult.error;
+    for(const row of (orgResult?.data||[])) push(row);
   }
+  return rows.slice(0,maxRows);
+}
+
+async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=900):Promise<any[]> {
+  const organizationId=String(org?.id || '');
+  const maxPos=Math.max(120,Math.min(1200,Number(maxPositive||900)));
+  const [globalResult,orgResult]=await Promise.all([
+    admin.from('keywords').select('organization_id,value,kind,is_active,created_at').is('organization_id',null).eq('is_active',true).order('created_at',{ascending:false}).limit(maxPos+700),
+    organizationId ? admin.from('keywords').select('organization_id,value,kind,is_active,created_at').eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:false}).limit(maxPos) : Promise.resolve({data:[],error:null})
+  ]);
+  if(globalResult?.error) throw globalResult.error;
+  if(orgResult?.error) throw orgResult.error;
+  const seen=new Set<string>(); const rows:any[]=[];
+  const push=(row:any)=>{
+    const value=String(row?.value||'').trim(); const nk=normalizeForMatch(value); const kind=String(row?.kind||'phrase').toLowerCase();
+    const key=`${kind}|${nk}`; if(!value||!nk||seen.has(key)) return; seen.add(key);
+    rows.push({organization_id:row?.organization_id||null,value,kind,is_active:true,created_at:row?.created_at||null});
+  };
+  // Exclude-lar əvvəl, sonra pozitiv bank. Beləliklə limit altında filtr qaydaları itməz.
+  for(const row of (globalResult?.data||[]).filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
+  for(const row of (orgResult?.data||[]).filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
+  for(const row of (globalResult?.data||[]).filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
+  for(const row of (orgResult?.data||[]).filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
   return rows;
 }
 
-
-// Web ingest/refilter üçün minlərlə kombinasiyanı hər 1–3 materiallıq Edge çağırışında
-// yenidən RAM-a yükləmək Supabase WORKER_RESOURCE_LIMIT (HTTP 546) yaradırdı.
-// Discovery planı tam bankı oxumağa davam edir, amma qəbul/filtr mərhələsi yalnız:
-//   1) bütün aktiv exclude qaydalarını,
-//   2) rayon/təşkilat adı daşıyan ən konkret frazaları,
-//   3) son əlavə edilmiş məhdud sayda müsbət frazanı
-// götürür. Əsas Bərdə + su/meliorasiya elastikliyi evaluateMatch daxilindəki
-// rayon və güclü mövzu kökləri ilə işləyir; buna görə düzgün xəbərlər itmir,
-// Edge invocation isə bir neçə min sətirlik bankdan asılı qalmır.
-async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=900):Promise<any[]> {
-  const organizationId=String(org?.id || '');
-  if (!organizationId) return [];
-  const maxPos=Math.max(120,Math.min(1200,Number(maxPositive||900)));
-  const district=String(org?.districts?.name || '').trim();
-  const shortName=String(org?.short_name || '').trim();
-
-  const [excludeResult, districtResult, recentResult] = await Promise.all([
-    admin.from('keywords')
-      .select('value,kind,is_active,created_at')
-      .eq('organization_id', organizationId)
-      .eq('is_active', true)
-      .eq('kind','exclude')
-      .order('created_at',{ascending:false})
-      .limit(500),
-    district
-      ? admin.from('keywords')
-          .select('value,kind,is_active,created_at')
-          .eq('organization_id', organizationId)
-          .eq('is_active', true)
-          .neq('kind','exclude')
-          .ilike('value',`%${district}%`)
-          .order('created_at',{ascending:false})
-          .limit(Math.ceil(maxPos*0.7))
-      : Promise.resolve({data:[],error:null}),
-    admin.from('keywords')
-      .select('value,kind,is_active,created_at')
-      .eq('organization_id', organizationId)
-      .eq('is_active', true)
-      .neq('kind','exclude')
-      .order('created_at',{ascending:false})
-      .limit(Math.ceil(maxPos*0.45))
-  ]);
-
-  for (const result of [excludeResult,districtResult,recentResult]) {
-    if (result?.error) throw result.error;
-  }
-  const seen=new Set<string>();
-  const rows:any[]=[];
-  const push=(row:any)=>{
-    const value=String(row?.value || '').trim();
-    const key=normalizeForMatch(value);
-    if(!value || !key || seen.has(key)) return;
-    seen.add(key);
-    rows.push({value,kind:String(row?.kind || 'phrase'),is_active:true,created_at:row?.created_at || null});
-  };
-  for(const row of (excludeResult?.data || [])) push(row);
-  for(const row of (districtResult?.data || [])) push(row);
-  for(const row of (recentResult?.data || [])) push(row);
-
-  // Qısa adın konkret variantı DB pəncərəsinə düşməsə belə match bankında saxlanır.
-  if(shortName) push({value:shortName,kind:'phrase'});
-  return rows;
+function installKeywordContext(org:any, rows:any[]) {
+  const positive=rows.filter((k:any)=>String(k?.kind||'').toLowerCase()!=='exclude');
+  const excludes=rows.filter((k:any)=>String(k?.kind||'').toLowerCase()==='exclude');
+  const values=positive.map((k:any)=>String(k?.value||'').trim()).filter(Boolean);
+  org.__exclude_terms=excludes.map((k:any)=>String(k?.value||'').trim()).filter(Boolean);
+  org.__normalized_excludes=[...new Set(org.__exclude_terms.map((x:string)=>normalizeForMatch(x)).filter(Boolean))];
+  org.__normalized_keywords=[...new Set(values.map((x:string)=>normalizeForMatch(x)).filter(Boolean))];
+  org.__normalized_global_keywords=[...new Set(positive.filter((k:any)=>!k?.organization_id).map((k:any)=>normalizeForMatch(String(k?.value||''))).filter(Boolean))];
+  org.__normalized_org_keywords=[...new Set(positive.filter((k:any)=>Boolean(k?.organization_id)).map((k:any)=>normalizeForMatch(String(k?.value||''))).filter(Boolean))];
+  return values;
 }
 
 function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [], max=8):string[] {
@@ -864,7 +830,7 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
 
-  const identity = [shortName, fullName].filter(Boolean);
+  const identity = [shortName, fullName, ...(Array.isArray(org.aliases)?org.aliases.map((a:any)=>String(a?.alias||'')):[])].filter(Boolean);
   const coreTopics = [
     'suvarma','suvarma kanalı','kanal','arx','subartezian','artezian',
     'kollektor drenaj','meliorasiya','su təsərrüfatı','fermer su','su gəlmir','su çatışmazlığı',
@@ -910,7 +876,7 @@ function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
   const nd = normalizeForMatch(district);
-  const orgNames = [shortName, fullName].map(normalizeForMatch).filter(Boolean);
+  const orgNames = [shortName, fullName, ...(Array.isArray(org.aliases)?org.aliases.map((a:any)=>String(a?.alias||'')):[])].map(normalizeForMatch).filter(Boolean);
   const villageNorms = villages.map(normalizeForMatch).filter(v=>v.length >= 4);
 
   const cleaned:string[] = [];
@@ -996,6 +962,10 @@ function buildGoogleNewsGatewayQueries(org:any):string[] {
     candidates.push(`"${fullName}"`);
     const currentName = fullName.replace(/Suvarma Sistemlərinin/gi,'Su Meliorasiya Sistemlərinin');
     if (normalizeForMatch(currentName) !== normalizeForMatch(fullName)) candidates.push(`"${currentName}"`);
+  }
+  for (const row of (Array.isArray(org.aliases)?org.aliases:[]).slice(0,12)) {
+    const alias=String(row?.alias||'').trim();
+    if(alias) candidates.push(`"${alias}"`);
   }
 
   // Tarixi rəsmi adlar ayrıca discovery sorğusu kimi saxlanılır. Bərdə üzrə çoxlu
@@ -2364,15 +2334,17 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // URL və məqalənin ilk əsas hissəsi qiymətləndirilir; YouTube/rəy davranışı dəyişmir.
   const matchText = webLike ? String(item.text || '').slice(0,8000) : String(item.text || '');
   const normalized = normalizeForMatch(`${item.title || ''} ${matchText} ${urlSignal}`);
-  const direct = [String(org.name||''),String(org.short_name||'')]
+  const direct = [String(org.name||''),String(org.short_name||''),...(Array.isArray(org.aliases)?org.aliases.map((a:any)=>String(a?.alias||'')):[])]
     .map(normalizeForMatch).filter(Boolean);
   const normalizedKeywords = Array.isArray(org.__normalized_keywords) ? org.__normalized_keywords : keywords.map(normalizeForMatch).filter(Boolean);
+  const normalizedGlobalKeywords = Array.isArray(org.__normalized_global_keywords) ? org.__normalized_global_keywords : normalizedKeywords;
+  const normalizedOrgKeywords = Array.isArray(org.__normalized_org_keywords) ? org.__normalized_org_keywords : [];
   const excludeTerms = [
     ...(Array.isArray(org.__normalized_excludes)?org.__normalized_excludes:(Array.isArray(org.__exclude_terms)?org.__exclude_terms:[])),
     'maşın bazarı','avtomobil bazarı','ikinci əl maşın','toy','gəlin','bəy','nişan mərasimi',
     'futbol','idman yarışı','affa','region liqası','futbol liqası','futbol oyunu','konsert','şou','serial','film treyleri','restoran','otel',
     'it','pişik','heyvan bazarı','daşınmaz əmlak','ev satılır','kirayə ev','iş elanları',
-    'yanğın','yol qəzası','avtomobil qəzası','kriminal','oğurluq','hava proqnozu',
+    'yol qəzası','avtomobil qəzası','oğurluq','hava proqnozu',
     'balıq ovu','qadağan olunmuş balıqçılıq','brakonyerlik'
   ].map(normalizeForMatch).filter(Boolean);
 
@@ -2421,11 +2393,19 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     if(!term || term.length < 6) return false;
     return contains(normalized,term);
   }).slice(0,12);
+  const safeGlobalTopicTerm=(term:string)=>{
+    const words=String(term||'').split(/\s+/).filter(Boolean);
+    if(words.length>=2) return true;
+    return ['suvarma','meliorasiya','subartezian','artezian','drenaj','kollektor','irriqasiya','susuzluq','kanalizasiya'].includes(String(term||''));
+  };
+  const institutionalGlobalTerms = ['regional su meliorasiya xidmeti','rsmx','azerbaycan dovlet su ehtiyatlari agentliyi','adsea','sularin istifadesine ve muhafizesine dovlet nezareti xidmeti','iri seherlerin birlesmis su techizati xidmeti'].map(normalizeForMatch);
+  const globalBankKeywordHits = normalizedGlobalKeywords.filter(term=>term && term.length>=5 && safeGlobalTopicTerm(term) && !institutionalGlobalTerms.includes(term) && contains(normalized,term)).slice(0,12);
+  const organizationBankKeywordHits = normalizedOrgKeywords.filter(term=>term && term.length>=5 && contains(normalized,term)).slice(0,12);
 
   // Təşkilat üçün ayrıca yaradılmış konkret çoxsözlü açar ifadə məqalədə
   // tam keçirsə, həmin ifadənin özü ərazi+mövzu siqnalıdır. Tək ümumi
   // sözlər bu qayda ilə qəbul edilmir.
-  const curatedBankHits = bankKeywordHits.filter(term=>{
+  const curatedBankHits = organizationBankKeywordHits.filter(term=>{
     const words=term.split(/\s+/).filter(Boolean);
     if (words.length < 2 || term.length < 8) return false;
     // Konkret açar fraza yalnız təşkilatın öz ərazisinə bağlıdırsa təkbaşına
@@ -2443,6 +2423,9 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     ? normalizedKeywords.map(term=>flexibleKeywordMatch(normalized,term)).filter(Boolean).slice(0,12)
     : [];
   const flexibleBankHits = flexibleBankMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
+  const flexibleGlobalKeywordHits = webLike
+    ? normalizedGlobalKeywords.filter(term=>safeGlobalTopicTerm(term) && !institutionalGlobalTerms.includes(term)).map(term=>flexibleKeywordMatch(normalized,term)).filter(Boolean).map((hit:any)=>String(hit.term||'')).filter(Boolean).slice(0,12)
+    : [];
 
   // Axtarılmamalı sözlər də Web materiallarında eyni elastik qayda ilə işləyir.
   // Məsələn "maşın bazarı" -> "maşın bazarında", "futbol xəbəri" ->
@@ -2485,9 +2468,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     ? historicalTopicRoots.filter(root=>normalized.includes(root)).slice(0,8)
     : [];
   const coreTopicHit = strongHits.length > 0 || historicalRootHits.length > 0;
+  const globalTopicHit = globalBankKeywordHits.length>0 || flexibleGlobalKeywordHits.length>0;
   const positiveTopic = webLike
-    ? coreTopicHit
-    : (coreTopicHit || scopedKeywordHits.length>0 || bankKeywordHits.length>0 || flexibleBankHits.length>0);
+    ? (coreTopicHit || globalTopicHit)
+    : (coreTopicHit || globalTopicHit || scopedKeywordHits.length>0 || organizationBankKeywordHits.length>0 || flexibleBankHits.length>0);
 
   const exactExclusionHits = excludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
   const exclusionHits = [...new Set([...exactExclusionHits,...flexibleExcludeHits])].slice(0,12);
@@ -2523,6 +2507,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'abseron','baki','gence','sumqayit','mingecevir','sirvan','naftalan',
     'agcabedi','agdam','agdas','agsu','astara','balaken','beyleqan','bilesuvar','celilabad','daskesen',
     'fuzuli','gedebey','goranboy','goycay','goygol','haciqabul','imisli','ismayilli','kurdemir','lerik',
+    'xacmaz','xizi','quba','zaqatala','babek','naxcivan','ordubad','culfa','sahbuz','sederak','serur',
     'masalli','neftcala','oguz','qebele','qax','qazax','qusar','saatli','sabirabad','salyan','samaxi',
     'samkir','siyazan','terter','ucar','yardimli','yevlax','zerdab','susa','lacin','kelbecer','qubadli',
     'zengilan','xocali','xocavend'

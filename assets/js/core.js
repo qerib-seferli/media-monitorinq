@@ -72,7 +72,7 @@ export function avatarText(profile) {
 }
 
 export function currentOrgName(profile) {
-  return profile?.organizations?.short_name || profile?.organizations?.name || 'Media Monitorinq';
+  return profile?.access_scope === 'all' ? 'ADSEA' : (profile?.organizations?.short_name || profile?.organizations?.name || 'Media Monitorinq');
 }
 
 export function registerSW() {

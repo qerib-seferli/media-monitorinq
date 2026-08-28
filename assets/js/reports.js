@@ -1,8 +1,11 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, getCachedProfile, showPageLoader, hidePageLoader, toast } from './core.js';
+import { applyOrganizationScope, setupOrganizationFilter } from './scope.js';
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'reports'); showPageLoader();
 const c=await requireAuth(); if(!c) throw new Error('auth'); renderShell(c.profile,'reports'); hidePageLoader();
+const organizationFilter=document.querySelector('#organization-filter');
+await setupOrganizationFilter(c.profile, organizationFilter);
 const from=document.querySelector('#from'),to=document.querySelector('#to'),period=document.querySelector('#report-period');
 function ymd(d){const x=new Date(d.getTime()-d.getTimezoneOffset()*60000);return x.toISOString().slice(0,10)}
 function setPeriod(v){
@@ -27,7 +30,9 @@ function dedupeRows(data){const seen=new Set();const out=[];for(const x of data)
 async function loadBreakdown(){
   const [a,b]=rangeIso(); const out=[]; const size=1000;
   for(let page=0;page<100;page++){
-    const r=await supabase.from('mentions').select('id,title,source_url,content_hash,source_platform,priority_score,sentiment,published_at,detected_at').gt('relevance_score',0).or(`and(published_at.gte.${a},published_at.lte.${b}),and(published_at.is.null,detected_at.gte.${a},detected_at.lte.${b})`).order('published_at',{ascending:false,nullsFirst:false}).order('detected_at',{ascending:false}).range(page*size,page*size+size-1);
+    let q=supabase.from('mentions').select('id,title,source_url,content_hash,source_platform,priority_score,sentiment,published_at,detected_at,organization_id').gt('relevance_score',0).or(`and(published_at.gte.${a},published_at.lte.${b}),and(published_at.is.null,detected_at.gte.${a},detected_at.lte.${b})`).order('published_at',{ascending:false,nullsFirst:false}).order('detected_at',{ascending:false}).range(page*size,page*size+size-1);
+    q=applyOrganizationScope(q,c.profile,organizationFilter?.value||'');
+    const r=await q;
     if(r.error)throw r.error; const batch=r.data||[];out.push(...batch);if(batch.length<size)break;
   }
   return dedupeRows(out);
@@ -47,4 +52,4 @@ async function load(){
     document.querySelector('#priorities').innerHTML=buckets.map(([k,v])=>`<div class="report-row"><span>${k}</span><strong>${v}</strong></div>`).join('');
   }catch(e){toast(e,'error')}finally{hidePageLoader()}
 }
-period.onchange=()=>{setPeriod(period.value);if(period.value!=='custom')load()};from.onchange=()=>period.value='custom';to.onchange=()=>period.value='custom';document.querySelector('#apply').onclick=load;load();
+if(organizationFilter) organizationFilter.onchange=load;period.onchange=()=>{setPeriod(period.value);if(period.value!=='custom')load()};from.onchange=()=>period.value='custom';to.onchange=()=>period.value='custom';document.querySelector('#apply').onclick=load;load();
