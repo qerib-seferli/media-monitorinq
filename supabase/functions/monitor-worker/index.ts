@@ -65,15 +65,22 @@ Deno.serve(async (req) => {
 
     currentStage = 'organizations';
     let orgQuery:any = admin.from('organizations')
-      .select('id,name,short_name,district_id,districts(name),show_district_wide,organization_type')
-      .in('service_status',['active','grace']);
-    if (callerOrganizationId) orgQuery = orgQuery.eq('id', callerOrganizationId);
+      .select('id,name,short_name,district_id,districts(name),show_district_wide,organization_type,service_status');
+    // organization_id ilə çağırılan ingest/enrich əməliyyatları arxiv statuslu təşkilatlarda da
+    // işləməlidir. Qlobal plan/rotasiya isə bütün reyestri görə bilir; adi lokal monitor
+    // əvvəlki kimi yalnız aktiv/grace təşkilatları götürür.
+    const requestedOrganizationId = callerOrganizationId || options.organization_id;
+    if (requestedOrganizationId) orgQuery = orgQuery.eq('id', requestedOrganizationId);
+    else if (!options.include_archived) orgQuery = orgQuery.in('service_status',['active','grace']);
     const orgResult:any = await orgQuery;
     if (!orgResult || orgResult.error) {
       const err = orgResult?.error || new Error('Təşkilat sorğusundan cavab alınmadı');
       return json({ok:false,run_id:runId,stage:currentStage,failures:1,errors:[{stage:currentStage,...errorInfo(err)}],details},200);
     }
-    const orgs = Array.isArray(orgResult.data) ? orgResult.data : [];
+    let orgs = Array.isArray(orgResult.data) ? orgResult.data : [];
+    if (!requestedOrganizationId && options.include_archived) {
+      orgs = rotateOrganizationBatch(orgs, options.organization_shard_count, options.organization_shard_index, options.organization_batch, options.organization_rotation_bucket);
+    }
 
     // sources(*) relation-u yüzlərlə Web mənbəsi olduqda Edge Function yaddaşını şişirdirdi
     // və YouTube mərhələsində WORKER_RESOURCE_LIMIT (HTTP 546) yaradırdı. Mənbələri
@@ -519,7 +526,8 @@ Deno.serve(async (req) => {
             const discovery = await youtubeItems(
               org, keywords, villageNames, key,
               options.youtube_backfill ? null : (existingYoutubeCount ? source?.last_checked_at : null),
-              1
+              1,
+              options.youtube_query_limit
             );
 
             let count = 0;
@@ -614,6 +622,24 @@ Deno.serve(async (req) => {
     },200);
   }
 });
+
+function rotateOrganizationBatch(rows:any[], shardCount=1, shardIndex=0, batch=0, rotationBucket=0):any[] {
+  const list=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>String(a?.short_name||a?.name||'').localeCompare(String(b?.short_name||b?.name||''),'az'));
+  if(!list.length) return list;
+  const sc=Math.max(1,Math.min(20,Number(shardCount||1)));
+  const si=Math.max(0,Math.min(sc-1,Number(shardIndex||0)));
+  const rot=Math.max(0,Math.floor(Number(rotationBucket||0)));
+  const assigned=list.filter((_,index)=>((index+rot)%sc)===si);
+  const limit=Math.max(0,Math.min(20,Number(batch||0)));
+  if(!limit || assigned.length<=limit) return assigned;
+  // Hər rotasiya bucket-i növbəti pəncərəyə keçir. 5 Web shard ilə 3 təşkilat/shard
+  // olduqda təxminən 5 run-da bütün reyestr ən azı bir dəfə işlənir.
+  const window=rot;
+  const start=(window*limit)%assigned.length;
+  const out=[];
+  for(let i=0;i<Math.min(limit,assigned.length);i++) out.push(assigned[(start+i)%assigned.length]);
+  return out;
+}
 
 function timeLeft(stopAt:number) { return Math.max(0, stopAt - Date.now()); }
 function sleep(ms:number) { return new Promise(resolve=>setTimeout(resolve,ms)); }
@@ -1142,7 +1168,8 @@ async function youtubeItems(
   villages:string[],
   key:string,
   lastCheckedAt:string|null,
-  maxPagesPerQuery=1
+  maxPagesPerQuery=1,
+  queryLimit=4
 ):Promise<{items:Item[]; comments:Item[]; queries:string[]}> {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();
@@ -1150,7 +1177,7 @@ async function youtubeItems(
 
   // Hər anlayış ayrıca sorğudur. Bir neçə açar sözü bir uzun cümləyə
   // birləşdirmək YouTube nəticələrini sıfırlayırdı.
-  const queries = buildDiscoveryQueries(org, keywords, villages, 4);
+  const queries = buildDiscoveryQueries(org, keywords, villages, Math.max(1,Math.min(4,queryLimit)));
 
   const lastMs = lastCheckedAt ? new Date(lastCheckedAt).getTime() : 0;
   const overlapMs = 2 * 3600 * 1000;
@@ -2186,6 +2213,12 @@ type RunOptions = {
   news_author:string;
   image_url:string;
   canonical_url:string;
+  include_archived:boolean;
+  organization_shard_count:number;
+  organization_shard_index:number;
+  organization_batch:number;
+  organization_rotation_bucket:number;
+  youtube_query_limit:number;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -2212,7 +2245,13 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   news_published_at:null,
   news_author:'',
   image_url:'',
-  canonical_url:''
+  canonical_url:'',
+  include_archived:false,
+  organization_shard_count:1,
+  organization_shard_index:0,
+  organization_batch:0,
+  organization_rotation_bucket:0,
+  youtube_query_limit:4
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -2255,7 +2294,13 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       news_published_at:body?.published_at ? String(body.published_at) : null,
       news_author:String(body?.author || '').slice(0,500),
       image_url:String(body?.image_url || '').slice(0,2000),
-      canonical_url:String(body?.canonical_url || '').slice(0,2000)
+      canonical_url:String(body?.canonical_url || '').slice(0,2000),
+      include_archived:body?.include_archived === true,
+      organization_shard_count:Math.max(1,Math.min(20,Number(body?.organization_shard_count || 1))),
+      organization_shard_index:Math.max(0,Math.min(19,Number(body?.organization_shard_index || 0))),
+      organization_batch:Math.max(0,Math.min(20,Number(body?.organization_batch || 0))),
+      organization_rotation_bucket:Math.max(0,Number(body?.organization_rotation_bucket || 0)),
+      youtube_query_limit:Math.max(1,Math.min(4,Number(body?.youtube_query_limit || 4)))
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};

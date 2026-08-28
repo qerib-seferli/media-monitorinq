@@ -11,7 +11,9 @@ export async function setupOrganizationFilter(profile, select){
   }
   const {data,error}=await supabase.from('organizations').select('id,short_name,name,service_status').order('short_name');
   if(error) throw error;
-  const items=(data||[]).filter(x=>x.service_status!=='archived');
+  // Nazirlik / mərkəzi istifadəçi bütün reyestri görməlidir. Arxiv statusu yalnız
+  // monitorinq işinin prioritetidir; filtrdən təşkilatı gizlətməməlidir.
+  const items=(data||[]);
   select.innerHTML='<option value="">Bütün təşkilatlar</option>'+items.map(o=>`<option value="${o.id}">${escapeHtml(o.short_name||o.name||'Təşkilat')}</option>`).join('');
   select.classList.remove('hidden');
   return select;
