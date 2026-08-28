@@ -149,11 +149,11 @@ jobs:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
           if [ -z "$MONITOR_SECRET" ]; then
-            echo "MONITOR_SECRET təyin edilməyib; 2024–2026 prioritet Web backfill buraxılır."
+            echo "MONITOR_SECRET təyin edilməyib; 2020–cari il prioritet Web backfill buraxılır."
             exit 0
           fi
 
-      - name: Recent priority Web backfill 2024-2026
+      - name: Recent priority Web backfill 2020-current
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
@@ -161,8 +161,7 @@ jobs:
           NEWS_DEEP_BACKFILL: '1'
           NEWS_RECENT_PRIORITY: '1'
           NEWS_REFILTER_EXISTING: '0'
-          NEWS_ARCHIVE_YEAR_START: '2024'
-          NEWS_ARCHIVE_YEAR_END: '2026'
+          NEWS_ARCHIVE_YEAR_START: '2020'
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_SOURCE_BATCH: '40'
@@ -202,7 +201,7 @@ jobs:
             exit 0
           fi
 
-      - name: Sitemap archive crawler 2024-2026
+      - name: Sitemap archive crawler 2020-current
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
@@ -211,8 +210,7 @@ jobs:
           NEWS_RECENT_PRIORITY: '1'
           NEWS_SITEMAP_FOCUS: '1'
           NEWS_REFILTER_EXISTING: '0'
-          NEWS_ARCHIVE_YEAR_START: '2024'
-          NEWS_ARCHIVE_YEAR_END: '2026'
+          NEWS_ARCHIVE_YEAR_START: '2020'
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_SOURCE_BATCH: '40'
@@ -252,7 +250,7 @@ jobs:
             exit 0
           fi
 
-      - name: Deep historical Web backfill 2000-2023
+      - name: Deep historical Web backfill 2000-2019
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
@@ -261,7 +259,7 @@ jobs:
           NEWS_RECENT_PRIORITY: '0'
           NEWS_REFILTER_EXISTING: '0'
           NEWS_ARCHIVE_YEAR_START: '2000'
-          NEWS_ARCHIVE_YEAR_END: '2023'
+          NEWS_ARCHIVE_YEAR_END: '2019'
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_SOURCE_BATCH: '40'
