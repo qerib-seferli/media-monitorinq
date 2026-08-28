@@ -91,7 +91,7 @@ jobs:
     timeout-minutes: 8
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         shard: [0, 1, 2, 3, 4]
     concurrency:
@@ -134,7 +134,7 @@ jobs:
     timeout-minutes: 24
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         shard: [0, 1, 2, 3, 4]
     concurrency:
@@ -183,7 +183,7 @@ jobs:
     timeout-minutes: 26
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         shard: [0, 1, 2, 3, 4]
     concurrency:
@@ -233,7 +233,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         shard: [0, 1, 2, 3, 4]
     concurrency:
