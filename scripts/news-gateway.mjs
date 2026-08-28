@@ -106,10 +106,13 @@ async function callMonitor(body, timeoutMs = 35000, retries = 2) {
     } catch (e) {
       lastError = e;
       const status = Number(e?.status || 0);
-      const retryable = status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || e?.name === 'AbortError';
+      const retryable = status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 546 || e?.name === 'AbortError';
       if (!retryable || attempt >= retries) throw e;
       const retryAfterMs = Number(e?.retryAfter || 0) * 1000;
-      const delay = Math.max(retryAfterMs, 1800 * (attempt + 1));
+      // Supabase 546 / WORKER_RESOURCE_LIMIT qısa müddətli compute sıxlığıdır.
+      // Dərhal job-u qırmızı etməzdən əvvəl bir az daha uzun fasilə verib eyni kiçik paketi təkrar yoxlayırıq.
+      const resourceDelay = status === 546 ? 5000 * (attempt + 1) : 0;
+      const delay = Math.max(retryAfterMs, resourceDelay, 1800 * (attempt + 1));
       console.log(`monitor-worker müvəqqəti xəta (${status || e?.name || 'network'}), təkrar cəhd ${attempt+2}/${retries+1}...`);
       await sleep(Math.min(delay, 6500));
     } finally {

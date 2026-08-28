@@ -1594,6 +1594,21 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
   return {checked,filtered_out:filteredOut};
 }
 
+function similarLongWebText(a:string,b:string):boolean{
+  const normalizeTokens=(value:string)=>{
+    const normalized=normalizeForMatch(value||'');
+    if(normalized.length<180)return [] as string[];
+    return normalized.split(/\s+/).filter(token=>token.length>=4).slice(0,500);
+  };
+  const aTokens=normalizeTokens(a), bTokens=normalizeTokens(b);
+  if(aTokens.length<24 || bTokens.length<24)return false;
+  const aSet=new Set(aTokens), bSet=new Set(bTokens);
+  let overlap=0;
+  for(const token of aSet)if(bSet.has(token))overlap++;
+  const containment=overlap/Math.max(1,Math.min(aSet.size,bSet.size));
+  return containment>=0.82;
+}
+
 async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],villages:string[],limit=300){
   // Web arxivi YouTube kimi yığılan tarixçədir: uyğun material bir dəfə təsdiqlənibsə
   // sonrakı run-larda açar söz bankının dəyişməsi onu monitorinqdən çıxarmır.
@@ -1606,12 +1621,19 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
     .order('published_at',{ascending:false,nullsFirst:false})
     .limit(Math.max(1,limit));
   if(result?.error)throw result.error;
-  let checked=0,filteredOut=0,restored=0,preserved=0,confirmed=0;
+  let checked=0,filteredOut=0,restored=0,preserved=0,confirmed=0,duplicatesFiltered=0;
   const samples:any[]=[];
-  for(const row of result?.data||[]){
+  // Eyni başlıq + demək olar eyni uzun mətn müxtəlif URL/tarixlə yenidən indekslənəndə
+  // yalnız ən köhnə arxiv qeydi görünür. Qeyd silinmir; sonrakı kopyanın relevance_score-u 0 olur.
+  const rows=[...(result?.data||[])].sort((a:any,b:any)=>{
+    const at=new Date(a?.published_at||a?.detected_at||0).getTime()||0;
+    const bt=new Date(b?.published_at||b?.detected_at||0).getTime()||0;
+    return at-bt;
+  });
+  const acceptedByTitle=new Map<string,{id:string,text:string}>();
+  for(const row of rows){
     const raw=row?.raw_payload||{};
     const alreadyAccepted=raw?.monitor_acceptance?.accepted===true;
-    if(alreadyAccepted && Number(row?.relevance_score||0)>0){preserved++;continue;}
     const item:Item={
       title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',
       published_at:row?.published_at||null,author:row?.author_name||null,
@@ -1621,9 +1643,22 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
     checked++;
     if(match.accepted){
       const currentScore=Number(row?.relevance_score||0);
+      const titleKey=normalizeForMatch(row?.title||'');
+      const previous=titleKey.length>=18?acceptedByTitle.get(titleKey):undefined;
+      if(previous && similarLongWebText(previous.text,row?.original_text||'')){
+        if(currentScore>0){
+          const update:any=await admin.from('mentions').update({
+            relevance_score:0,
+            raw_payload:{...raw,monitor_filter:{filtered_at:new Date().toISOString(),reason:'dublikat-xəbər',duplicate_of:previous.id}}
+          }).eq('id',row.id);
+          if(!update?.error){filteredOut++;duplicatesFiltered++;if(samples.length<8)samples.push({title:row?.title||'',reason:'dublikat-xəbər'});}
+        }
+        continue;
+      }
+      if(titleKey.length>=18)acceptedByTitle.set(titleKey,{id:String(row.id),text:String(row?.original_text||'')});
       const patch:any={raw_payload:{...raw,monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches}}};
       if(currentScore<=0){patch.relevance_score=Math.min(100,Math.max(50,40+Math.min(4,(match.matches||[]).length)*10));restored++;}
-      else confirmed++;
+      else { confirmed++; if(alreadyAccepted) preserved++; }
       const update:any=await admin.from('mentions').update(patch).eq('id',row.id);
       if(update?.error && samples.length<8)samples.push({title:row?.title||'',reason:'bərpa/təsdiq xətası'});
       continue;
@@ -1636,7 +1671,7 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
       if(!update?.error){filteredOut++;if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});}
     }
   }
-  return {checked,filtered_out:filteredOut,restored,preserved,confirmed,samples};
+  return {checked,filtered_out:filteredOut,restored,preserved,confirmed,duplicates_filtered:duplicatesFiltered,samples};
 }
 
 async function storedYoutubeCommentItems(
@@ -2285,9 +2320,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const excludeTerms = [
     ...(Array.isArray(org.__normalized_excludes)?org.__normalized_excludes:(Array.isArray(org.__exclude_terms)?org.__exclude_terms:[])),
     'maşın bazarı','avtomobil bazarı','ikinci əl maşın','toy','gəlin','bəy','nişan mərasimi',
-    'futbol','idman yarışı','konsert','şou','serial','film treyleri','restoran','otel',
+    'futbol','idman yarışı','affa','region liqası','futbol liqası','futbol oyunu','konsert','şou','serial','film treyleri','restoran','otel',
     'it','pişik','heyvan bazarı','daşınmaz əmlak','ev satılır','kirayə ev','iş elanları',
-    'yanğın','yol qəzası','avtomobil qəzası','kriminal','oğurluq','hava proqnozu'
+    'yanğın','yol qəzası','avtomobil qəzası','kriminal','oğurluq','hava proqnozu',
+    'balıq ovu','qadağan olunmuş balıqçılıq','brakonyerlik'
   ].map(normalizeForMatch).filter(Boolean);
 
   const district = normalizeForMatch(String(org.districts?.name || ''));
@@ -2313,9 +2349,9 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const strongTopics = [
     'suvarma','suvarma suyu','suvarma sistemi','suvarma kanali','suvarma arxi',
     'meliorasiya','su teserrufati','subartezian','subartezan','artezian','artezan',
-    'kollektor drenaj','drenaj','hidrotexniki','nasos stansiyasi','su quyusu',
+    'kollektor drenaj','drenaj','hidrotexniki','nasos stansiyasi','su quyusu temiri','su quyusu qazil',
     'su catismamazligi','susuzluq','susuz qalib','su verilmir','su gelmir','su yoxdur',
-    'icmeli su','su tapmir','su teminati','su verilisi','su itkisi','ekin sahesi',
+    'icmeli su','su tapmir','su teminati','su verilisi','su itkisi',
     'fermer su','lilden temizlen','soranlasma','su xetti','boru xetti','su kemeri',
     'su qezasi','qeza berpa','su sebekesi','kanalizasiya','tullanti su','yagis suyu',
     'su saygaci','suolcen','hidrometrik','hidropost','su anbari','su menbeyi','sukanal','su kanal',
@@ -2398,7 +2434,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // Fast-watch davranışını dəyişmədən yalnız historical_backfill namizədlərində
   // mövzu köklərini də siqnal kimi qəbul edirik.
   const historicalBackfill = webLike && raw?.historical_backfill === true;
-  const historicalTopicRoots = ['suvar','melior','subartez','artez','drenaj','kollektor','nasos','quyu','irriqas','hidrotex','su teminat','icmeli su','ekin sah','fermer'];
+  const historicalTopicRoots = ['suvar','melior','subartez','artez','drenaj','kollektor','nasos','quyu temir','quyu qaz','irriqas','hidrotex','su teminat','icmeli su'];
   const historicalRootHits = historicalBackfill
     ? historicalTopicRoots.filter(root=>normalized.includes(root)).slice(0,8)
     : [];
@@ -2413,7 +2449,15 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // Web üçün axtarılmamalı filtr sərt veto-dur: müsbət açar söz və ya rayon adı
   // tapılsa belə, aktiv exclude qaydasına düşən material istifadəçiyə göstərilmir.
   // YouTube/rəy axınının hazırkı davranışını dəyişməmək üçün sərt veto yalnız Web-dədir.
-  const excludedByRule = webLike && exclusionHits.length > 0;
+  // Quyu ilə bağlı bədbəxt hadisə / ölüm xəbərləri su infrastrukturu monitorinqi deyil.
+  // Əvvəllər təkcə "su quyusu" ifadəsi güclü mövzu sayıldığı üçün belə materiallar
+  // Bərdə adı ilə birlikdə səhvən qəbul oluna bilirdi. İnfrastruktur işi ayrıca görünürsə veto tətbiq etmirik.
+  const wellIncidentContext = /(?:usaq|korpə|körpə|şəxs|kisi|qadin|meyit|olub|oldu|helak|bogul|dusub|dusdu|duserek)/.test(normalized)
+    && /quyu/.test(normalized);
+  const wellInfrastructureContext = /(?:subartez|artez|suvar|melior|nasos|temir|berpa|qazil|istismar|su teminat|su xetti)/.test(normalized);
+  const nonInfrastructureWellIncident = webLike && wellIncidentContext && !wellInfrastructureContext;
+
+  const excludedByRule = webLike && (exclusionHits.length > 0 || nonInfrastructureWellIncident);
   const negativeOnly = !webLike && exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
 
   const foreignDistricts = [
@@ -2484,7 +2528,8 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
         :(districtHit&&positiveTopic)?'rayon-mövzu-uyğunluğu'
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
         :'mövzu-uyğunluğu')
-      : (excludedByRule?'axtarılmamalı-mövzu-elastik-filtr'
+      : (nonInfrastructureWellIncident?'quyu-hadisəsi-infrastruktur-deyil'
+        :excludedByRule?'axtarılmamalı-mövzu-elastik-filtr'
         :negativeOnly?'axtarılmamalı-mövzu'
         :foreignHit?'başqa-rayon-məlumatıdır'
         :locationHit?'ərazi-var-mövzu-yoxdur'
