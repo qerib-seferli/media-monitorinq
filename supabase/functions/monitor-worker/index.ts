@@ -145,7 +145,7 @@ Deno.serve(async (req) => {
       if (!options.source_url) return json({ok:false,run_id:runId,mode:'news_enrich',error:'source_url tələb olunur'},200);
       try {
         const current:any = await admin.from('mentions')
-          .select('id,raw_payload')
+          .select('id,title,original_text,published_at,raw_payload,relevance_score')
           .eq('organization_id',org.id)
           .eq('source_url',options.source_url)
           .order('published_at',{ascending:false,nullsFirst:false})
@@ -153,18 +153,49 @@ Deno.serve(async (req) => {
           .maybeSingle();
         if (current?.error) throw current.error;
         if (!current?.data?.id) return json({ok:true,run_id:runId,mode:'news_enrich',updated:false,skipped:'mention-not-found'},200);
+
+        // Axtarış nəticəsi doğru xəbərə işarə etsə də bəzi saytlar köhnə URL-ni ana səhifəyə,
+        // başqa xəbərə və ya “Yay Fest 2026” kimi tam əlaqəsiz məzmuna yönləndirir. Belə səhifə
+        // mövcud düzgün başlıq/tarix/snippet-i korlamamalıdır. Enrichment yalnız eyni hekayə
+        // olduğunu başlıq tokenləri və tarix sapması ilə təsdiqlədikdə əsas metadata-nı dəyişir.
+        const titleKey=(value:any)=>normalizeForMatch(String(value||''));
+        const titleTokens=(value:any)=>new Set(titleKey(value).split(/\s+/).filter((x:string)=>x.length>=4 && !['berde','rayonu','rayonunda','haqqinda','ucun','olan'].includes(x)));
+        const oldTokens=titleTokens(current.data.title);
+        const newTokens=titleTokens(options.news_title);
+        let shared=0; for (const t of newTokens) if(oldTokens.has(t)) shared++;
+        const titleConsistent=!options.news_title || oldTokens.size===0 || newTokens.size===0 || shared>=Math.min(2,Math.max(1,Math.min(oldTokens.size,newTokens.size)));
+        const oldYear=current.data.published_at ? new Date(current.data.published_at).getUTCFullYear() : 0;
+        const newYear=options.news_published_at ? new Date(options.news_published_at).getUTCFullYear() : 0;
+        const dateConsistent=!oldYear || !newYear || Math.abs(oldYear-newYear)<=1;
+
+        let contentRelevant=true;
+        if (options.news_text || options.news_title) {
+          const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
+          const positiveKeywords = activeKeywordRows.filter((k:any)=>String(k?.kind||'').toLowerCase()!=='exclude').map((k:any)=>String(k?.value||'').trim()).filter(Boolean);
+          org.__exclude_terms = activeKeywordRows.filter((k:any)=>String(k?.kind||'').toLowerCase()==='exclude').map((k:any)=>String(k?.value||'').trim()).filter(Boolean);
+          org.__normalized_keywords=[...new Set(positiveKeywords.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+          org.__normalized_excludes=[...new Set(org.__exclude_terms.map((k:string)=>normalizeForMatch(k)).filter(Boolean))];
+          let villageNames:string[]=[];
+          if(org.district_id){
+            const vr:any=await admin.from('villages').select('name').eq('district_id',org.district_id).order('name');
+            if(!vr?.error) villageNames=(Array.isArray(vr?.data)?vr.data:[]).map((x:any)=>String(x?.name||'').trim()).filter(Boolean);
+          }
+          const candidate:Item={title:options.news_title||current.data.title||'',text:options.news_text||'',url:options.canonical_url||options.source_url,published_at:options.news_published_at||current.data.published_at||null,raw:{kind:'web_enrich',provider:'web'}};
+          contentRelevant=evaluateMatch(org,candidate,positiveKeywords.map((x:string)=>x.toLocaleLowerCase('az-AZ')),villageNames).accepted;
+        }
+        const safeMetadata = titleConsistent && dateConsistent && contentRelevant;
         const patch:any = {last_seen_at:new Date().toISOString(),last_verified_at:new Date().toISOString(),source_status:'active'};
-        if (options.news_title) patch.title=options.news_title;
-        if (options.news_text) {
+        if (safeMetadata && options.news_title) patch.title=options.news_title;
+        if (safeMetadata && options.news_text) {
           patch.original_text=options.news_text;
           patch.summary=clean(options.news_text).slice(0,700);
         }
-        if (options.news_published_at) patch.published_at=options.news_published_at;
-        if (options.news_author) patch.author_name=options.news_author;
-        patch.raw_payload={...(current.data.raw_payload||{}),enriched:true,canonical_url:options.canonical_url||options.source_url,image_url:options.image_url||undefined};
+        if (safeMetadata && options.news_published_at) patch.published_at=options.news_published_at;
+        if (safeMetadata && options.news_author) patch.author_name=options.news_author;
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,canonical_url:options.canonical_url||options.source_url,image_url:options.image_url||undefined,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
         const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
         if (updated?.error) throw updated.error;
-        return json({ok:true,run_id:runId,mode:'news_enrich',updated:true,mention_id:current.data.id},200);
+        return json({ok:true,run_id:runId,mode:'news_enrich',updated:true,metadata_updated:safeMetadata,mention_id:current.data.id},200);
       } catch(e) {
         return json({ok:false,run_id:runId,mode:'news_enrich',updated:false,error:errorInfo(e).message},200);
       }
@@ -965,6 +996,17 @@ function buildGoogleNewsGatewayQueries(org:any):string[] {
     candidates.push(`"${fullName}"`);
     const currentName = fullName.replace(/Suvarma Sistemlərinin/gi,'Su Meliorasiya Sistemlərinin');
     if (normalizeForMatch(currentName) !== normalizeForMatch(fullName)) candidates.push(`"${currentName}"`);
+  }
+
+  // Tarixi rəsmi adlar ayrıca discovery sorğusu kimi saxlanılır. Bərdə üzrə çoxlu
+  // 2010–2023 xəbərləri indiki SMSİİ adı ilə deyil, köhnə “Suvarma Sistemləri İdarəsi”
+  // və “Subartezian Quyularının İstismarı İdarəsi” adları ilə indekslənib. Bu yalnız
+  // axtarışı genişləndirir; qəbul filtri yenə rayon + real su/meliorasiya mövzusunu tələb edir.
+  if (district) {
+    candidates.push(`"${district} Suvarma Sistemləri İdarəsi"`);
+    candidates.push(`"${district} Suvarma Sistemlərinin İstismarı İdarəsi"`);
+    candidates.push(`"${district} Subartezian Quyularının İstismarı İdarəsi"`);
+    candidates.push(`"${district} Su Meliorasiya Sistemlərinin İstismarı İdarəsi"`);
   }
 
   if (district) {
@@ -2312,8 +2354,16 @@ function flexibleExcludeMatch(normalizedText:string, normalizedTerm:string) {
 }
 
 function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] = []) {
+  const raw:any = item.raw || {};
+  const webLike = /google_news|bing_news|bing_web|configured_|gdelt_article|web/i.test(
+    `${String(raw.kind||'')} ${String(raw.provider||'')}`
+  );
   const urlSignal = (()=>{ try { const u=new URL(String(item.url||'')); return decodeURIComponent(`${u.pathname} ${u.search}`); } catch { return String(item.url||''); } })();
-  const normalized = normalizeForMatch(`${item.title || ''} ${item.text || ''} ${urlSignal}`);
+  // Web səhifələrinin footer/“oxşar xəbərlər” blokunda Bərdə sözü keçə bilər. Bütün 40K
+  // səhifə mətnini uyğunluğa qatmaq əlaqəsiz materialları qəbul edirdi. Web üçün başlıq,
+  // URL və məqalənin ilk əsas hissəsi qiymətləndirilir; YouTube/rəy davranışı dəyişmir.
+  const matchText = webLike ? String(item.text || '').slice(0,8000) : String(item.text || '');
+  const normalized = normalizeForMatch(`${item.title || ''} ${matchText} ${urlSignal}`);
   const direct = [String(org.name||''),String(org.short_name||'')]
     .map(normalizeForMatch).filter(Boolean);
   const normalizedKeywords = Array.isArray(org.__normalized_keywords) ? org.__normalized_keywords : keywords.map(normalizeForMatch).filter(Boolean);
@@ -2387,10 +2437,6 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     return locationHit;
   });
 
-  const raw:any = item.raw || {};
-  const webLike = /google_news|bing_news|bing_web|configured_|gdelt_article|web/i.test(
-    `${String(raw.kind||'')} ${String(raw.provider||'')}`
-  );
   // Web xəbərlərində açar söz bankını yalnız tam fraza ilə deyil, söz köklərinin
   // elastik üst-üstə düşməsi ilə də yoxlayırıq. YouTube/rəy məntiqinə toxunmuruq.
   const flexibleBankMatches = webLike
@@ -2457,7 +2503,20 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const wellInfrastructureContext = /(?:subartez|artez|suvar|melior|nasos|temir|berpa|qazil|istismar|su teminat|su xetti)/.test(normalized);
   const nonInfrastructureWellIncident = webLike && wellIncidentContext && !wellInfrastructureContext;
 
-  const excludedByRule = webLike && (exclusionHits.length > 0 || nonInfrastructureWellIncident);
+  // “suvarma kanalı” sözü insan ölümü/itkin/kriminal hadisə xəbərində keçəndə bu,
+  // suvarma infrastrukturunun fəaliyyəti barədə material deyil. Təmir, tikinti, qəza-bərpa
+  // kimi real infrastruktur işi ayrıca görünürsə həmin material qorunur.
+  const humanIncidentContext = /(?:cesed|meyit|itkin|bogul|helak|vefat|oldur|intihar|tapilib|tapildi|usaq|qiz|oglan|kisi|qadin|sexs)/.test(normalized)
+    && /(?:suvarma kanali|kanal|arx|su quyusu|quyu)/.test(normalized);
+  const infrastructureWorkContext = /(?:temir|berpa|qurul|tikil|qazil|temizlen|lilden|istismar|nasos|su teminat|suvarma movsum|layihe|yenidenqurma|boru xetti|qezanin aradan qaldiril)/.test(normalized);
+  const nonInfrastructureHumanIncident = webLike && humanIncidentContext && !infrastructureWorkContext;
+
+  // “balıq ovu / balıq ovunda / ov alətləri” şəkilçi fərqlərinə görə əvvəlki exact
+  // exclude-dan qaça bilirdi. Balıqçılıq xəbəri yalnız ayrıca su təsərrüfatı işi yoxdursa bloklanır.
+  const fishingContext = webLike && /baliq/.test(normalized) && /(?:ov|brakonyer|tor|qadagan olunmus alet)/.test(normalized)
+    && !/(?:suvarma|meliorasiya|subartez|artez|drenaj|kollektor|nasos stansiyasi|su teminati)/.test(normalized);
+
+  const excludedByRule = webLike && (exclusionHits.length > 0 || nonInfrastructureWellIncident || nonInfrastructureHumanIncident || fishingContext);
   const negativeOnly = !webLike && exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
 
   const foreignDistricts = [
@@ -2529,6 +2588,8 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
         :(villageHits.length&&positiveTopic)?'kənd-mövzu-uyğunluğu'
         :'mövzu-uyğunluğu')
       : (nonInfrastructureWellIncident?'quyu-hadisəsi-infrastruktur-deyil'
+        :nonInfrastructureHumanIncident?'kanal-quyu-insan-hadisəsi-infrastruktur-deyil'
+        :fishingContext?'balıqçılıq-mövzusu-infrastruktur-deyil'
         :excludedByRule?'axtarılmamalı-mövzu-elastik-filtr'
         :negativeOnly?'axtarılmamalı-mövzu'
         :foreignHit?'başqa-rayon-məlumatıdır'
