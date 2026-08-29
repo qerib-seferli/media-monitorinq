@@ -1089,3 +1089,171 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .main{padding-bottom:calc(104px + env(safe-area-inset-bottom))!important}
   input[type="date"]{min-width:0!important;width:100%!important;font-size:11px!important}
 }
+
+/* =========================================================
+   V26 — vahid ölçülü idarələr, mobil boşluq düzəlişləri,
+   admin təsdiq kartları və uyğunluq yoxlaması — 2026-08-29
+   ========================================================= */
+.scope-filter-pending{visibility:hidden!important}
+.scope-filter-local{opacity:1!important;color:var(--text)!important;cursor:default}
+.scope-filter-local:disabled{background:#0c1b2c!important;color:var(--text)!important;-webkit-text-fill-color:var(--text)!important}
+
+.app-confirm{width:min(520px,100%);padding:20px}
+.app-confirm-message{margin:0 0 16px;color:#b9c8d8;line-height:1.6;font-size:13px;white-space:pre-wrap}
+.app-confirm-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.app-confirm-actions .btn{width:100%}
+
+.relevance-review-card{overflow:hidden}
+.relevance-review-list{display:grid;gap:9px}
+.relevance-review-item{border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.018);overflow:hidden}
+.relevance-review-item>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px}
+.relevance-review-item>summary::-webkit-details-marker{display:none}
+.relevance-review-item[open]>summary{border-bottom:1px solid var(--line)}
+.review-title{min-width:0}
+.review-title strong{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.review-title small{display:block;color:var(--muted);font-size:10px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.review-chevron{color:var(--gold);font-size:16px}
+.relevance-review-item[open] .review-chevron{transform:rotate(180deg)}
+.review-body{padding:12px 14px 14px}
+.review-body>p{margin:0 0 12px;color:#aebed0;font-size:12px;line-height:1.6;white-space:pre-wrap}
+.review-action-row{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:10px;align-items:end}
+.review-action-row .btn{height:42px}
+
+/* Masaüstündə bütün istifadəçi idarələri bir sistemlə ölçülür. */
+@media (min-width:1051px){
+  .dashboard-head{grid-template-columns:minmax(280px,1fr) minmax(540px,660px)!important;align-items:end!important}
+  .dashboard-head .page-actions{
+    display:grid!important;
+    grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    gap:8px!important;width:100%!important;max-width:660px!important;justify-self:end!important;
+  }
+  .dashboard-head .page-actions>*{width:100%!important;min-width:0!important;height:42px!important}
+
+  .monitor-head{display:grid!important;grid-template-columns:minmax(280px,1fr) minmax(600px,720px)!important;align-items:end!important;gap:22px!important}
+  .monitor-head>.monitor-filters{
+    display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    grid-template-areas:"period from to" "platform sentiment organization"!important;
+    gap:8px!important;width:100%!important;max-width:720px!important;justify-self:end!important;
+  }
+  .monitor-filters #period{grid-area:period!important}
+  .monitor-filters #date-from{grid-area:from!important}
+  .monitor-filters #date-to{grid-area:to!important}
+  .monitor-filters #platform{grid-area:platform!important}
+  .monitor-filters #sentiment{grid-area:sentiment!important}
+  .monitor-filters #organization-filter{grid-area:organization!important}
+  .monitor-filters>*{width:100%!important;min-width:0!important;height:42px!important}
+
+  .report-head{display:grid!important;grid-template-columns:minmax(280px,1fr) minmax(720px,840px)!important;align-items:end!important;gap:22px!important}
+  .report-toolbar{
+    display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;
+    grid-template-areas:"period from to organization apply"!important;
+    gap:8px!important;width:100%!important;max-width:840px!important;justify-self:end!important;
+  }
+  .report-toolbar #report-period{grid-area:period!important}
+  .report-toolbar #from{grid-area:from!important}
+  .report-toolbar #to{grid-area:to!important}
+  .report-toolbar #organization-filter{grid-area:organization!important}
+  .report-toolbar #apply{grid-area:apply!important}
+  .report-toolbar>*{width:100%!important;min-width:0!important;height:42px!important}
+
+  .dashboard-panels{align-items:stretch!important}
+  .dashboard-panels>.card{height:560px!important;min-height:560px!important;max-height:560px!important;display:flex!important;flex-direction:column!important;overflow:hidden!important}
+  .dashboard-panels #latest,.dashboard-panels #notif-list{flex:1 1 auto;min-height:0!important;overflow:auto!important;scrollbar-gutter:stable;padding-right:4px}
+
+  #position-form{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto!important;align-items:end!important;gap:10px!important}
+  #position-form .form-actions{grid-column:auto!important;margin:0!important}
+  #position-form .btn{height:42px!important}
+  #district-form{grid-template-columns:minmax(0,1fr) auto!important}
+  #village-form{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto!important;align-items:end!important;gap:10px!important}
+  #village-form .form-actions{grid-column:auto!important;margin:0!important}
+}
+
+@media (max-width:1050px){
+  .dashboard-head .page-actions,
+  .monitor-head>.monitor-filters,
+  .report-toolbar{width:100%!important;max-width:none!important}
+}
+
+@media (max-width:700px){
+  .page-head{gap:12px!important}
+  .admin-view .page-head>.btn,.admin-view .page-head>.toolbar{width:100%!important}
+  .admin-view .page-head>.btn{min-height:44px!important}
+
+  .dashboard-head .page-actions{grid-template-columns:1fr 1fr!important}
+  .dashboard-head .page-actions #organization-filter{grid-column:1/-1!important}
+  .dashboard-head .page-actions>*{height:44px!important}
+
+  .monitor-head>.monitor-filters{
+    display:grid!important;grid-template-columns:1fr 1fr!important;
+    grid-template-areas:"period period" "from to" "platform sentiment" "organization organization"!important;
+    gap:8px!important;
+  }
+  .monitor-filters #period{grid-area:period!important}
+  .monitor-filters #date-from{grid-area:from!important}
+  .monitor-filters #date-to{grid-area:to!important}
+  .monitor-filters #platform{grid-area:platform!important}
+  .monitor-filters #sentiment{grid-area:sentiment!important}
+  .monitor-filters #organization-filter{grid-area:organization!important}
+  .monitor-filters>*{height:44px!important;width:100%!important;min-width:0!important;font-size:12px!important}
+  .monitor-filters input[type="date"]{font-size:11px!important;padding-left:8px!important;padding-right:6px!important}
+
+  .report-toolbar{
+    display:grid!important;grid-template-columns:1fr 1fr!important;
+    grid-template-areas:"period apply" "from to" "organization organization"!important;
+    gap:8px!important;
+  }
+  .report-toolbar #report-period{grid-area:period!important}
+  .report-toolbar #apply{grid-area:apply!important}
+  .report-toolbar #from{grid-area:from!important}
+  .report-toolbar #to{grid-area:to!important}
+  .report-toolbar #organization-filter{grid-area:organization!important}
+  .report-toolbar>*{height:44px!important;width:100%!important;min-width:0!important;font-size:12px!important}
+  .report-toolbar input[type="date"]{font-size:11px!important;padding-left:8px!important;padding-right:6px!important}
+
+  .catalog-position-card #position-form{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .catalog-position-card #position-form .form-actions{grid-column:1/-1!important;margin:0!important}
+  .catalog-position-card #position-form .btn{width:100%!important}
+
+  .catalog-location-card #district-form{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(120px,.42fr)!important;gap:8px!important}
+  .catalog-location-card #district-form .form-actions{grid-column:auto!important;margin:0!important;align-self:end!important}
+  .catalog-location-card #district-form .btn{width:100%!important;height:42px!important}
+  .catalog-location-card #village-form{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .catalog-location-card #village-form .form-actions{grid-column:1/-1!important;margin:0!important}
+  .catalog-location-card #village-form .btn{width:100%!important}
+
+  #keyword-form,#exclude-form{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(128px,.46fr)!important;gap:8px!important}
+  #keyword-form .form-actions,#exclude-form .form-actions{grid-column:auto!important;margin:0!important;align-self:end!important}
+  #keyword-form .btn,#exclude-form .btn{width:100%!important;height:42px!important;padding-left:8px!important;padding-right:8px!important}
+
+  .source-inline-form{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .source-inline-form .form-span-2{grid-column:auto!important}
+  .source-inline-form .form-actions{grid-column:1/-1!important;margin:0!important}
+  .source-inline-form .btn{width:100%!important}
+
+  .alias-inline-form{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .alias-inline-form .field:nth-child(2){grid-column:1/-1!important}
+  .alias-inline-form .form-actions{grid-column:1/-1!important;margin:0!important}
+  .alias-inline-form .btn{width:100%!important}
+
+  .review-title strong,.review-title small{white-space:normal;overflow:visible;text-overflow:clip}
+  .review-action-row{grid-template-columns:1fr!important}
+  .review-action-row .btn{width:100%!important}
+  .app-confirm{padding:16px}
+  .app-confirm-actions{grid-template-columns:1fr 1fr}
+
+  .dashboard-panels>.card{height:auto!important;min-height:0!important;max-height:none!important;overflow:visible!important}
+  .dashboard-panels #latest,.dashboard-panels #notif-list{overflow:visible!important;max-height:none!important}
+
+  .record-actions{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:7px!important}
+  .record-actions.two{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .record-actions .btn{width:100%!important;min-width:0!important}
+}
+
+@media (max-width:430px){
+  .dashboard-head .page-actions{grid-template-columns:1fr 1fr!important}
+  .dashboard-head .page-actions #organization-filter{grid-column:1/-1!important}
+  .monitor-filters>*,.report-toolbar>*{font-size:11px!important}
+  #keyword-form,#exclude-form{grid-template-columns:minmax(0,1fr) minmax(116px,.44fr)!important}
+  .catalog-location-card #district-form{grid-template-columns:minmax(0,1fr) 120px!important}
+  .app-confirm-actions{grid-template-columns:1fr!important}
+}

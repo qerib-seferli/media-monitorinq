@@ -48,6 +48,79 @@ export function toast(message, type='info') {
   setTimeout(() => { item.classList.remove('show'); setTimeout(()=>item.remove(),250); }, 3800);
 }
 
+
+function dialogRoot() {
+  let root = document.querySelector('#app-dialog-root');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'app-dialog-root';
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+export function confirmDialog({
+  title='Təsdiq',
+  message='',
+  confirmText='Bəli',
+  cancelText='Xeyr',
+  tone='default'
+}={}) {
+  return new Promise(resolve => {
+    const root = dialogRoot();
+    const danger = tone === 'danger';
+    root.innerHTML = `<div class="modal-backdrop app-confirm-backdrop"><div class="modal app-confirm" role="dialog" aria-modal="true" aria-labelledby="app-confirm-title"><div class="modal-head"><div><span class="eyebrow">Sistem təsdiqi</span><h2 id="app-confirm-title">${escapeHtml(title)}</h2></div><button class="icon-btn" type="button" data-dialog-close aria-label="Bağla">✕</button></div><p class="app-confirm-message">${escapeHtml(message)}</p><div class="modal-actions app-confirm-actions"><button class="btn ${danger ? 'danger' : ''}" type="button" data-dialog-confirm>${escapeHtml(confirmText)}</button><button class="btn ghost" type="button" data-dialog-cancel>${escapeHtml(cancelText)}</button></div></div></div>`;
+    let finished = false;
+    const done = value => {
+      if (finished) return;
+      finished = true;
+      root.innerHTML = '';
+      resolve(Boolean(value));
+    };
+    root.querySelector('[data-dialog-confirm]')?.addEventListener('click',()=>done(true));
+    root.querySelector('[data-dialog-cancel]')?.addEventListener('click',()=>done(false));
+    root.querySelector('[data-dialog-close]')?.addEventListener('click',()=>done(false));
+    root.querySelector('.app-confirm-backdrop')?.addEventListener('click',e=>{ if(e.target===e.currentTarget) done(false); });
+    const keyHandler = e => {
+      if (finished) return document.removeEventListener('keydown',keyHandler);
+      if (e.key === 'Escape') { document.removeEventListener('keydown',keyHandler); done(false); }
+      if (e.key === 'Enter') { document.removeEventListener('keydown',keyHandler); done(true); }
+    };
+    document.addEventListener('keydown',keyHandler);
+    requestAnimationFrame(()=>root.querySelector('[data-dialog-confirm]')?.focus());
+  });
+}
+
+export function promptDialog({
+  title='Məlumat daxil edin',
+  message='',
+  label='Dəyər',
+  value='',
+  placeholder='',
+  confirmText='Yadda saxla',
+  cancelText='Ləğv et',
+  type='text'
+}={}) {
+  return new Promise(resolve => {
+    const root = dialogRoot();
+    root.innerHTML = `<div class="modal-backdrop app-confirm-backdrop"><form class="modal app-confirm" id="app-prompt-form" role="dialog" aria-modal="true" aria-labelledby="app-prompt-title"><div class="modal-head"><div><span class="eyebrow">Sistem əməliyyatı</span><h2 id="app-prompt-title">${escapeHtml(title)}</h2></div><button class="icon-btn" type="button" data-dialog-close aria-label="Bağla">✕</button></div>${message?`<p class="app-confirm-message">${escapeHtml(message)}</p>`:''}<div class="field"><label>${escapeHtml(label)}</label><input class="input" id="app-prompt-input" type="${escapeHtml(type)}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" required></div><div class="modal-actions app-confirm-actions"><button class="btn" type="submit">${escapeHtml(confirmText)}</button><button class="btn ghost" type="button" data-dialog-cancel>${escapeHtml(cancelText)}</button></div></form></div>`;
+    let finished = false;
+    const done = result => {
+      if (finished) return;
+      finished = true;
+      root.innerHTML = '';
+      resolve(result);
+    };
+    const form=root.querySelector('#app-prompt-form');
+    const input=root.querySelector('#app-prompt-input');
+    form?.addEventListener('submit',e=>{ e.preventDefault(); done(input?.value ?? ''); });
+    root.querySelector('[data-dialog-cancel]')?.addEventListener('click',()=>done(null));
+    root.querySelector('[data-dialog-close]')?.addEventListener('click',()=>done(null));
+    root.querySelector('.app-confirm-backdrop')?.addEventListener('click',e=>{ if(e.target===e.currentTarget) done(null); });
+    requestAnimationFrame(()=>{ input?.focus(); input?.select(); });
+  });
+}
+
 export async function getSessionProfile() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { session: null, profile: null, organization: null };

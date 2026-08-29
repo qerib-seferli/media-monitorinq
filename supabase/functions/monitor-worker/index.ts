@@ -460,9 +460,9 @@ Deno.serve(async (req) => {
             if (options.quick_youtube_comments || (!options.force_youtube && last && Date.now() - last < 6 * 3600 * 1000)) {
               const live = await storedYoutubeRecentCommentItems(
                 admin, org, key,
-                options.full_comment_sweep ? 240 : 20,
+                options.full_comment_sweep ? 240 : (options.browser_quick ? 6 : 20),
                 options.full_comment_sweep,
-                Math.min(options.full_comment_sweep ? 30000 : 18000, Math.max(7000,timeLeft(stopAt)-3500)),
+                Math.min(options.full_comment_sweep ? 30000 : (options.browser_quick ? 8000 : 18000), Math.max(options.browser_quick ? 3500 : 7000,timeLeft(stopAt)-3500)),
                 options.focus_video_ids
               );
               let liveInserted = 0;
@@ -2238,6 +2238,7 @@ type RunOptions = {
   verify_existing:boolean;
   youtube_backfill:boolean;
   quick_youtube_comments:boolean;
+  browser_quick:boolean;
   full_comment_sweep:boolean;
   refilter_existing:boolean;
   focus_video_ids:string[];
@@ -2271,6 +2272,7 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   verify_existing:true,
   youtube_backfill:false,
   quick_youtube_comments:false,
+  browser_quick:false,
   full_comment_sweep:false,
   refilter_existing:false,
   focus_video_ids:[],
@@ -2320,6 +2322,7 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       verify_existing:body?.verify_existing !== false,
       youtube_backfill:body?.youtube_backfill === true || body?.force_youtube === true,
       quick_youtube_comments:body?.quick_youtube_comments === true,
+      browser_quick:body?.browser_quick === true,
       full_comment_sweep:body?.full_comment_sweep === true,
       refilter_existing:body?.refilter_existing === true,
       focus_video_ids:[...new Set((Array.isArray(body?.focus_video_ids)?body.focus_video_ids:[]).map((x:any)=>String(x||'').trim()).filter((x:string)=>/^[A-Za-z0-9_-]{11}$/.test(x)))].slice(0,8),

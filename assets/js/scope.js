@@ -40,17 +40,28 @@ export function isCentralScope(profile){
 }
 
 export async function setupOrganizationFilter(profile, select){
-  if(!select || !isCentralScope(profile)){
-    select?.classList.add('hidden');
-    select?.classList.remove('scope-filter-pending');
-    return select || null;
+  if(!select) return null;
+  if(!isCentralScope(profile)){
+    const ownId=profile?.organization_id || '';
+    const ownName=profile?.organizations?.short_name || profile?.organizations?.name || 'Təşkilatım';
+    select.innerHTML=`<option value="${escapeHtml(ownId)}">${escapeHtml(ownName)}</option>`;
+    select.value=ownId;
+    select.disabled=true;
+    select.classList.remove('hidden','scope-filter-pending');
+    select.classList.add('scope-filter-local');
+    select.setAttribute('aria-label','Cari təşkilat');
+    return select;
   }
+  select.disabled=true;
+  select.innerHTML='<option value="">Təşkilatlar yüklənir…</option>';
+  select.classList.remove('hidden','scope-filter-pending','scope-filter-local');
   const {data,error}=await supabase.from('organizations').select('id,short_name,name,service_status').order('short_name');
   if(error) throw error;
   // Nazirlik / mərkəzi istifadəçi bütün reyestri görməlidir. Arxiv statusu yalnız
   // monitorinq işinin prioritetidir; filtrdən təşkilatı gizlətməməlidir.
   const items=(data||[]);
   select.innerHTML='<option value="">Bütün təşkilatlar</option>'+items.map(o=>`<option value="${o.id}">${escapeHtml(o.short_name||o.name||'Təşkilat')}</option>`).join('');
+  select.disabled=false;
   select.classList.remove('hidden','scope-filter-pending');
   return select;
 }

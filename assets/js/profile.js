@@ -1,6 +1,6 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
-import { supabase, toast, avatarText, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
+import { supabase, toast, avatarText, getCachedProfile, showPageLoader, hidePageLoader, confirmDialog } from './core.js';
 import { toggleTheme } from './theme.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'profile'); showPageLoader();
@@ -108,7 +108,7 @@ avatarFile.addEventListener('change', async () => {
 });
 
 removeBtn.addEventListener('click', async () => {
-  if (!confirm('Profil şəkli silinsin?')) return;
+  if (!await confirmDialog({title:'Profil şəkli silinsin?',message:'Profil şəkli hesabdan silinəcək. Bu əməliyyatı davam etdirmək istəyirsiniz?',confirmText:'Bəli, sil',cancelText:'Xeyr',tone:'danger'})) return;
   const path = `${ctx.session.user.id}/avatar.webp`;
   const { error: removeError } = await supabase.storage.from('profile-avatars').remove([path]);
   if (removeError) return toast(removeError,'error');

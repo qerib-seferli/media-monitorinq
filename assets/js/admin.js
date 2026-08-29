@@ -1,7 +1,7 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
-import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
-import { resetGlobalExcludeCache } from './scope.js';
+import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader, confirmDialog, promptDialog } from './core.js';
+import { resetGlobalExcludeCache, loadGlobalExcludes, isMentionExcluded } from './scope.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile?.system_role==='super_admin') renderShell(cachedProfile, location.hash.replace('#','')||'dashboard'); showPageLoader();
 const ctx = await requireAuth({ superAdmin: true });
@@ -95,6 +95,7 @@ async function refresh() {
   renderKeywords();
   renderSources();
   renderAliases();
+  renderRelevanceReview();
   renderAudit();
   fillSelects();
   renderBardaStatus();
@@ -418,6 +419,71 @@ function renderAliases() {
     </details>`).join('') || '<div class="empty compact">Ad variantı yoxdur.</div>';
 }
 
+const REVIEW_NOISE_RULES = [
+  ['marşrut','marşrut'],['avtobus','avtobus'],['nəqliyyat vasitəsi','nəqliyyat vasitəsi'],['metro','metro'],
+  ['futbol','futbol'],['çempionat','çempionat'],['premyer liqa','premyer liqa'],['transfer','transfer'],['basketbol','basketbol'],
+  ['bank','bank'],['kredit','kredit'],['valyuta','valyuta'],['birja','birja'],['sığorta','sığorta'],
+  ['hava proqnozu','hava proqnozu'],['külək','külək'],['yağış yağacaq','yağış yağacaq'],
+  ['qətl','qətl'],['cinayət','cinayət'],['saxlanılıb','saxlanılıb'],['həbs','həbs'],
+  ['universitet','universitet'],['imtahan','imtahan'],['konsert','konsert'],['film','film'],['serial','serial'],
+  ['telefon','telefon'],['smartfon','smartfon'],['avtomobil','avtomobil'],['restoran','restoran'],['toy','toy'],['moda','moda']
+];
+const REVIEW_WATER_RE = /\b(su|sukanal|melior|suvar|kanal|kollektor|drenaj|subartez|artezian|quyu|nasos|hidroqov|bənd|anbar|irriqasiya|içməli|kanalizasiya|tullantı su|su təchizatı)\b/i;
+function reviewFold(v=''){return String(v||'').toLocaleLowerCase('az-AZ').normalize('NFKC').replace(/\s+/g,' ').trim();}
+function suggestedNoiseTerm(row){
+  const hay=reviewFold([row?.title,row?.summary,row?.original_text].filter(Boolean).join(' '));
+  const hit=REVIEW_NOISE_RULES.find(([needle])=>hay.includes(needle));
+  if(hit) return hit[1];
+  const title=reviewFold(row?.title||'').replace(/[^\p{L}\p{N}\s-]/gu,' ');
+  const stop=new Set(['bakıda','baki','rayonu','rayonunda','şəhərində','şəhəri','haqqında','üçün','olan','ilə','və','bir','bu','yeni','edib','edildi','olub','var']);
+  const words=title.split(/\s+/).filter(x=>x.length>=5&&!stop.has(x)&&!REVIEW_WATER_RE.test(x));
+  return words[0] || '';
+}
+async function renderRelevanceReview(){
+  const el=document.querySelector('#relevance-review-list');
+  if(!el) return;
+  el.innerHTML='<div class="empty compact">Uyğunluq namizədləri yoxlanılır…</div>';
+  const excludes=await loadGlobalExcludes();
+  const {data,error}=await supabase.from('mentions')
+    .select('id,title,summary,original_text,source_platform,relevance_score,published_at,detected_at,organizations(short_name)')
+    .gt('relevance_score',0).lte('relevance_score',60)
+    .order('detected_at',{ascending:false}).limit(160);
+  if(error){el.innerHTML=`<div class="empty compact">${escapeHtml(error.message)}</div>`;return;}
+  const rows=(data||[]).filter(row=>{
+    if(isMentionExcluded(row,excludes)) return false;
+    const hay=reviewFold([row.title,row.summary,row.original_text].filter(Boolean).join(' '));
+    return REVIEW_NOISE_RULES.some(([needle])=>hay.includes(needle)) || !REVIEW_WATER_RE.test(hay);
+  }).slice(0,18);
+  if(!rows.length){el.innerHTML='<div class="empty compact">Hazırda ayrıca yoxlanmalı şübhəli material yoxdur.</div>';return;}
+  el.innerHTML=rows.map(row=>{
+    const term=suggestedNoiseTerm(row);
+    const body=row.original_text||row.summary||'Əlavə mətn yoxdur.';
+    return `<details class="relevance-review-item" data-review-id="${row.id}"><summary><span class="review-title"><strong>${escapeHtml(row.title||'Adsız material')}</strong><small>${escapeHtml(row.organizations?.short_name||'Qlobal')} • ${escapeHtml(row.source_platform||'Web')} • ${Number(row.relevance_score||0)}% • ${fmtDate(row.published_at||row.detected_at)}</small></span><span class="review-chevron">⌄</span></summary><div class="review-body"><p>${escapeHtml(body)}</p><div class="review-action-row"><div class="field"><label>Təklif olunan qlobal filtr sözü / frazası</label><input class="input" data-review-term value="${escapeHtml(term)}" placeholder="Məs: marşrut"></div><button class="btn danger" type="button" data-review-block="${row.id}">Gərəksiz kimi blokla</button></div></div></details>`;
+  }).join('');
+  el.querySelectorAll('[data-review-block]').forEach(btn=>btn.addEventListener('click',async()=>{
+    const item=btn.closest('[data-review-id]');
+    const term=item?.querySelector('[data-review-term]')?.value?.trim()||'';
+    if(term.length<3) return toast('Filtr sözü ən az 3 simvol olmalıdır.','error');
+    const ok=await confirmDialog({title:'Gərəksiz material bloklansın?',message:`“${term}” qlobal Axtarılmamalı sözlər bankına əlavə ediləcək və bu material uyğun olmayan qeyd kimi gizlədiləcək.`,confirmText:'Bəli, blokla',cancelText:'Xeyr',tone:'danger'});
+    if(!ok) return;
+    btn.disabled=true;
+    const existing=await supabase.from('keywords').select('id').is('organization_id',null).eq('kind','exclude').ilike('value',term).limit(1).maybeSingle();
+    let insertError=null;
+    if(!existing.data){
+      const res=await supabase.from('keywords').insert({organization_id:null,value:term,kind:'exclude',is_active:true});
+      insertError=res.error;
+    }
+    if(insertError && insertError.code!=='23505'){btn.disabled=false;return toast(insertError.message,'error');}
+    const update=await supabase.from('mentions').update({relevance_score:0}).eq('id',btn.dataset.reviewBlock);
+    btn.disabled=false;
+    if(update.error) return toast(update.error.message,'error');
+    resetGlobalExcludeCache();
+    toast(`“${term}” qlobal filtrə əlavə edildi və material bloklandı.`,'success');
+    await loadKeywordStats(); renderKeywords(); renderRelevanceReview();
+  }));
+}
+
+
 function auditActor(row) {
   const actor = users.find(u => u.id === row.actor_profile_id || u.auth_user_id === row.actor_profile_id);
   const name = actor ? userName(actor) : (row.actor_email || 'Sistem');
@@ -499,7 +565,7 @@ function bindDynamicActions() {
       const mode = btn.dataset.keywordDeleteMode || 'positive';
       const isExclude = mode === 'exclude';
       const question = isExclude ? 'Bu axtarılmamalı sözü filtrdən silmək istəyirsiniz?' : 'Bu monitorinq açar sözünü silmək istəyirsiniz?';
-      if (!confirm(question)) return;
+      if (!await confirmDialog({title:'Silinmə təsdiqi',message:question,confirmText:'Bəli, sil',cancelText:'Xeyr',tone:'danger'})) return;
       btn.disabled = true;
       const { error } = await supabase.from('keywords').delete().eq('id',btn.dataset.keywordDelete);
       btn.disabled = false;
@@ -512,7 +578,7 @@ function bindDynamicActions() {
     if (btn.dataset.bound) return;
     btn.dataset.bound='1';
     btn.addEventListener('click', async ()=>{
-      if (!confirm('Bu izlənilən mənbəni silmək istəyirsiniz?')) return;
+      if (!await confirmDialog({title:'Mənbə silinsin?',message:'Bu izlənilən mənbə qlobal mənbə hovuzundan silinəcək.',confirmText:'Bəli, sil',cancelText:'Xeyr',tone:'danger'})) return;
       btn.disabled = true;
       const { error } = await supabase.from('sources').delete().eq('id',btn.dataset.sourceDelete);
       btn.disabled = false;
@@ -525,7 +591,7 @@ function bindDynamicActions() {
     if (btn.dataset.bound) return;
     btn.dataset.bound='1';
     btn.addEventListener('click', async ()=>{
-      if (!confirm('Bu təşkilat ad variantını silmək istəyirsiniz?')) return;
+      if (!await confirmDialog({title:'Ad variantı silinsin?',message:'Seçilmiş təşkilat ad variantı reyestrdən silinəcək.',confirmText:'Bəli, sil',cancelText:'Xeyr',tone:'danger'})) return;
       btn.disabled = true;
       const { error } = await supabase.from('organization_aliases').delete().eq('id',btn.dataset.aliasDelete);
       btn.disabled = false;
@@ -550,7 +616,7 @@ async function toggleOrg(id) {
   const msg = next === 'suspended'
     ? `${org.short_name} üzrə xidmət dayandırılsın? ${affected} aktiv istifadəçi təşkilat açılana qədər sistemə daxil ola bilməyəcək. Məlumatlar silinməyəcək.`
     : `${org.short_name} üzrə xidmət aktivləşdirilsin? Təşkilatın aktiv istifadəçiləri yenidən sistemə daxil ola biləcək.`;
-  if (!confirm(msg)) return;
+  if (!await confirmDialog({title:next==='suspended'?'Xidmət dayandırılsın?':'Xidmət aktivləşdirilsin?',message:msg,confirmText:next==='suspended'?'Bəli, dayandır':'Bəli, aktivləşdir',cancelText:'Xeyr',tone:next==='suspended'?'danger':'default'})) return;
   const { error } = await supabase.from('organizations').update({ service_status: next }).eq('id', id);
   toast(error ? error.message : `Təşkilat ${next === 'active' ? 'aktivləşdirildi' : 'dayandırıldı'}`, error ? 'error' : 'success');
   if (!error) await refresh();
@@ -559,7 +625,7 @@ async function toggleOrg(id) {
 async function toggleUser(id, active) {
   const target = users.find(x => x.id === id);
   if (!target) return;
-  if (!confirm(`${userName(target)} hesabı ${active ? 'bloklansın' : 'aktivləşdirilsin'}?`)) return;
+  if (!await confirmDialog({title:active?'İstifadəçi bloklansın?':'İstifadəçi aktivləşdirilsin?',message:`${userName(target)} hesabının statusu dəyişdiriləcək.`,confirmText:active?'Bəli, blokla':'Bəli, aktivləşdir',cancelText:'Xeyr',tone:active?'danger':'default'})) return;
   const { error } = await supabase.from('profiles').update({ is_active: !active }).eq('id', id);
   toast(error ? error.message : 'İstifadəçi statusu yeniləndi', error ? 'error' : 'success');
   if (!error) await refresh();
@@ -579,7 +645,7 @@ async function invokeBackend(name, body) {
 }
 
 async function resetPassword(authUserId) {
-  const p = prompt('Yeni müvəqqəti şifrə (ən az 8 simvol):');
+  const p = await promptDialog({title:'Müvəqqəti şifrə',message:'İstifadəçi üçün ən az 8 simvoldan ibarət yeni müvəqqəti şifrə təyin et.',label:'Yeni şifrə',placeholder:'Ən az 8 simvol',confirmText:'Şifrəni yenilə',type:'password'});
   if (!p) return;
   if (p.length < 8) return toast('Şifrə ən az 8 simvol olmalıdır', 'error');
   const { data, error } = await invokeBackend('admin-users', { action:'reset_password', auth_user_id:authUserId, password:p });
@@ -816,7 +882,7 @@ async function runMonitorNow() {
   btn.disabled = true;
   btn.textContent = 'Monitorinq işləyir…';
   const bardaOrg=orgs.find(o=>String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
-  const { data, error } = await invokeBackend('monitor-worker', { organization_id:bardaOrg?.id||null, quick_youtube_comments:true, refilter_existing:true, verify_existing:true, youtube_query_limit:1 });
+  const { data, error } = await invokeBackend('monitor-worker', { organization_id:bardaOrg?.id||null, mode:'scheduled', quick_youtube_comments:true, browser_quick:true, refilter_existing:false, verify_existing:false, youtube_query_limit:1 });
   btn.disabled = false;
   btn.textContent = old;
   if (error || data?.ok === false) return toast(error?.message || data?.error || 'Monitorinq işə salınmadı', 'error');
