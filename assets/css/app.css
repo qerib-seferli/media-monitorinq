@@ -1004,3 +1004,88 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   #source-form .form-actions{grid-column:1/-1!important}
   #source-form .form-actions .btn{width:100%!important}
 }
+
+
+/* =========================================================
+   V25 GLOBAL UI / QUALITY STABILITY — 2026-08-29
+   Compact symmetric controls, bounded admin lists and stable
+   central-scope rendering. Existing palette/components kept.
+   ========================================================= */
+.scope-filter-pending{visibility:hidden!important;pointer-events:none!important}
+.badge,.btn,.chip,.keyword-count,.source-status-badge{white-space:nowrap;word-break:keep-all;overflow-wrap:normal}
+
+.central-monitor-card{display:flex;flex-direction:column}
+.central-monitor-overview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.central-monitor-block{min-width:0;border:1px solid var(--line);border-radius:14px;padding:12px;background:rgba(255,255,255,.02)}
+.central-monitor-block>strong{display:block;font-size:13px}
+.central-monitor-block>small{display:block;color:var(--muted);font-size:10px;margin:3px 0 8px;line-height:1.35}
+.central-monitor-block .setup-status{margin-top:0;align-content:flex-start;min-height:86px}
+.central-monitor-actions{margin-top:10px}
+
+.catalog-panels{align-items:start!important}
+.catalog-position-card,.catalog-location-card{align-self:start!important;height:auto!important;min-height:0!important}
+.catalog-location-card .location-list{max-height:560px;overflow:auto;padding-right:5px;scrollbar-gutter:stable}
+.catalog-location-card .location-list::-webkit-scrollbar,.dashboard-scroll::-webkit-scrollbar{width:8px}
+.catalog-location-card .location-list::-webkit-scrollbar-thumb,.dashboard-scroll::-webkit-scrollbar-thumb{background:rgba(148,163,184,.24);border-radius:999px}
+
+@media (min-width:1051px){
+  .source-inline-form{grid-template-columns:minmax(150px,.75fr) minmax(260px,2fr) auto!important;align-items:end}
+  .source-inline-form .form-span-2{grid-column:auto!important}
+  .source-inline-form .form-actions{grid-column:auto!important;margin:0!important}
+  .alias-inline-form{grid-template-columns:minmax(190px,1fr) minmax(300px,1.7fr) minmax(150px,.8fr) auto!important;align-items:end}
+  .alias-inline-form .form-actions{grid-column:auto!important;margin:0!important}
+  .alias-inline-form .btn,.source-inline-form .btn{height:42px}
+
+  .dashboard-head{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(500px,680px)!important;align-items:end!important;gap:22px!important}
+  .dashboard-head .page-actions{display:grid!important;grid-template-columns:minmax(190px,1.15fr) repeat(2,minmax(150px,.9fr))!important;gap:8px!important;width:100%!important}
+  .dashboard-head .page-actions>*{width:100%!important;min-width:0!important}
+
+  .monitor-head{grid-template-columns:minmax(0,1fr) minmax(560px,700px)!important}
+  .monitor-head>.monitor-filters{grid-template-columns:repeat(3,minmax(0,1fr))!important;max-width:700px!important}
+  .monitor-head>.monitor-filters>*{width:100%!important;min-width:0!important}
+
+  .report-head{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(600px,780px)!important;align-items:end!important;gap:22px!important}
+  .report-toolbar{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr))!important;gap:9px!important;max-width:780px!important;width:100%!important}
+  .report-toolbar>#report-period,.report-toolbar>#apply,.report-toolbar>#organization-filter{grid-column:span 2}
+  .report-toolbar>#from,.report-toolbar>#to{grid-column:span 3}
+  .report-toolbar>*{width:100%!important;min-width:0!important}
+
+  .dashboard-panels{align-items:start!important}
+  .dashboard-panels>.card{height:590px;min-height:590px;display:flex;flex-direction:column;overflow:hidden}
+  .dashboard-panels #latest,.dashboard-panels #notif-list{min-height:0;overflow:auto;padding-right:4px;scrollbar-gutter:stable}
+  .dashboard-panels #latest{display:grid;gap:10px}
+  .dashboard-panels #notif-list{display:block}
+}
+
+@media (max-width:1050px){
+  .central-monitor-overview{grid-template-columns:1fr}
+  .catalog-location-card .location-list{max-height:520px}
+}
+
+@media (max-width:700px){
+  .scope-filter-pending{visibility:hidden!important}
+  .dashboard-head .page-actions{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important;width:100%!important}
+  .dashboard-head .page-actions #organization-filter{grid-column:1/-1}
+  .dashboard-head .page-actions>*{width:100%!important;min-width:0!important}
+
+  .monitor-head>.monitor-filters{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important;width:100%!important}
+  .monitor-filters>#organization-filter{grid-column:1/-1}
+  .monitor-filters>.monitor-date{font-size:11px!important;letter-spacing:-.02em;padding-left:7px!important;padding-right:5px!important}
+  .monitor-filters>*{width:100%!important;min-width:0!important}
+
+  .report-toolbar{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important;width:100%!important}
+  .report-toolbar>#organization-filter{grid-column:1/-1}
+  .report-toolbar>#from,.report-toolbar>#to{font-size:11px!important;padding-left:7px!important;padding-right:5px!important}
+  .report-toolbar>*{width:100%!important;min-width:0!important}
+
+  .source-inline-form,.alias-inline-form{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .source-inline-form .form-span-2,.alias-inline-form .field:nth-child(2){grid-column:1/-1!important}
+  .source-inline-form .form-actions,.alias-inline-form .form-actions{grid-column:1/-1!important}
+
+  .central-monitor-block .setup-status{min-height:0}
+  .catalog-location-card .location-list{max-height:470px}
+  .dashboard-panels>.card{height:auto!important;min-height:0!important;overflow:visible!important}
+  .dashboard-panels #latest,.dashboard-panels #notif-list{overflow:visible!important}
+  .main{padding-bottom:calc(104px + env(safe-area-inset-bottom))!important}
+  input[type="date"]{min-width:0!important;width:100%!important;font-size:11px!important}
+}

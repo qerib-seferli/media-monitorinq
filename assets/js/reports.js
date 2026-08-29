@@ -1,10 +1,11 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, getCachedProfile, showPageLoader, hidePageLoader, toast } from './core.js';
-import { applyOrganizationScope, setupOrganizationFilter } from './scope.js';
+import { applyOrganizationScope, setupOrganizationFilter, loadGlobalExcludes, filterExcludedMentions } from './scope.js';
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'reports'); showPageLoader();
 const c=await requireAuth(); if(!c) throw new Error('auth'); renderShell(c.profile,'reports'); hidePageLoader();
 const organizationFilter=document.querySelector('#organization-filter');
+const globalExcludes=await loadGlobalExcludes();
 await setupOrganizationFilter(c.profile, organizationFilter);
 const from=document.querySelector('#from'),to=document.querySelector('#to'),period=document.querySelector('#report-period');
 function ymd(d){const x=new Date(d.getTime()-d.getTimezoneOffset()*60000);return x.toISOString().slice(0,10)}
@@ -35,7 +36,7 @@ async function loadBreakdown(){
     const r=await q;
     if(r.error)throw r.error; const batch=r.data||[];out.push(...batch);if(batch.length<size)break;
   }
-  return dedupeRows(out);
+  return dedupeRows(filterExcludedMentions(out,globalExcludes));
 }
 async function load(){
   showPageLoader();

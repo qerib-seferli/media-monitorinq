@@ -1,6 +1,7 @@
 import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
+import { resetGlobalExcludeCache } from './scope.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile?.system_role==='super_admin') renderShell(cachedProfile, location.hash.replace('#','')||'dashboard'); showPageLoader();
 const ctx = await requireAuth({ superAdmin: true });
@@ -197,7 +198,8 @@ function renderCatalogs() {
     p.innerHTML = visiblePositions.map(x => `<span class="chip"><i></i>${escapeHtml(x.name)}</span>`).join('') || '<div class="empty compact">Vəzifə yoxdur.</div>';
   }
   const l = document.querySelector('#location-list');
-  if (l) l.innerHTML = districts.map(d => `
+  const uniqueDistricts=[...new Map(districts.map(d=>[String(d.name||'').trim().toLocaleLowerCase('az-AZ'),d])).values()];
+  if (l) l.innerHTML = uniqueDistricts.map(d => `
     <details class="location-row location-group"><summary class="location-title"><strong>${escapeHtml(d.name)}</strong><span>${(d.villages || []).length} məntəqə</span></summary><div class="location-values location-values-grid">${(d.villages || []).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'az')).map(v => `<span>${escapeHtml(v.name)}</span>`).join('') || '<em>Kənd əlavə edilməyib</em>'}</div></details>`).join('') || '<div class="empty">Rayon yoxdur.</div>';
 }
 
@@ -749,12 +751,23 @@ async function configureBarda() {
 
 async function renderBardaStatus() {
   const el = document.querySelector('#barda-status');
-  if (!el) return;
+  const globalEl = document.querySelector('#global-status');
+  if (!el && !globalEl) return;
+  const globalStats = keywordStats[0] || {positive_count:0,excluded_count:0};
+  const activeOrgs=orgs.filter(o=>o.service_status==='active').length;
+  const archivedOrgs=orgs.filter(o=>o.service_status==='archived').length;
+  const activeSources=sourceIndex.filter(s=>s.is_active!==false).length;
+  if(globalEl) globalEl.innerHTML=[
+    `<span class="badge ok">${activeOrgs} aktiv təşkilat</span>`,
+    `<span class="badge info">${archivedOrgs} arxiv təşkilat</span>`,
+    `<span class="badge info">${activeSources} qlobal mənbə</span>`,
+    `<span class="badge info">${globalStats.positive_count} açar söz</span>`,
+    `<span class="badge warn">${globalStats.excluded_count} filtr</span>`
+  ].join(' ');
   const org = orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
   if (!org) { el.innerHTML = '<span class="badge danger">Bərdə SMSİİ tapılmadı</span>'; return; }
   const hasDirector = positions.some(p => p.name === 'İdarə rəisi' && (!p.organization_id || p.organization_id === org.id));
   const webSources = sourceIndex.filter(s => ['web','rss'].some(kind=>String(s.platform||'').toLowerCase().includes(kind)) && s.is_active !== false);
-  const globalStats = keywordStats[0] || {positive_count:0,excluded_count:0};
   const bits = [
     statusBadge(org.service_status),
     hasDirector ? '<span class="badge ok">Vəzifələr hazırdır</span>' : '<span class="badge warn">Vəzifə tamamlanmalıdır</span>',
@@ -790,11 +803,12 @@ async function runMonitorNow() {
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Monitorinq işləyir…';
-  const { data, error } = await invokeBackend('monitor-worker', { mode:'manual' });
+  const bardaOrg=orgs.find(o=>String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
+  const { data, error } = await invokeBackend('monitor-worker', { organization_id:bardaOrg?.id||null, quick_youtube_comments:true, refilter_existing:true, verify_existing:true, youtube_query_limit:1 });
   btn.disabled = false;
   btn.textContent = old;
   if (error || data?.ok === false) return toast(error?.message || data?.error || 'Monitorinq işə salınmadı', 'error');
-  toast(`Monitorinq tamamlandı: ${data?.new_mentions || 0} yeni nəticə`, 'success');
+  toast(`Sürətli yoxlama tamamlandı: ${data?.new_mentions || 0} yeni nəticə`, 'success');
   await renderBardaStatus();
 }
 
@@ -815,7 +829,7 @@ document.querySelector('#exclude-form').onsubmit = async e => {
   if (!value) return;
   const { error } = await supabase.from('keywords').insert({organization_id:null,value,kind:'exclude',is_active:true});
   toast(error?.code==='23505'?'Bu qlobal filtr artıq mövcuddur.':(error?.message||'Qlobal axtarılmamalı söz əlavə edildi'), error ? 'error' : 'success');
-  if (!error) { e.target.reset(); await refresh(); }
+  if (!error) { resetGlobalExcludeCache(); e.target.reset(); await refresh(); toast('Filtr görünüşlərdə dərhal tətbiq olunur; bazadakı köhnə qeydlər növbəti worker yoxlamasında təsdiqlənəcək.','success'); }
 };
 document.querySelector('#source-form').onsubmit = async e => {
   e.preventDefault();

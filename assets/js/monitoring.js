@@ -2,7 +2,7 @@ import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 import { startLiveMonitor } from './live-monitor.js';
-import { applyOrganizationScope, isCentralScope, setupOrganizationFilter } from './scope.js';
+import { applyOrganizationScope, isCentralScope, setupOrganizationFilter, loadGlobalExcludes, filterExcludedMentions, mentionPreviewUrl } from './scope.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'monitoring'); showPageLoader();
 const ctx=await requireAuth(); if(!ctx) throw new Error('auth'); renderShell(ctx.profile,'monitoring'); hidePageLoader();
@@ -18,6 +18,7 @@ const dateTo=document.querySelector('#date-to');
 const sentinel=document.querySelector('#load-sentinel');
 const PAGE_SIZE=50;
 let rows=[], page=0, loading=false, done=false, requestToken=0;
+const globalExcludes=await loadGlobalExcludes();
 function normalizeStoryTitle(v=''){return String(v||'').toLocaleLowerCase('az-AZ').normalize('NFKD').replace(/[əƏ]/g,'e').replace(/[ıİ]/g,'i').replace(/[şŞ]/g,'s').replace(/[çÇ]/g,'c').replace(/[öÖ]/g,'o').replace(/[üÜ]/g,'u').replace(/[ğĞ]/g,'g').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();}
 function storyKey(m){
   const platformName=String(m?.source_platform||'').toLowerCase();
@@ -73,7 +74,7 @@ function orderedMedia(m){
   const rank={preview:0,screenshot:1,preview_external:2};
   return media.sort((a,b)=>(rank[String(a?.media_type||'').toLowerCase()]??9)-(rank[String(b?.media_type||'').toLowerCase()]??9));
 }
-function primaryMediaUrl(m){return orderedMedia(m).find(x=>x?.url)?.url||'./assets/img/icon.svg';}
+function primaryMediaUrl(m){return mentionPreviewUrl(m);}
 function mediaImg(url,cls='detail-media'){return `<img src=\"${url}\" data-media=\"${url}\" class=\"${cls}\" alt=\"Media\" loading=\"lazy\" onerror=\"this.closest('figure')?.classList.add('media-load-error')\">`;}
 function card(m){
   const comment=isComment(m);
@@ -105,7 +106,7 @@ async function load({reset=false}={}){
       if(sentiment.value) q=q.eq('sentiment',sentiment.value);
       if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
       const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
-      const batch=data||[]; rows=mergeUnique(rows,batch); done=batch.length<PAGE_SIZE; page++; safety++;
+      const batch=filterExcludedMentions(data||[],globalExcludes); rows=mergeUnique(rows,batch); done=batch.length<PAGE_SIZE; page++; safety++;
       if(!batch.length)break;
     }
     render(true);
