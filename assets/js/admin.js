@@ -128,11 +128,23 @@ function organizationTypeLabel(value='') {
   return ({district:'Rayon idarəsi',regional_unit:'Regional vahid',special_unit:'Xüsusi idarə',central_service:'Mərkəzi xidmət'})[value] || value || 'Rayon idarəsi';
 }
 
+function organizationSortKey(o={}) {
+  const order = { central_service:0, regional_unit:1, district:2, special_unit:3 };
+  return [order[o.organization_type] ?? 9, String(o.short_name || o.name || '')];
+}
+
+function sortedOrganizations(rows=orgs) {
+  return [...rows].sort((a,b)=>{
+    const ak=organizationSortKey(a), bk=organizationSortKey(b);
+    return ak[0]-bk[0] || ak[1].localeCompare(bk[1],'az');
+  });
+}
+
 function renderOrgs() {
   const desktop = document.querySelector('#org-body');
   const mobile = document.querySelector('#org-mobile-list');
   if (!desktop || !mobile) return;
-  desktop.innerHTML = orgs.map(o => `
+  desktop.innerHTML = sortedOrganizations().map(o => `
     <tr>
       <td><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></td>
       <td>${escapeHtml(organizationTypeLabel(o.organization_type))}</td>
@@ -141,7 +153,7 @@ function renderOrgs() {
       <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button></div></td>
     </tr>`).join('') || '<tr><td colspan="5" class="empty">Təşkilat yoxdur.</td></tr>';
 
-  mobile.innerHTML = orgs.map(o => `
+  mobile.innerHTML = sortedOrganizations().map(o => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
       <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
@@ -603,7 +615,7 @@ function modal(type, preset={}) {
     const posOptions = positionOptionsForOrg(defaultOrg, editing?.position_id || preset.position_id || '');
     const title = editing ? 'İstifadəçini redaktə et' : 'Yeni istifadəçi';
     const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Hesab yarat';
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Giriş və məlumat əhatəsi</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Məlumat əhatəsi</label><select class="select" id="u-scope"><option value="organization" ${defaultScope!=='all'?'selected':''}>Yalnız seçilən təşkilat</option><option value="all" ${defaultScope==='all'?'selected':''}>Bütün sistem / Nazirlik</option></select></div><div class="field"><label>Təşkilat</label><select class="select" id="u-org"><option value="">Mərkəzi / təşkilatsız</option>${orgs.map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">“Bütün sistem / Nazirlik” seçildikdə istifadəçi bütün təşkilatların nəticələrini görür və təşkilat filtrindən istifadə edir. “Yalnız seçilən təşkilat” seçildikdə profilə bağlanan idarənin məlumatları avtomatik göstərilir.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Giriş və məlumat əhatəsi</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Məlumat əhatəsi</label><select class="select" id="u-scope"><option value="organization" ${defaultScope!=='all'?'selected':''}>Yalnız seçilən təşkilat</option><option value="all" ${defaultScope==='all'?'selected':''}>Bütün sistem / Nazirlik</option></select></div><div class="field"><label>Təşkilat</label><select class="select" id="u-org"><option value="">Mərkəzi / təşkilatsız</option>${sortedOrganizations().map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">“Bütün sistem / Nazirlik” seçildikdə istifadəçi bütün təşkilatların nəticələrini görür və təşkilat filtrindən istifadə edir. “Yalnız seçilən təşkilat” seçildikdə profilə bağlanan idarənin məlumatları avtomatik göstərilir.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     const orgSelect = document.querySelector('#u-org');
     const scopeSelect = document.querySelector('#u-scope');
     const positionSelect = document.querySelector('#u-position');

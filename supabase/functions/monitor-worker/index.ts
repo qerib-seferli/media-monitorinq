@@ -897,6 +897,50 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
   }
   return out;
 }
+function buildYoutubeDiscoveryQueries(org:any, keywords:string[], villages:string[] = [], max=1):string[] {
+  const shortName = String(org.short_name || '').trim();
+  const fullName = String(org.name || '').trim();
+  const district = String(org.districts?.name || '').trim();
+  const aliases = (Array.isArray(org.aliases) ? org.aliases : [])
+    .map((a:any)=>String(a?.alias || '').replace(/\s+/g,' ').trim())
+    .filter(Boolean);
+
+  const identity:string[] = [];
+  const seen = new Set<string>();
+  for (const value of [shortName, fullName, ...aliases]) {
+    const key = normalizeForMatch(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    identity.push(value);
+  }
+
+  // YouTube Data API q parametrində "|" rəsmi OR operatorudur.
+  // Bir quota çağırışında cari ad, qısa ad və köhnə/rəsmi ad variantlarını çağırırıq.
+  const quote = (value:string)=>`"${value.replace(/"/g,'').slice(0,100)}"`;
+  const identityQuery = identity.slice(0,6).map(quote).join('|');
+
+  const districtTopics = district
+    ? [
+        `${quote(district)} (suvarma|meliorasiya|subartezian|artezian|kanal|kollektor|drenaj|sukanal|"su təchizatı")`,
+        `${quote(district)} ("içməli su"|"su problemi"|"suvarma suyu"|"nasos stansiyası")`
+      ]
+    : [];
+
+  const fallback = buildDiscoveryQueries(org, keywords, villages, Math.max(2,max+1));
+  const pool = [identityQuery, ...districtTopics, ...fallback].filter(Boolean);
+
+  const out:string[] = [];
+  const querySeen = new Set<string>();
+  for (const q of pool) {
+    const key = normalizeForMatch(q);
+    if (!key || querySeen.has(key)) continue;
+    querySeen.add(key);
+    out.push(q);
+    if (out.length >= Math.max(1,Math.min(4,max))) break;
+  }
+  return out;
+}
+
 function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[] = [], max=180):string[] {
   const district = String(org.districts?.name || '').trim();
   const shortName = String(org.short_name || '').trim();
@@ -1177,7 +1221,7 @@ async function youtubeItems(
 
   // Hər anlayış ayrıca sorğudur. Bir neçə açar sözü bir uzun cümləyə
   // birləşdirmək YouTube nəticələrini sıfırlayırdı.
-  const queries = buildDiscoveryQueries(org, keywords, villages, Math.max(1,Math.min(4,queryLimit)));
+  const queries = buildYoutubeDiscoveryQueries(org, keywords, villages, Math.max(1,Math.min(4,queryLimit)));
 
   const lastMs = lastCheckedAt ? new Date(lastCheckedAt).getTime() : 0;
   const overlapMs = 2 * 3600 * 1000;
@@ -1193,7 +1237,7 @@ async function youtubeItems(
       const endpoint = new URL('https://www.googleapis.com/youtube/v3/search');
       endpoint.searchParams.set('part','snippet');
       endpoint.searchParams.set('type','video');
-      endpoint.searchParams.set('maxResults','25');
+      endpoint.searchParams.set('maxResults','50');
       endpoint.searchParams.set('order', lastCheckedAt ? 'date' : 'relevance');
       if (publishedAfter) endpoint.searchParams.set('publishedAfter',publishedAfter);
       endpoint.searchParams.set('q',q);
@@ -2443,7 +2487,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     if(words.length>=2) return true;
     return ['suvarma','meliorasiya','subartezian','artezian','drenaj','kollektor','irriqasiya','susuzluq','kanalizasiya'].includes(String(term||''));
   };
-  const institutionalGlobalTerms = ['regional su meliorasiya xidmeti','rsmx','azerbaycan dovlet su ehtiyatlari agentliyi','adsea','sularin istifadesine ve muhafizesine dovlet nezareti xidmeti','iri seherlerin birlesmis su techizati xidmeti'].map(normalizeForMatch);
+  const institutionalGlobalTerms = ['regional su meliorasiya xidmeti','rsmx','rsm','azerbaycan dovlet su ehtiyatlari agentliyi','azerbaycan dovlet su agentliyi','adsea','sularin istifadesine ve muhafizesine dovlet nezareti xidmeti','simdnx','sdnx','iri seherlerin birlesmis su techizati xidmeti','isst','su ve meliorasiya elmi tedqiqat institutu','smeti','tikilmekde olan obyektlerin mudiriyyeti','toom','su ve meliorasiya komplekslerinin layihelendirilmesi institutu','smkli'].map(normalizeForMatch);
   const globalBankKeywordHits = normalizedGlobalKeywords.filter(term=>term && term.length>=5 && safeGlobalTopicTerm(term) && !institutionalGlobalTerms.includes(term) && contains(normalized,term)).slice(0,12);
   const organizationBankKeywordHits = normalizedOrgKeywords.filter(term=>term && term.length>=5 && contains(normalized,term)).slice(0,12);
 
