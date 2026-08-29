@@ -69,7 +69,7 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d "{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":false,\"force_youtube\":true,\"include_archived\":true,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":2,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":2,\"verify_existing\":false}" \
+            -d "{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":false,\"force_youtube\":true,\"include_archived\":true,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":4,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1,\"verify_existing\":false}" \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
 
   web-fast-watch:
