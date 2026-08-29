@@ -42,6 +42,12 @@ const ORG_SHARD_INDEX = Math.max(0, Math.min(ORG_SHARD_COUNT - 1, Number(process
 const ORG_BATCH = Math.max(0, Math.min(20, Number(process.env.NEWS_ORG_BATCH || 0)));
 const ROTATION_MINUTES = Math.max(5, Math.min(360, Number(process.env.NEWS_ORG_ROTATION_MINUTES || 15)));
 const ORG_ROTATION_BUCKET = Math.floor(Date.now() / (ROTATION_MINUTES * 60 * 1000));
+const GATEWAY_STARTED_AT = Date.now();
+const GATEWAY_BUDGET_MS = Math.max(60_000, Math.min(1_800_000, Number(process.env.NEWS_GATEWAY_BUDGET_MS || 0))) || 0;
+const GATEWAY_SAFETY_MS = 20_000;
+function gatewayBudgetLow() {
+  return GATEWAY_BUDGET_MS > 0 && (Date.now() - GATEWAY_STARTED_AT) >= Math.max(1_000, GATEWAY_BUDGET_MS - GATEWAY_SAFETY_MS);
+}
 
 async function politeWait(minGapMs = 1200) {
   const elapsed = Date.now() - lastExternalFetchAt;
@@ -878,10 +884,14 @@ let totalReceived=0, totalAccepted=0, totalRejected=0, totalInserted=0, totalFai
 let gdeltUsedThisRun=false;
 
 for (const org of plan.organizations) {
+  if (gatewayBudgetLow()) {
+    console.log(`NEWS_GATEWAY_BUDGET_STOP elapsed_ms=${Date.now()-GATEWAY_STARTED_AT} budget_ms=${GATEWAY_BUDGET_MS}`);
+    break;
+  }
   // Yalnız 1-ci shard əvvəlki Web qeydlərini cari axtarılmamalı sözlərlə yenidən yoxlayır.
   // Beləliklə əvvəlki yumşaq filtrdən keçmiş uyğunsuz xəbərlər relevance_score=0 olur
   // və Monitorinq/Hesabat/Bildirişlər ekranından avtomatik çıxır.
-  if (!DIRECT_ONLY && REFILTER_EXISTING && SOURCE_SHARD_INDEX === 0) {
+  if (REFILTER_EXISTING) {
     try {
       const cleaned = await callMonitor({mode:'news_refilter', organization_id:org.id}, 45000);
       if (cleaned?.ok) console.log(`[${org.short_name}] Web təmizləmə: checked=${cleaned.checked||0}, filtered_out=${cleaned.filtered_out||0}`);
@@ -981,6 +991,7 @@ for (const org of plan.organizations) {
   const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,DEEP_BACKFILL?12:8).map(q=>DEEP_BACKFILL?withArchiveWindow(q,org):q);
   const allGoogleQueries=[...new Set([...googleQueries,...keywordGoogleQueries])].slice(0,DEEP_BACKFILL?16:10);
   if(!DIRECT_ONLY && !SITEMAP_FOCUS) for (const q of allGoogleQueries) {
+    if (gatewayBudgetLow()) break;
     try {
       const g = await googleNews(q);
       googleItems.push(...keepDiscoveryItems(g.items));
@@ -990,11 +1001,13 @@ for (const org of plan.organizations) {
     }
   }
   if(!DIRECT_ONLY && !SITEMAP_FOCUS) for (const q of webQueries) {
+    if (gatewayBudgetLow()) break;
     try {
       // Arxiv run-da ilk səhifə ilə kifayətlənmək eyni populyar nəticələrin təkrar
       // düşməsinə səbəb olurdu. Hər shard fərqli sorğu işlədiyi üçün 3 səhifəyə qədər
       // oxumaq artıq həm təhlükəsizdir, həm də köhnə materialları tapma şansını artırır.
       for (let page=0; page<BING_PAGE_LIMIT; page++) {
+        if (gatewayBudgetLow()) break;
         broadWebItems.push(...keepDiscoveryItems(await bingNews(q,page)));
         broadWebItems.push(...keepDiscoveryItems(await bingWeb(q,page)));
       }
@@ -1013,6 +1026,7 @@ for (const org of plan.organizations) {
     ? (sourceBatch.length <= DOMAIN_SEARCH_BATCH ? sourceBatch : rotateSources(sourceBatch, DOMAIN_SEARCH_BATCH, `domain-search-${org.id}-shard-${SOURCE_SHARD_INDEX}`))
     : [];
   for (const source of targetedSources) {
+    if (gatewayBudgetLow()) break;
     const domain=domainFromUrl(source?.url||'');
     if(!domain || !org.district) continue;
     const sourceIndex = targetedSources.indexOf(source);
@@ -1023,6 +1037,7 @@ for (const org of plan.organizations) {
       .map(q=>DEEP_BACKFILL?withArchiveWindow(q,{...org,id:`${org.id}-domain-${domain}`}):q);
     let found=[];
     for (let qi=0; qi<queries.length; qi++) {
+      if (gatewayBudgetLow()) break;
       try {
         // Bing Web RSS bir sıra Azərbaycan media domenlərində site: filtrini zəif
         // tətbiq edir və raw=10 olsa da exact=0 qalır. Eyni sorğunu Bing News RSS-də
@@ -1044,6 +1059,7 @@ for (const org of plan.organizations) {
     domainWebItems.push(...dedupe(found));
   }
   for (const source of sourceBatch) {
+    if (gatewayBudgetLow()) break;
     const domain=domainFromUrl(source?.url||'');
     const items = keepDomain(await directFeed(source,org),domain);
     if (/google/i.test(`${source.platform||''} ${source.name||''} ${source.url||''}`)) googleItems.push(...items);
