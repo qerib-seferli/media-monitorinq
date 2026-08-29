@@ -7,7 +7,7 @@ Dəyişən hissələr:
 - Konfiqurasiya edilmiş saytlar üçün ayrıca sürətli watch job-u əlavə olunub.
 - Monitorinq frontend köhnə Web dublikatlarını başlıq+tarix üzrə bir dəfə göstərir.
 - Hesabat köhnə Web dublikatlarını təkrar saymır.
-- Service Worker cache versiyası yenilənib.
+- Service Worker cache versiyası yenilənib. 
 
 ## Tətbiq
 1. ZIP-dəki faylları eyni yollarla GitHub repo-da replace/add edin.
