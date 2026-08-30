@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
       const user = authResult?.data?.user || null;
       if (!user) return json({ok:false,run_id:runId,stage:currentStage,error:'İcazəsiz monitor sorğusu'},403);
 
-      const profileResult:any = await admin.from('profiles').select('system_role,is_active,organization_id').eq('auth_user_id',user.id).maybeSingle();
+      const profileResult:any = await admin.from('profiles').select('system_role,is_active,organization_id').or(`auth_user_id.eq.${user.id},id.eq.${user.id}`).limit(1).maybeSingle();
       if (profileResult?.error) return json({ok:false,run_id:runId,stage:currentStage,error:errorInfo(profileResult.error).message},403);
       const profile = profileResult?.data || null;
       if (!profile?.is_active) return json({ok:false,run_id:runId,stage:currentStage,error:'Hesab aktiv deyil'},403);
@@ -304,6 +304,22 @@ Deno.serve(async (req) => {
 
       const result = await refilterExistingWebMentions(admin,org,lowerKeywords,villageNames,300);
       return json({ok:true,run_id:runId,mode:'news_refilter',organization:org.short_name,...result},200);
+    }
+
+    if (options.mode === 'existing_refilter') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'existing_refilter',error:'Təşkilat tapılmadı'},200);
+      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 1200);
+      const keywords = installKeywordContext(org, activeKeywordRows);
+      const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
+      let villageNames:string[] = [];
+      if (org.district_id) {
+        const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
+        if (villageResult?.error) throw villageResult.error;
+        villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
+      }
+      const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,1200);
+      return json({ok:true,run_id:runId,mode:'existing_refilter',organization:org.short_name,...result},200);
     }
 
     if (options.mode === 'news_ingest') {
@@ -2657,11 +2673,11 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // rayon və ya real su-meliorasiya konteksti tələb olunur.
   const ambiguousDirectMatches = directMatches.filter(term=>{
     const compact=String(term||'').replace(/\s+/g,'');
-    return /^[a-z0-9]+$/.test(compact) && compact.length<=6;
+    return String(term||'').split(/\s+/).filter(Boolean).length===1 && compact.length<=8;
   });
   const strongDirectMatches = directMatches.filter(term=>!ambiguousDirectMatches.includes(term));
   const azerbaijanContext = /(?:azerbaycan|azərbaycan|baki|bakı|qarabag|qarabağ|adsea|meliorasiya|suvarma|su techizati|su təchizatı)/.test(normalized);
-  const ambiguousDirectSafe = ambiguousDirectMatches.length>0 && (locationHit || coreTopicHit || azerbaijanContext);
+  const ambiguousDirectSafe = ambiguousDirectMatches.length>0 && (locationHit || (coreTopicHit && azerbaijanContext));
   const hardForeignScript = /[\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(`${item.title||''} ${item.text||''}`);
   const foreignScriptRejected = !webLike && hardForeignScript && strongDirectMatches.length===0 && !locationHit && !coreTopicHit && !azerbaijanContext;
 

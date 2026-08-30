@@ -468,16 +468,16 @@ async function renderRelevanceReview(){
   el.innerHTML='<div class="empty compact">Uyğunluq namizədləri yoxlanılır…</div>';
   const excludes=await loadGlobalExcludes();
   const {data,error}=await supabase.from('mentions')
-    .select('id,title,summary,original_text,source_platform,relevance_score,published_at,detected_at,organizations(short_name)')
+    .select('id,title,summary,original_text,raw_payload,source_platform,relevance_score,published_at,detected_at,organizations(short_name)')
     .gt('relevance_score',0).lte('relevance_score',75)
     .order('detected_at',{ascending:false}).limit(220);
   if(error){el.innerHTML=`<div class="empty compact">${escapeHtml(error.message)}</div>`;return;}
-  const rows=(data||[]).filter(row=>!isMentionExcluded(row,excludes)).slice(0,24);
+  const rows=(data||[]).filter(row=>!isMentionExcluded(row,excludes) && !['kept','ignored'].includes(String(row?.raw_payload?.admin_review_status||''))).slice(0,24);
   if(!rows.length){el.innerHTML='<div class="empty compact">Hazırda ayrıca yoxlanmalı material yoxdur.</div>';return;}
   el.innerHTML=rows.map(row=>{
     const term=suggestedReviewTerm(row);
     const body=row.original_text||row.summary||'Əlavə mətn yoxdur.';
-    return `<details class="relevance-review-item" data-review-id="${row.id}"><summary><span class="review-title"><strong>${escapeHtml(row.title||'Adsız material')}</strong><small>${escapeHtml(row.organizations?.short_name||'Qlobal')} • ${escapeHtml(row.source_platform||'Web')} • ${Number(row.relevance_score||0)}% • ${fmtDate(row.published_at||row.detected_at)}</small></span><span class="review-chevron">⌄</span></summary><div class="review-body"><p>${escapeHtml(body)}</p><div class="review-action-row"><div class="field"><label>Təklif olunan qlobal söz / fraza</label><input class="input" data-review-term value="${escapeHtml(term)}" placeholder="Məs: subartezian quyusu"></div><div class="review-action-buttons"><button class="btn success" type="button" data-review-keep="${row.id}">Gərəkli kimi əlavə et</button><button class="btn danger" type="button" data-review-block="${row.id}">Gərəksiz kimi blokla</button></div></div></div></details>`;
+    return `<details class="relevance-review-item" data-review-id="${row.id}"><summary><span class="review-title"><strong>${escapeHtml(row.title||'Adsız material')}</strong><small>${escapeHtml(row.organizations?.short_name||'Qlobal')} • ${escapeHtml(row.source_platform||'Web')} • ${Number(row.relevance_score||0)}% • ${fmtDate(row.published_at||row.detected_at)}</small></span><span class="review-chevron">⌄</span></summary><div class="review-body"><p>${escapeHtml(body)}</p><div class="review-action-row"><div class="field"><label>Təklif olunan qlobal söz / fraza</label><input class="input" data-review-term value="${escapeHtml(term)}" placeholder="Məs: subartezian quyusu"></div><div class="review-action-buttons"><button class="btn success" type="button" data-review-keep="${row.id}">Gərəkli kimi əlavə et</button><button class="btn ghost" type="button" data-review-ignore="${row.id}">Görməzdən gəl</button><button class="btn danger" type="button" data-review-block="${row.id}">Gərəksiz kimi blokla</button></div></div></div></details>`;
   }).join('');
 
   el.querySelectorAll('[data-review-keep]').forEach(btn=>btn.addEventListener('click',async()=>{
@@ -497,8 +497,23 @@ async function renderRelevanceReview(){
     }
     btn.disabled=false;
     if(insertError && insertError.code!=='23505') return toast(insertError.message,'error');
+    const reviewPatch={...(row?.raw_payload||{}),admin_review_status:'kept',admin_review_at:new Date().toISOString(),admin_review_term:term};
+    const mark=await supabase.from('mentions').update({raw_payload:reviewPatch}).eq('id',btn.dataset.reviewKeep);
+    if(mark.error){btn.disabled=false;return toast(mark.error.message,'error');}
     toast(`“${term}” qlobal monitorinq açar sözlərinə əlavə edildi.`,'success');
-    await loadKeywordStats(); renderKeywords();
+    await loadKeywordStats(); renderKeywords(); renderRelevanceReview();
+  }));
+
+
+  el.querySelectorAll('[data-review-ignore]').forEach(btn=>btn.addEventListener('click',async()=>{
+    const row=(data||[]).find(x=>String(x.id)===String(btn.dataset.reviewIgnore));
+    btn.disabled=true;
+    const reviewPatch={...(row?.raw_payload||{}),admin_review_status:'ignored',admin_review_at:new Date().toISOString()};
+    const update=await supabase.from('mentions').update({raw_payload:reviewPatch}).eq('id',btn.dataset.reviewIgnore);
+    btn.disabled=false;
+    if(update.error) return toast(update.error.message,'error');
+    toast('Material yoxlama siyahısından gizlədildi. Monitorinq nəticəsinin özü dəyişdirilmədi.','success');
+    renderRelevanceReview();
   }));
 
   el.querySelectorAll('[data-review-block]').forEach(btn=>btn.addEventListener('click',async()=>{
@@ -924,11 +939,16 @@ async function runMonitorNow() {
   btn.disabled = true;
   btn.textContent = 'Monitorinq işləyir…';
   const bardaOrg=orgs.find(o=>String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'));
+  const cleanup = await invokeBackend('monitor-worker', { organization_id:bardaOrg?.id||null, mode:'existing_refilter' });
+  if (cleanup.error || cleanup.data?.ok === false) {
+    btn.disabled = false; btn.textContent = old;
+    return toast(cleanup.error?.message || cleanup.data?.error || 'Mövcud nəticələrin filtr yoxlaması işə salınmadı', 'error');
+  }
   const { data, error } = await invokeBackend('monitor-worker', { organization_id:bardaOrg?.id||null, mode:'scheduled', quick_youtube_comments:true, browser_quick:true, refilter_existing:false, verify_existing:false, youtube_query_limit:1 });
   btn.disabled = false;
   btn.textContent = old;
   if (error || data?.ok === false) return toast(error?.message || data?.error || 'Monitorinq işə salınmadı', 'error');
-  toast(`Sürətli yoxlama tamamlandı: ${data?.new_mentions || 0} yeni nəticə`, 'success');
+  toast(`Sürətli yoxlama tamamlandı. Köhnə nəticələr yenidən süzüldü, ${data?.new_mentions || 0} yeni nəticə tapıldı.`, 'success');
   await renderBardaStatus();
 }
 
