@@ -63,6 +63,19 @@ Deno.serve(async (req) => {
       }
     }
 
+    // 15 dəqiqəlik əsas worker qlobal mövzu/filtr bankının təhlükəsiz baza
+    // frazalarını bir dəfəlik tamamlayır. Bu əməliyyat mövcud sözləri dəyişmir və
+    // rayon/təşkilat adlarını heç vaxt exclude kimi yazmır. Beləliklə filtr bankı
+    // deploy-dan sonra real olaraq böyüyür, amma paralel arxiv job-ları boş yerə DB yazmır.
+    if (options.quick_youtube_comments === true && !options.organization_id && !callerOrganizationId) {
+      try {
+        const seeded = await ensureBaselineKeywordBank(admin);
+        if (seeded.positive_added || seeded.exclude_added) details.push({source:'Özünü-təkmilləşdirən qlobal söz bankı',...seeded});
+      } catch (e) {
+        console.error('baseline-keyword-seed', errorInfo(e));
+      }
+    }
+
     currentStage = 'organizations';
     let orgQuery:any = admin.from('organizations')
       .select('id,name,short_name,district_id,districts(name),show_district_wide,organization_type,service_status');
@@ -1686,9 +1699,15 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
     const item:Item={title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',published_at:row?.published_at||null,author:row?.author_name||null,raw:row?.raw_payload||{}};
     const match=evaluateMatch(org,item,keywords,villages);
     checked++;
+    const learned=await autoLearnKeywordBank(admin,org,item,match);
+    const raw={...(row?.raw_payload||{})};
     if(!match.accepted){
-      const update:any=await admin.from('mentions').update({relevance_score:0}).eq('id',row.id);
+      const patch:any={relevance_score:0};
+      if(learned?.kind==='exclude') patch.raw_payload={...raw,admin_review_status:'auto-blocked',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()},monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]}};
+      const update:any=await admin.from('mentions').update(patch).eq('id',row.id);
       if(!update?.error)filteredOut++;
+    }else if(learned?.kind==='phrase'){
+      await admin.from('mentions').update({raw_payload:{...raw,admin_review_status:'auto-kept',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}}).eq('id',row.id);
     }
   }
   return {checked,filtered_out:filteredOut};
@@ -1741,6 +1760,7 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
     };
     const match=evaluateMatch(org,item,keywords,villages);
     checked++;
+    const learned=await autoLearnKeywordBank(admin,org,item,match);
     if(match.accepted){
       const currentScore=Number(row?.relevance_score||0);
       const titleKey=normalizeForMatch(row?.title||'');
@@ -1756,7 +1776,7 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
         continue;
       }
       if(titleKey.length>=18)acceptedByTitle.set(titleKey,{id:String(row.id),text:String(row?.original_text||'')});
-      const patch:any={raw_payload:{...raw,monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches}}};
+      const patch:any={raw_payload:{...raw,monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},...(learned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})}};
       if(currentScore<=0){patch.relevance_score=Math.min(100,Math.max(50,40+Math.min(4,(match.matches||[]).length)*10));restored++;}
       else { confirmed++; if(alreadyAccepted) preserved++; }
       const update:any=await admin.from('mentions').update(patch).eq('id',row.id);
@@ -1766,7 +1786,7 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
     if(Number(row?.relevance_score||0)>0){
       const update:any=await admin.from('mentions').update({
         relevance_score:0,
-        raw_payload:{...raw,monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]}}
+        raw_payload:{...raw,monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]},...(learned?.kind==='exclude'?{admin_review_status:'auto-blocked',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})}
       }).eq('id',row.id);
       if(!update?.error){filteredOut++;if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});}
     }
@@ -2394,21 +2414,103 @@ function debugSamples(items:Item[], org:any, keywords:string[], villages:string[
 // bankına avtomatik əlavə edir. Rayon adı, təşkilat akronimi və "su" kimi geniş tək
 // sözlər heç vaxt avtomatik öyrənilmir; bununla bankın öz-özünü zəhərləməsinin qarşısı alınır.
 const AUTO_LEARN_POSITIVE_PHRASES = [
-  'içməli su','su təchizatı','suvarma kanalı','suvarma sistemi','suvarma suyu',
-  'subartezian quyusu','artezian quyusu','nasos stansiyası','kanalizasiya xətti',
-  'su xətti','su kəməri','su anbarı','kollektor drenaj','drenaj sistemi',
-  'suvarma mövsümü','suvarma qrafiki','su çatışmazlığı','su verilmir','su gəlmir',
-  'kanal təmizlənməsi','arx təmizlənməsi','quyu təmiri','su qəzası','qəza bərpa'
+  'içməli su','içməli su təchizatı','dayanıqlı içməli su','su təchizatı','su təminatı',
+  'suvarma kanalı','suvarma arxı','suvarma sistemi','suvarma suyu','suvarma şəbəkəsi',
+  'suvarma mövsümü','suvarma qrafiki','su bölgüsü','əkin sahələrinin suvarılması',
+  'subartezian quyusu','artezian quyusu','subartezian quyularının qazılması','quyu təmiri',
+  'nasos stansiyası','nasos stansiyasının təmiri','kanalizasiya xətti','kanalizasiya şəbəkəsi',
+  'tullantı su','yağış suları sistemi','su xətti','su kəməri','magistral su kəməri',
+  'su anbarı','su mənbəyi','su şəbəkəsi','su itkisi','su qəzası','qəza bərpa',
+  'kollektor drenaj','kollektor drenaj şəbəkəsi','drenaj sistemi','meliorasiya sistemi',
+  'meliorativ tədbirlər','hidrotexniki qurğu','hidrotexniki qurğuların təmiri',
+  'kanal təmizlənməsi','kanalların lildən təmizlənməsi','arx təmizlənməsi',
+  'su çatışmazlığı','susuzluq problemi','su verilmir','su gəlmir','su yoxdur',
+  'su təminatı yaxşılaşacaq','su təchizatı yaxşılaşacaq','suvarma imkanları artırılacaq',
+  'fermerlərin su təminatı','əkin sahələrinin su təminatı','irriqasiya sistemi'
 ];
 const AUTO_LEARN_EXCLUDE_PHRASES = [
-  'haryanvi song','haryanvi songs','bhojpuri song','punjabi song','dance video','music video',
-  'official music video','viral short','youtube shorts','mini vlog','daily vlog','travel vlog',
-  'football match','football highlights','soccer match','basketball match','gaming video','gameplay',
-  'movie trailer','film trailer','serial episode','celebrity news','stock market','forex trading',
-  'smartphone review','car review','recipe video','cooking recipe','narkotik vasitə','narkotik maddə',
-  'marşrutun hərəkət sxemi','nəqliyyat vasitələrinin hərəkəti','ayna dan verilən məlumata görə',
-  'iş elanları','vakansiya elanı','daşınmaz əmlak','ev satılır','kirayə ev'
+  // Musiqi / əyləncə / video janrları
+  'haryanvi song','haryanvi songs','bhojpuri song','bhojpuri songs','punjabi song','punjabi songs',
+  'dance video','music video','official music video','lyrical video','lyrics video','remix song','dj remix',
+  'new song','latest song','romantic song','love song','wedding song','concert hall songs','music festival',
+  'viral short','viral shorts','youtube shorts','short video','shortvideo','mini vlog','minivlog','daily vlog',
+  'travel vlog','school vlog','college vlog','family vlog','beauty vlog','funny video','comedy video','prank video',
+  'reaction video','cute baby','baby video','movie trailer','film trailer','serial episode','full episode',
+  'celebrity news','horoscope','astrology','tarot reading','rock music','concert video','karaoke song',
+  // İdman
+  'football match','football highlights','soccer match','soccer highlights','basketball match','volleyball match',
+  'tennis match','boxing match','ufc fight','champions league','premier league','transfer news','sports news',
+  'world cup','formula 1','motogp','cricket match','wrestling match','game highlights','dirçəliş kuboku',
+  // Oyun / texnologiya
+  'gaming video','gameplay','free fire','pubg mobile','minecraft','roblox','super mario','playstation game',
+  'xbox game','mobile game','game review','smartphone review','mobile review','phone review','unboxing video',
+  'laptop review','computer review','camera review','tech review','software tutorial','coding tutorial',
+  // Avtomobil / nəqliyyat
+  'car review','bike review','motorcycle review','test drive','avtomobil bazarı','maşın bazarı','ikinci əl maşın',
+  'avtomobil satışı','maşın satılır','avtomobil elanı','marşrutun hərəkət sxemi','nəqliyyat vasitələrinin hərəkəti',
+  'ictimai nəqliyyat','avtobus marşrutu','metro stansiyası','yol hərəkəti','tıxac xəbəri','sürücülərin diqqətinə',
+  'ayna dan verilən məlumata görə','ayna məlumatına görə','təmir işləri ilə əlaqədar yol bağlanır',
+  // Maliyyə / biznes / elan
+  'stock market','forex trading','crypto currency','cryptocurrency','bitcoin price','exchange rate','valyuta məzənnəsi',
+  'bank krediti','kredit kampaniyası','sığorta şirkəti','lottery result','casino game','betting tips','mərc oyunu',
+  'iş elanları','iş elanı','vakansiya elanı','job vacancy','daşınmaz əmlak','ev satılır','mənzil satılır',
+  'kirayə ev','kirayə mənzil','torpaq satılır','reklam kampaniyası','endirim kampaniyası',
+  // Məişət / yemək / moda
+  'recipe video','cooking recipe','food recipe','restaurant review','hotel review','travel guide','fashion show',
+  'makeup tutorial','beauty tutorial','hair tutorial','shopping vlog','toy mərasimi','nişan mərasimi','gəlinlik modeli',
+  // Təhsil / gündəlik qeyri-aidiyyəti mövzular
+  'exam result','imtahan nəticələri','məktəb xəbərləri','universitet xəbərləri','təhsil xəbərləri','dərs cədvəli',
+  'hava proqnozu','weather forecast','bürclər','günün qoroskopu','sabahın hava proqnozu',
+  // Kriminal / hərbi / hadisə — su infrastrukturu işi deyilsə ayrıca qaydalar da veto edir
+  'narkotik vasitə','narkotik maddə','qanunsuz narkotik','qətl hadisəsi','cinayət hadisəsi','oğurluq hadisəsi',
+  'həbs edildi','saxlanıldı','polis əməliyyatı','yol qəzası','avtomobil qəzası','atışma baş verib',
+  'raket hücumu','hava hücumu','ordu hücumu','müharibə xəbərləri','terror aktı','hərbi əməliyyat',
+  // Xarici, tez-tez yalnış uyğunluq yaradan kontent nümunələri
+  'old bike restoration','bicycle restoration','vieux vélo','oude kerk','haryanvi dress','cute baby school',
+  'viralshort video','school pertamasekolah','guru baru','rock shorts','bhojpuri dj','haryanvi dance',
+  // Balıqçılıq / fauna
+  'balıq ovu','balıqçılıq yarışı','qadağan olunmuş balıqçılıq','brakonyerlik','ov mövsümü','heyvan bazarı','pişik videosu','it videosu'
 ];
+
+async function ensureBaselineKeywordBank(admin:any) {
+  const allValues=[
+    ...AUTO_LEARN_POSITIVE_PHRASES.map(value=>({value,kind:'phrase'})),
+    ...AUTO_LEARN_EXCLUDE_PHRASES.map(value=>({value,kind:'exclude'}))
+  ];
+  const existing:any=await admin.from('keywords')
+    .select('value,kind')
+    .is('organization_id',null)
+    .eq('is_active',true)
+    .limit(5000);
+  if(existing?.error) throw existing.error;
+  const existingValues=new Set((existing?.data||[]).map((row:any)=>normalizeForMatch(String(row?.value||''))).filter(Boolean));
+  const missing=allValues.filter(row=>{
+    const key=normalizeForMatch(row.value);
+    if(!key || existingValues.has(key)) return false;
+    existingValues.add(key);
+    return true;
+  });
+  let positiveAdded=0,excludeAdded=0;
+  for(let i=0;i<missing.length;i+=25){
+    const chunk=missing.slice(i,i+25).map(row=>({organization_id:null,value:row.value,kind:row.kind,is_active:true}));
+    const result:any=await admin.from('keywords').insert(chunk);
+    if(result?.error){
+      // Eyni anda başqa worker eyni bazanı tamamlayarsa unique conflict bütün chunk-u
+      // dayandırmasın. Belə halda sətir-sətir yalnız həqiqətən çatışmayanları əlavə edirik.
+      if(String(result.error?.code||'')!=='23505') throw result.error;
+      for(const row of chunk){
+        const check:any=await admin.from('keywords').select('id').is('organization_id',null).ilike('value',row.value).limit(1).maybeSingle();
+        if(check?.data?.id) continue;
+        const single:any=await admin.from('keywords').insert(row);
+        if(single?.error && String(single.error?.code||'')!=='23505') throw single.error;
+        if(!single?.error){ if(row.kind==='exclude') excludeAdded++; else positiveAdded++; }
+      }
+    }else{
+      for(const row of chunk){ if(row.kind==='exclude') excludeAdded++; else positiveAdded++; }
+    }
+  }
+  return {positive_added:positiveAdded,exclude_added:excludeAdded,total_added:positiveAdded+excludeAdded};
+}
 
 async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any) {
   const normalized=String(match?.normalized||normalizeForMatch(`${item?.title||''} ${item?.text||''}`));
@@ -2737,7 +2839,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const strongDirectMatches = directMatches.filter(term=>!ambiguousDirectMatches.includes(term));
   const azerbaijanContext = /(?:azerbaycan|azərbaycan|baki|bakı|qarabag|qarabağ|adsea|meliorasiya|suvarma|su techizati|su təchizatı)/.test(normalized);
   const ambiguousDirectSafe = ambiguousDirectMatches.length>0 && (locationHit || (coreTopicHit && azerbaijanContext));
-  const hardForeignScript = /[\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(`${item.title||''} ${item.text||''}`);
+  const hardForeignScript = /[\u0370-\u03FF\u0590-\u05FF\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(`${item.title||''} ${item.text||''}`);
   const foreignScriptRejected = !webLike && hardForeignScript && strongDirectMatches.length===0 && !locationHit && !coreTopicHit && !azerbaijanContext;
 
   const accepted = !ownPortalNoise && !excludedByRule && !foreignScriptRejected && (trustedParentComment || (!negativeOnly && !foreignHit && (
