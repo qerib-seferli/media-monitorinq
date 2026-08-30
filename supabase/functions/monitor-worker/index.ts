@@ -4,7 +4,7 @@ import { corsHeaders } from '../_shared/cors.ts';
 type Item = { title?:string; text?:string; url?:string; published_at?:string|null; image?:string|null; author?:string|null; raw?:unknown };
 type DiagnosticError = { stage:string; organization?:string|null; source?:string|null; message:string; code?:string|null; status?:number|null };
 
-const RUN_BUDGET_MS = 48000;
+const RUN_BUDGET_MS = 42000;
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok',{headers:corsHeaders});
@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
       return json({ok:false,run_id:runId,stage:currentStage,failures:1,errors:[{stage:currentStage,...errorInfo(err)}],details},200);
     }
     let orgs = Array.isArray(orgResult.data) ? orgResult.data : [];
-    if (!requestedOrganizationId && options.include_archived) {
+    if (!requestedOrganizationId && (options.include_archived || options.organization_batch > 0)) {
       orgs = rotateOrganizationBatch(orgs, options.organization_shard_count, options.organization_shard_index, options.organization_batch, options.organization_rotation_bucket);
     }
 
@@ -345,6 +345,7 @@ Deno.serve(async (req) => {
       const acceptedItems:Item[] = [];
       for (const item of dedupeItems(options.news_items || []).slice(0,250)) {
         const match = evaluateMatch(org,item,lowerKeywords,villageNames);
+        if (!match.accepted) await autoLearnKeywordBank(admin,org,item,match);
         if (match.accepted) accepted++; else rejected++;
         if (samples.length < 10) samples.push({title:item.title || '',url:item.url || '',accepted:match.accepted,reason:match.reason,matched_terms:match.matches});
         if (!match.accepted) continue;
@@ -2108,6 +2109,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   const normalized = match.normalized;
   const direct = match.direct;
   const matches = match.matches;
+  const autoLearned=await autoLearnKeywordBank(admin,org,item,match);
   if (!match.accepted) return 0;
 
   const negativeWords = ['sikayet','problem','su yoxdur','su gelmir','verilmir','quruyur','narazi','etiraz','catismazliq','susuz','kanal temizlenmir'];
@@ -2170,7 +2172,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
       raw_payload:{
         ...((existing as any)?.raw_payload || {}),
         ...(item.raw || item),
-        monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches}
+        monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
+        ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{})
       }
     };
     if (item.author) refresh.author_name=item.author;
@@ -2205,7 +2208,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     content_hash:hash,
     raw_payload:{
       ...(item.raw || item),
-      monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches}
+      monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
+      ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{})
     },
     source_status:'active',
     last_seen_at:new Date().toISOString(),
@@ -2382,6 +2386,61 @@ function debugSamples(items:Item[], org:any, keywords:string[], villages:string[
       reason:match.reason
     };
   });
+}
+
+
+// Təhlükəsiz özünü-təkmilləşdirmə: sistem yalnız yüksək etibarlı, əvvəlcədən qorunan
+// su/meliorasiya frazalarını müsbət banka və açıq-aşkar əlaqəsiz frazaları exclude
+// bankına avtomatik əlavə edir. Rayon adı, təşkilat akronimi və "su" kimi geniş tək
+// sözlər heç vaxt avtomatik öyrənilmir; bununla bankın öz-özünü zəhərləməsinin qarşısı alınır.
+const AUTO_LEARN_POSITIVE_PHRASES = [
+  'içməli su','su təchizatı','suvarma kanalı','suvarma sistemi','suvarma suyu',
+  'subartezian quyusu','artezian quyusu','nasos stansiyası','kanalizasiya xətti',
+  'su xətti','su kəməri','su anbarı','kollektor drenaj','drenaj sistemi',
+  'suvarma mövsümü','suvarma qrafiki','su çatışmazlığı','su verilmir','su gəlmir',
+  'kanal təmizlənməsi','arx təmizlənməsi','quyu təmiri','su qəzası','qəza bərpa'
+];
+const AUTO_LEARN_EXCLUDE_PHRASES = [
+  'haryanvi song','haryanvi songs','bhojpuri song','punjabi song','dance video','music video',
+  'official music video','viral short','youtube shorts','mini vlog','daily vlog','travel vlog',
+  'football match','football highlights','soccer match','basketball match','gaming video','gameplay',
+  'movie trailer','film trailer','serial episode','celebrity news','stock market','forex trading',
+  'smartphone review','car review','recipe video','cooking recipe','narkotik vasitə','narkotik maddə',
+  'marşrutun hərəkət sxemi','nəqliyyat vasitələrinin hərəkəti','ayna dan verilən məlumata görə',
+  'iş elanları','vakansiya elanı','daşınmaz əmlak','ev satılır','kirayə ev'
+];
+
+async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any) {
+  const normalized=String(match?.normalized||normalizeForMatch(`${item?.title||''} ${item?.text||''}`));
+  if(!normalized) return null;
+  const globalPositive=new Set((Array.isArray(org.__normalized_global_keywords)?org.__normalized_global_keywords:[]).map(String));
+  const excludes=new Set((Array.isArray(org.__normalized_excludes)?org.__normalized_excludes:[]).map(String));
+  const positiveCandidate=match?.accepted
+    ? AUTO_LEARN_POSITIVE_PHRASES.find(value=>normalized.includes(normalizeForMatch(value)))
+    : null;
+  const excludeCandidate=!match?.accepted
+    ? AUTO_LEARN_EXCLUDE_PHRASES.find(value=>normalized.includes(normalizeForMatch(value)))
+    : null;
+  const value=positiveCandidate||excludeCandidate;
+  if(!value) return null;
+  const kind=positiveCandidate?'phrase':'exclude';
+  const normalizedValue=normalizeForMatch(value);
+  if((kind==='phrase' && globalPositive.has(normalizedValue)) || (kind==='exclude' && excludes.has(normalizedValue))) return null;
+  try{
+    const insert:any=await admin.from('keywords').insert({organization_id:null,value,kind,is_active:true});
+    if(insert?.error && String(insert.error?.code||'')!=='23505') throw insert.error;
+    if(kind==='phrase'){
+      org.__normalized_global_keywords=[...globalPositive,normalizedValue];
+      org.__normalized_keywords=[...new Set([...(Array.isArray(org.__normalized_keywords)?org.__normalized_keywords:[]),normalizedValue])];
+    }else{
+      org.__normalized_excludes=[...excludes,normalizedValue];
+      org.__exclude_terms=[...new Set([...(Array.isArray(org.__exclude_terms)?org.__exclude_terms:[]),value])];
+    }
+    return {kind,value};
+  }catch(e){
+    console.error('auto-keyword-learning',org?.short_name||org?.id||'',value,errorInfo(e));
+    return null;
+  }
 }
 
 function flexibleKeywordMatch(normalizedText:string, normalizedTerm:string) {

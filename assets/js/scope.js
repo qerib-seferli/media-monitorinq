@@ -28,8 +28,10 @@ const BUILTIN_NOISE=[
   'haryanvi song','dance video','music video','full video','viralshort','viral short','youtube shorts','shortvideo',
   'minivlog','mini vlog','daily vlog','travel vlog','gaming','gameplay','football match','football highlights','kuboku',
   'concert','konsert','movie trailer','film trailer','serial episode','makeup tutorial','fashion show','cute baby',
-  'dj remix','remix song','new song','romantic song','love song','stock market','cryptocurrency','forex trading',
-  'casino','betting','unboxing','smartphone review','car review','recipe video','cooking recipe'
+  'dj remix','remix song','new song','romantic song','love song','haryanvi','bhojpuri','punjabi song','official song',
+  'stock market','cryptocurrency','forex trading','casino','betting','unboxing','smartphone review','car review','recipe video','cooking recipe',
+  'football','soccer','cup match','kuboku','vlog','shorts','viral','rock music','concert hall',
+  'narkotik vasitə','narkotik maddə','marşrutun hərəkət sxemi','nəqliyyat vasitələrinin hərəkəti','ayna nəqliyyat'
 ].map(fold);
 const WATER_SIGNAL_RE=/(?:suvar|melior|subartez|artez|drenaj|kollektor|irriq|sukanal|su təchiz|su techiz|içməli su|icmeli su|kanalizasiya|nasos stans|su anbar|su xətti|su xetti|quyu təmir|quyu temir)/i;
 const HARD_FOREIGN_SCRIPT_RE=/[\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u;
@@ -60,8 +62,12 @@ export function youtubeVideoId(row){
 }
 export function mentionPreviewUrl(row){
   const media=Array.isArray(row?.mention_media)?row.mention_media:[];
-  const ranked=[...media].filter(x=>x?.url).sort((a,b)=>({preview:0,screenshot:1,preview_external:2}[String(a?.media_type||'').toLowerCase()]??9)-({preview:0,screenshot:1,preview_external:2}[String(b?.media_type||'').toLowerCase()]??9));
+  const ranked=[...media].filter(x=>x?.url).sort((a,b)=>({preview_external:0,preview:1,screenshot:2}[String(a?.media_type||'').toLowerCase()]??9)-({preview_external:0,preview:1,screenshot:2}[String(b?.media_type||'').toLowerCase()]??9));
   if(ranked[0]?.url) return ranked[0].url;
+  // Xəbər şəkli Supabase Storage-a kopyalanmır: orijinal CDN URL-i istifadə olunur.
+  // Bu, şəkil egressini ciddi azaldır; screenshot yalnız həqiqətən lazım olanda arxivlənir.
+  const external=String(row?.raw_payload?.image_url||row?.raw_payload?.image||'').trim();
+  if(/^https?:\/\//i.test(external)) return external;
   if(String(row?.source_platform||'').toLowerCase().includes('youtube')){const id=youtubeVideoId(row);if(id)return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;}
   return './assets/img/icon.svg';
 }

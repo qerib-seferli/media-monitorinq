@@ -78,7 +78,7 @@ function primaryMediaUrl(m){return mentionPreviewUrl(m);}
 function mediaImg(url,cls='detail-media'){return `<img src=\"${url}\" data-media=\"${url}\" class=\"${cls}\" alt=\"Media\" loading=\"lazy\" onerror=\"this.closest('figure')?.classList.add('media-load-error')\">`;}
 function card(m){
   const comment=isComment(m);
-  return `<article class="mention-card${comment?' is-comment':''}"><img class="thumb" src="${primaryMediaUrl(m)}" alt=""><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.original_text||m.summary||'')}</p><div class="mention-meta">${isCentralScope(ctx.profile)&&m.organizations?.short_name?`<span class="badge ok">${escapeHtml(m.organizations.short_name)}</span>`:''}<span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${comment?'<span class="badge comment-badge">✉ Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${fmtDate(publishedDate(m))}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
+  return `<article class="mention-card${comment?' is-comment':''}"><img class="thumb" src="${primaryMediaUrl(m)}" alt="" loading="lazy"><div><h3>${escapeHtml(m.title||'Monitorinq qeydi')}</h3><p>${escapeHtml(m.original_text||m.summary||'')}</p><div class="mention-meta">${isCentralScope(ctx.profile)&&m.organizations?.short_name?`<span class="badge ok">${escapeHtml(m.organizations.short_name)}</span>`:''}<span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${comment?'<span class="badge comment-badge">✉ Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${fmtDate(publishedDate(m))}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
 }
 function render(append=false){
   if(!append) list.innerHTML='';
@@ -92,23 +92,25 @@ async function load({reset=false}={}){
   const token=requestToken; const range=dateRange(); if(!range) return;
   loading=true; sentinel.classList.add('loading');
   try{
-    const before=rows.length;
-    let safety=0;
-    while(!done && rows.length-before<PAGE_SIZE && safety<6){
-      const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
-      let q=supabase.from('mentions').select('*, organizations(short_name), districts(name), villages(name), mention_media(*)')
-        .gt('relevance_score',0)
-        .or(`and(published_at.gte.${range.from},published_at.lte.${range.to}),and(published_at.is.null,detected_at.gte.${range.from},detected_at.lte.${range.to})`)
-        .order('published_at',{ascending:false,nullsFirst:false})
-        .order('detected_at',{ascending:false}).range(from,to);
-      q=applyOrganizationScope(q,ctx.profile,organizationFilter?.value||'');
-      if(platform.value) q=q.ilike('source_platform',platform.value);
-      if(sentiment.value) q=q.eq('sentiment',sentiment.value);
-      if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
-      const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
-      const batch=filterExcludedMentions(data||[],globalExcludes); rows=mergeUnique(rows,batch); done=batch.length<PAGE_SIZE; page++; safety++;
-      if(!batch.length)break;
-    }
+    // Egress qoruması: hər frontend sorğusunda Supabase-dən maksimum 50 qeyd gəlir.
+    // Əvvəl filtrdən sonra 50 görünən nəticə toplamaq üçün bir çağırışda 6 səhifəyədək
+    // (300 sətir) yüklənə bilirdi. İndi növbəti 50 yalnız istifadəçi aşağı sürüşəndə gəlir.
+    const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
+    let q=supabase.from('mentions').select('id,title,summary,original_text,source_platform,source_url,author_name,priority_score,relevance_score,sentiment,published_at,detected_at,source_status,raw_payload,organization_id,district_id,village_id,organizations(short_name),districts(name),villages(name),mention_media(url,media_type,captured_at)')
+      .gt('relevance_score',0)
+      .or(`and(published_at.gte.${range.from},published_at.lte.${range.to}),and(published_at.is.null,detected_at.gte.${range.from},detected_at.lte.${range.to})`)
+      .order('published_at',{ascending:false,nullsFirst:false})
+      .order('detected_at',{ascending:false}).range(from,to);
+    q=applyOrganizationScope(q,ctx.profile,organizationFilter?.value||'');
+    if(platform.value) q=q.ilike('source_platform',platform.value);
+    if(sentiment.value) q=q.eq('sentiment',sentiment.value);
+    if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
+    const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
+    const rawBatch=data||[];
+    const batch=filterExcludedMentions(rawBatch,globalExcludes);
+    rows=mergeUnique(rows,batch);
+    done=rawBatch.length<PAGE_SIZE;
+    page++;
     render(true);
   }catch(e){ if(!rows.length) list.innerHTML=`<div class="empty">${escapeHtml(e.message||String(e))}</div>`; else toast(e,'error'); }
   finally{loading=false;sentinel.classList.remove('loading');}

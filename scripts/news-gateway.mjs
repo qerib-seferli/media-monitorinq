@@ -29,7 +29,7 @@ const FAST_LINK_LIMIT = Math.max(4, Math.min(20, Number(process.env.NEWS_FAST_LI
 const FAST_FEED_LIMIT = Math.max(4, Math.min(20, Number(process.env.NEWS_FAST_FEED_LIMIT || 10)));
 const MAX_INGEST_ITEMS = Math.max(20, Math.min(400, Number(process.env.NEWS_MAX_INGEST_ITEMS || (DIRECT_ONLY ? 90 : 160))));
 const MAX_ENRICH_ITEMS = Math.max(2, Math.min(24, Number(process.env.NEWS_MAX_ENRICH_ITEMS || (DIRECT_ONLY ? 8 : 12))));
-const MAX_SCREENSHOTS = Math.max(1, Math.min(12, Number(process.env.NEWS_MAX_SCREENSHOTS || (DIRECT_ONLY ? 3 : 5))));
+const MAX_SCREENSHOTS = Math.max(0, Math.min(12, Number(process.env.NEWS_MAX_SCREENSHOTS ?? (DIRECT_ONLY ? 3 : 5))));
 const SITEMAP_FOCUS = ['1','true','yes'].includes(String(process.env.NEWS_SITEMAP_FOCUS || '').toLowerCase());
 const SITEMAP_INDEX_LIMIT = Math.max(2, Math.min(20, Number(process.env.NEWS_SITEMAP_INDEX_LIMIT || (RECENT_PRIORITY ? 10 : DEEP_BACKFILL ? 8 : 5))));
 const SITEMAP_URL_LIMIT = Math.max(40, Math.min(1200, Number(process.env.NEWS_SITEMAP_URL_LIMIT || (RECENT_PRIORITY ? 700 : DEEP_BACKFILL ? 450 : 140))));
@@ -490,12 +490,14 @@ async function captureScreenshot(target) {
   const chrome=findChrome();
   if (!chrome || !target?.url) return null;
   const file=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
-  const args=['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--window-size=1440,2400','--force-device-scale-factor=0.8',`--screenshot=${file}`,target.url];
+  // Arxiv screenshot-u tam səhifə 1440x2400 PNG əvəzinə daha yüngül ölçüdə çəkilir.
+  // Mətn oxunaqlılığı qalır, Storage və egress ölçüsü xeyli azalır.
+  const args=['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--window-size=1024,1600','--force-device-scale-factor=0.65',`--screenshot=${file}`,target.url];
   const r=spawnSync(chrome,args,{encoding:'utf8',timeout:25000});
   if (r.status!==0 || !existsSync(file)) return null;
   try {
     const base64=readFileSync(file).toString('base64');
-    if (base64.length > 3_800_000) return null;
+    if (base64.length > 2_400_000) return null;
     return {base64,mime_type:'image/png'};
   } finally { try{unlinkSync(file)}catch{} }
 }
@@ -1160,18 +1162,14 @@ for (const org of plan.organizations) {
         if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);
       } catch(e) { console.log(`[${org.short_name}] Tam mətn yeniləmə xətası: ${e?.message||e}`); }
 
-      let archivedImage=false;
-      if(enriched.image){
-        const media=await fetchBinaryBase64(enriched.image);
-        if(media){
-          try{
-            const saved=await callMonitor({mode:'news_media',organization_id:org.id,source_url:target.url,image_base64:media.base64,mime_type:media.mime_type,media_type:'preview'});
-            archivedImage=Boolean(saved?.ok && (saved?.saved || saved?.skipped==='already-exists'));
-            console.log(`[${org.short_name}] Xəbər şəkli: ${archivedImage?'SAXLANDI':'buraxıldı'} | ${String(enriched.title||target.title||'').slice(0,100)}`);
-          }catch(e){console.log(`[${org.short_name}] Xəbər şəkli upload xətası: ${e?.message||e}`);}
-        }
+      // Egress optimizasiyası: əsas xəbər şəklini Supabase Storage-a kopyalamırıq.
+      // news_enrich artıq image_url-u raw_payload-da saxlayır və frontend həmin orijinal
+      // CDN URL-ni birbaşa göstərir. Beləliklə hər baxış Supabase egress xərcləmir.
+      const hasExternalPreview=Boolean(enriched.image);
+      if(hasExternalPreview){
+        console.log(`[${org.short_name}] Xəbər şəkli: XARİCİ CDN | ${String(enriched.title||target.title||'').slice(0,100)}`);
       }
-      if(!archivedImage) screenshotFallback.push({...target,title:enriched.title||target.title||'',original_url:target.url,capture_url:enriched.raw?.canonical_url||target.url,url:target.url});
+      if(!hasExternalPreview) screenshotFallback.push({...target,title:enriched.title||target.title||'',original_url:target.url,capture_url:enriched.raw?.canonical_url||target.url,url:target.url});
     }
 
     // Xəbər şəkli yoxdursa arxiv screenshot saxlanılır. Hər run-da limit var; növbəti run

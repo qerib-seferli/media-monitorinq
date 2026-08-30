@@ -470,9 +470,9 @@ async function renderRelevanceReview(){
   const {data,error}=await supabase.from('mentions')
     .select('id,title,summary,original_text,raw_payload,source_platform,relevance_score,published_at,detected_at,organizations(short_name)')
     .gt('relevance_score',0).lte('relevance_score',75)
-    .order('detected_at',{ascending:false}).limit(220);
+    .order('detected_at',{ascending:false}).limit(80);
   if(error){el.innerHTML=`<div class="empty compact">${escapeHtml(error.message)}</div>`;return;}
-  const rows=(data||[]).filter(row=>!isMentionExcluded(row,excludes) && !['kept','ignored'].includes(String(row?.raw_payload?.admin_review_status||''))).slice(0,24);
+  const rows=(data||[]).filter(row=>!isMentionExcluded(row,excludes) && !['kept','ignored','auto-kept','auto-blocked'].includes(String(row?.raw_payload?.admin_review_status||''))).slice(0,24);
   if(!rows.length){el.innerHTML='<div class="empty compact">Hazırda ayrıca yoxlanmalı material yoxdur.</div>';return;}
   el.innerHTML=rows.map(row=>{
     const term=suggestedReviewTerm(row);
