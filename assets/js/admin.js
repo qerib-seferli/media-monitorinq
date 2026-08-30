@@ -420,24 +420,47 @@ function renderAliases() {
 }
 
 const REVIEW_NOISE_RULES = [
-  ['marşrut','marşrut'],['avtobus','avtobus'],['nəqliyyat vasitəsi','nəqliyyat vasitəsi'],['metro','metro'],
+  ['haryanvi song','haryanvi song'],['dance video','dance video'],['music video','music video'],['full video','full video'],
+  ['viralshort','viralshort'],['viral short','viral short'],['minivlog','minivlog'],['daily vlog','daily vlog'],['vlog','vlog'],
+  ['marşrut','marşrut'],['avtobus','avtobus'],['ictimai nəqliyyat','ictimai nəqliyyat'],['metro','metro'],
   ['futbol','futbol'],['çempionat','çempionat'],['premyer liqa','premyer liqa'],['transfer','transfer'],['basketbol','basketbol'],
   ['bank','bank'],['kredit','kredit'],['valyuta','valyuta'],['birja','birja'],['sığorta','sığorta'],
-  ['hava proqnozu','hava proqnozu'],['külək','külək'],['yağış yağacaq','yağış yağacaq'],
-  ['qətl','qətl'],['cinayət','cinayət'],['saxlanılıb','saxlanılıb'],['həbs','həbs'],
+  ['hava proqnozu','hava proqnozu'],['qətl','qətl'],['cinayət','cinayət'],['saxlanılıb','saxlanılıb'],['həbs','həbs'],
   ['universitet','universitet'],['imtahan','imtahan'],['konsert','konsert'],['film','film'],['serial','serial'],
-  ['telefon','telefon'],['smartfon','smartfon'],['avtomobil','avtomobil'],['restoran','restoran'],['toy','toy'],['moda','moda']
+  ['telefon','telefon'],['smartfon','smartfon'],['restoran','restoran'],['toy','toy'],['moda','moda']
+];
+const REVIEW_WATER_PHRASES = [
+  'subartezian quyusu','artezian quyusu','suvarma kanalı','suvarma sistemi','suvarma suyu',
+  'meliorasiya sistemi','kollektor drenaj','drenaj sistemi','nasos stansiyası','içməli su',
+  'su təchizatı','su xətti','kanalizasiya xətti','tullantı su','su anbarı','suvarma mövsümü',
+  'kanal təmizlənməsi','arx təmizlənməsi','su çatışmazlığı'
 ];
 const REVIEW_WATER_RE = /\b(su|sukanal|melior|suvar|kanal|kollektor|drenaj|subartez|artezian|quyu|nasos|hidroqov|bənd|anbar|irriqasiya|içməli|kanalizasiya|tullantı su|su təchizatı)\b/i;
+const REVIEW_PROTECTED = new Set([
+  'su','kanal','rayon','rayonu','bərdə','berde','goranboy','ağdam','agdam','tərtər','terter',
+  'adsea','smsii','rsmx','isst','isbtx','simdnx','sdnx','smeti','smkli','toom','meliorasiya','suvarma'
+].map(x=>String(x).toLocaleLowerCase('az-AZ')));
 function reviewFold(v=''){return String(v||'').toLocaleLowerCase('az-AZ').normalize('NFKC').replace(/\s+/g,' ').trim();}
-function suggestedNoiseTerm(row){
+function organizationTokens(row){
+  return reviewFold(row?.organizations?.short_name||'').split(/\s+/).filter(x=>x.length>=3);
+}
+function isProtectedReviewTerm(term,row){
+  const t=reviewFold(term);
+  if(!t) return true;
+  if(t.split(/\s+/).length>1) return false;
+  return REVIEW_PROTECTED.has(t) || organizationTokens(row).includes(t);
+}
+function suggestedReviewTerm(row){
   const hay=reviewFold([row?.title,row?.summary,row?.original_text].filter(Boolean).join(' '));
-  const hit=REVIEW_NOISE_RULES.find(([needle])=>hay.includes(needle));
-  if(hit) return hit[1];
+  const water=REVIEW_WATER_PHRASES.find(x=>hay.includes(reviewFold(x)));
+  const noise=REVIEW_NOISE_RULES.find(([needle])=>hay.includes(needle));
+  if(water) return water;
+  if(noise) return noise[1];
   const title=reviewFold(row?.title||'').replace(/[^\p{L}\p{N}\s-]/gu,' ');
-  const stop=new Set(['bakıda','baki','rayonu','rayonunda','şəhərində','şəhəri','haqqında','üçün','olan','ilə','və','bir','bu','yeni','edib','edildi','olub','var']);
+  const stop=new Set(['bakıda','baki','rayonu','rayonunda','şəhərində','şəhəri','haqqında','üçün','olan','ilə','və','bir','bu','yeni','edib','edildi','olub','var',...organizationTokens(row)]);
   const words=title.split(/\s+/).filter(x=>x.length>=5&&!stop.has(x)&&!REVIEW_WATER_RE.test(x));
-  return words[0] || '';
+  const pair=words.slice(0,2).join(' ');
+  return pair || words[0] || '';
 }
 async function renderRelevanceReview(){
   const el=document.querySelector('#relevance-review-list');
@@ -446,24 +469,44 @@ async function renderRelevanceReview(){
   const excludes=await loadGlobalExcludes();
   const {data,error}=await supabase.from('mentions')
     .select('id,title,summary,original_text,source_platform,relevance_score,published_at,detected_at,organizations(short_name)')
-    .gt('relevance_score',0).lte('relevance_score',60)
-    .order('detected_at',{ascending:false}).limit(160);
+    .gt('relevance_score',0).lte('relevance_score',75)
+    .order('detected_at',{ascending:false}).limit(220);
   if(error){el.innerHTML=`<div class="empty compact">${escapeHtml(error.message)}</div>`;return;}
-  const rows=(data||[]).filter(row=>{
-    if(isMentionExcluded(row,excludes)) return false;
-    const hay=reviewFold([row.title,row.summary,row.original_text].filter(Boolean).join(' '));
-    return REVIEW_NOISE_RULES.some(([needle])=>hay.includes(needle)) || !REVIEW_WATER_RE.test(hay);
-  }).slice(0,18);
-  if(!rows.length){el.innerHTML='<div class="empty compact">Hazırda ayrıca yoxlanmalı şübhəli material yoxdur.</div>';return;}
+  const rows=(data||[]).filter(row=>!isMentionExcluded(row,excludes)).slice(0,24);
+  if(!rows.length){el.innerHTML='<div class="empty compact">Hazırda ayrıca yoxlanmalı material yoxdur.</div>';return;}
   el.innerHTML=rows.map(row=>{
-    const term=suggestedNoiseTerm(row);
+    const term=suggestedReviewTerm(row);
     const body=row.original_text||row.summary||'Əlavə mətn yoxdur.';
-    return `<details class="relevance-review-item" data-review-id="${row.id}"><summary><span class="review-title"><strong>${escapeHtml(row.title||'Adsız material')}</strong><small>${escapeHtml(row.organizations?.short_name||'Qlobal')} • ${escapeHtml(row.source_platform||'Web')} • ${Number(row.relevance_score||0)}% • ${fmtDate(row.published_at||row.detected_at)}</small></span><span class="review-chevron">⌄</span></summary><div class="review-body"><p>${escapeHtml(body)}</p><div class="review-action-row"><div class="field"><label>Təklif olunan qlobal filtr sözü / frazası</label><input class="input" data-review-term value="${escapeHtml(term)}" placeholder="Məs: marşrut"></div><button class="btn danger" type="button" data-review-block="${row.id}">Gərəksiz kimi blokla</button></div></div></details>`;
+    return `<details class="relevance-review-item" data-review-id="${row.id}"><summary><span class="review-title"><strong>${escapeHtml(row.title||'Adsız material')}</strong><small>${escapeHtml(row.organizations?.short_name||'Qlobal')} • ${escapeHtml(row.source_platform||'Web')} • ${Number(row.relevance_score||0)}% • ${fmtDate(row.published_at||row.detected_at)}</small></span><span class="review-chevron">⌄</span></summary><div class="review-body"><p>${escapeHtml(body)}</p><div class="review-action-row"><div class="field"><label>Təklif olunan qlobal söz / fraza</label><input class="input" data-review-term value="${escapeHtml(term)}" placeholder="Məs: subartezian quyusu"></div><div class="review-action-buttons"><button class="btn success" type="button" data-review-keep="${row.id}">Gərəkli kimi əlavə et</button><button class="btn danger" type="button" data-review-block="${row.id}">Gərəksiz kimi blokla</button></div></div></div></details>`;
   }).join('');
+
+  el.querySelectorAll('[data-review-keep]').forEach(btn=>btn.addEventListener('click',async()=>{
+    const item=btn.closest('[data-review-id]');
+    const row=(data||[]).find(x=>String(x.id)===String(btn.dataset.reviewKeep));
+    const term=item?.querySelector('[data-review-term]')?.value?.trim()||'';
+    if(term.length<3) return toast('Açar söz ən az 3 simvol olmalıdır.','error');
+    if(isProtectedReviewTerm(term,row) && term.split(/\s+/).length===1) return toast('Rayon/təşkilat adını tək söz kimi əlavə etmə. Daha konkret mövzu frazası yaz.','error');
+    const ok=await confirmDialog({title:'Gərəkli açar söz əlavə edilsin?',message:`“${term}” qlobal Monitorinq açar sözləri bankına əlavə ediləcək.`,confirmText:'Bəli, əlavə et',cancelText:'Xeyr'});
+    if(!ok) return;
+    btn.disabled=true;
+    const existing=await supabase.from('keywords').select('id').is('organization_id',null).eq('kind','phrase').ilike('value',term).limit(1).maybeSingle();
+    let insertError=null;
+    if(!existing.data){
+      const res=await supabase.from('keywords').insert({organization_id:null,value:term,kind:'phrase',is_active:true});
+      insertError=res.error;
+    }
+    btn.disabled=false;
+    if(insertError && insertError.code!=='23505') return toast(insertError.message,'error');
+    toast(`“${term}” qlobal monitorinq açar sözlərinə əlavə edildi.`,'success');
+    await loadKeywordStats(); renderKeywords();
+  }));
+
   el.querySelectorAll('[data-review-block]').forEach(btn=>btn.addEventListener('click',async()=>{
     const item=btn.closest('[data-review-id]');
+    const row=(data||[]).find(x=>String(x.id)===String(btn.dataset.reviewBlock));
     const term=item?.querySelector('[data-review-term]')?.value?.trim()||'';
     if(term.length<3) return toast('Filtr sözü ən az 3 simvol olmalıdır.','error');
+    if(isProtectedReviewTerm(term,row)) return toast('Bu söz rayon/təşkilat/mövzu üçün qorunan sözdür. Təkcə bunu bloklamaq düzgün nəticələri də gizlədə bilər; daha konkret əlaqəsiz fraza yaz.','error');
     const ok=await confirmDialog({title:'Gərəksiz material bloklansın?',message:`“${term}” qlobal Axtarılmamalı sözlər bankına əlavə ediləcək və bu material uyğun olmayan qeyd kimi gizlədiləcək.`,confirmText:'Bəli, blokla',cancelText:'Xeyr',tone:'danger'});
     if(!ok) return;
     btn.disabled=true;
@@ -482,7 +525,6 @@ async function renderRelevanceReview(){
     await loadKeywordStats(); renderKeywords(); renderRelevanceReview();
   }));
 }
-
 
 function auditActor(row) {
   const actor = users.find(u => u.id === row.actor_profile_id || u.auth_user_id === row.actor_profile_id);

@@ -59,7 +59,7 @@ if (error) toast(error,'error');
 rows = data || [];
 const ids=[...new Set(rows.map(x=>x.mention_id).filter(Boolean))];
 if(ids.length){
-  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,source_url').in('id',ids);
+  const {data:mentions=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,source_url,organizations(short_name)').in('id',ids);
   mentionMap=new Map(mentions.map(x=>[x.id,x]));
 }
 const ownPortalNoise=m=>{try{const u=new URL(String(m?.source_url||''));const host=u.hostname.replace(/^www\./i,'').toLowerCase();const path=u.pathname.replace(/\/+$/,'')||'/';return /smsii\.az$/i.test(host)&&(path==='/'||path==='/index.html');}catch{return false;}};

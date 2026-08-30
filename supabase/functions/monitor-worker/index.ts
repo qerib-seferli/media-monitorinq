@@ -2437,11 +2437,33 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'futbol','idman yarışı','affa','region liqası','futbol liqası','futbol oyunu','konsert','şou','serial','film treyleri','restoran','otel',
     'it','pişik','heyvan bazarı','daşınmaz əmlak','ev satılır','kirayə ev','iş elanları',
     'yol qəzası','avtomobil qəzası','oğurluq','hava proqnozu',
-    'balıq ovu','qadağan olunmuş balıqçılıq','brakonyerlik'
+    'balıq ovu','qadağan olunmuş balıqçılıq','brakonyerlik',
+    'haryanvi song','haryanvi songs','dance video','music video','full video','official video','lyrical video',
+    'viralshort','viral short','youtube shorts','shortvideo','minivlog','mini vlog','daily vlog','travel vlog','beauty vlog',
+    'makeup tutorial','fashion show','cute baby','baby video','funny video','comedy video','prank video','reaction video',
+    'gaming video','gameplay','free fire','pubg','minecraft','football highlights','football match','soccer match','basketball match',
+    'concert hall songs','dj remix','remix song','new song','latest song','romantic song','love song','wedding song',
+    'box office','movie trailer','film trailer','episode full','serial episode','celebrity news','horoscope',
+    'stock market','crypto currency','cryptocurrency','forex trading','betting','casino','lottery result',
+    'mobile review','smartphone review','unboxing','car review','bike review','recipe video','cooking recipe',
+    'school vlog','college vlog','exam result','job vacancy','vacancy announcement'
   ].map(normalizeForMatch).filter(Boolean);
 
   const district = normalizeForMatch(String(org.districts?.name || ''));
   const villageTerms = villages.map(normalizeForMatch).filter(term=>term.length >= 4);
+
+  // Rayon/təşkilat adları və əsas su-meliorasiya terminləri qlobal exclude bankına
+  // səhvən əlavə olunsa belə düzgün materialları bloklamasın.
+  const protectedExcludeTerms = new Set([
+    district,
+    'su','sukanal','suvarma','meliorasiya','kanalizasiya','kollektor','drenaj',
+    'subartezian','artezian','irriqasiya','nasos','quyu','su techizati',
+    'adsea','smsii','rsmx','isst','isbtx','simdnx','sdnx','smeti','smkli','toom'
+  ].map(normalizeForMatch).filter(Boolean));
+  for (const name of direct) {
+    for (const token of String(name||'').split(/\s+/).filter((x:string)=>x.length>=3)) protectedExcludeTerms.add(token);
+  }
+  const effectiveExcludeTerms = excludeTerms.filter(term=>!protectedExcludeTerms.has(term));
 
   const contains=(text:string,term:string)=>Boolean(term && (` ${text} `).includes(` ${term} `));
   const directMatches = direct.filter(term=>term.length >= 4 && contains(normalized,term));
@@ -2525,7 +2547,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // Tək sözlü filtrlərdə isə yalnız söz sərhədi / təhlükəsiz kök uyğunluğu tətbiq olunur
   // ki, qısa bir filtr təsadüfən başqa sözün içində tapılıb düzgün xəbəri silməsin.
   const flexibleExcludeMatches = webLike
-    ? excludeTerms.map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12)
+    ? effectiveExcludeTerms.map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12)
     : [];
   const flexibleExcludeHits = flexibleExcludeMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
 
@@ -2565,7 +2587,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     ? (coreTopicHit || globalTopicHit)
     : (coreTopicHit || globalTopicHit || scopedKeywordHits.length>0 || organizationBankKeywordHits.length>0 || flexibleBankHits.length>0);
 
-  const exactExclusionHits = excludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
+  const exactExclusionHits = effectiveExcludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
   const exclusionHits = [...new Set([...exactExclusionHits,...flexibleExcludeHits])].slice(0,12);
 
   // Web üçün axtarılmamalı filtr sərt veto-dur: müsbət açar söz və ya rayon adı
@@ -2630,8 +2652,22 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // rayon/təşkilat siqnalı olduqda əlavə qəbul səbəbi yaradır.
   const historicalQueryTopicHit = historicalScopedQuery && coreTopicHit && (locationHit || directMatches.length>0);
 
-  const accepted = !ownPortalNoise && !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
-    directMatches.length>0 ||
+  // TOOM/SMKLİ/YQKİİ kimi qısa akronimlər dünya üzrə başqa videolarda təsadüfən
+  // işlənə bilir. Tək akronim artıq güclü təşkilat siqnalı sayılmır; yanında Azərbaycan,
+  // rayon və ya real su-meliorasiya konteksti tələb olunur.
+  const ambiguousDirectMatches = directMatches.filter(term=>{
+    const compact=String(term||'').replace(/\s+/g,'');
+    return /^[a-z0-9]+$/.test(compact) && compact.length<=6;
+  });
+  const strongDirectMatches = directMatches.filter(term=>!ambiguousDirectMatches.includes(term));
+  const azerbaijanContext = /(?:azerbaycan|azərbaycan|baki|bakı|qarabag|qarabağ|adsea|meliorasiya|suvarma|su techizati|su təchizatı)/.test(normalized);
+  const ambiguousDirectSafe = ambiguousDirectMatches.length>0 && (locationHit || coreTopicHit || azerbaijanContext);
+  const hardForeignScript = /[\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(`${item.title||''} ${item.text||''}`);
+  const foreignScriptRejected = !webLike && hardForeignScript && strongDirectMatches.length===0 && !locationHit && !coreTopicHit && !azerbaijanContext;
+
+  const accepted = !ownPortalNoise && !excludedByRule && !foreignScriptRejected && (trustedParentComment || (!negativeOnly && !foreignHit && (
+    strongDirectMatches.length>0 ||
+    ambiguousDirectSafe ||
     safeCuratedBankHit ||
     safeFlexibleBankHit ||
     (districtWide && locationHit && positiveTopic) ||

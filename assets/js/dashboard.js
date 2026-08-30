@@ -51,7 +51,7 @@ let notifRows=notifs||[];
 const notifIds=[...new Set(notifRows.map(x=>x.mention_id).filter(Boolean))];
 let mentionMap=new Map();
 if(notifIds.length){
-  const {data:linked=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name').in('id',notifIds);
+  const {data:linked=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,organizations(short_name)').in('id',notifIds);
   mentionMap=new Map(linked.map(x=>[x.id,x]));
 }
 notifRows=notifRows.filter(x=>!x.mention_id||(Number(mentionMap.get(x.mention_id)?.relevance_score||0)>0&&!isMentionExcluded(mentionMap.get(x.mention_id),results.excludes))).sort((a,b)=>new Date(mentionMap.get(b.mention_id)?.published_at||b.created_at||0)-new Date(mentionMap.get(a.mention_id)?.published_at||a.created_at||0)).slice(0,5);

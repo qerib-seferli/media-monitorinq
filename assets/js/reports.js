@@ -31,7 +31,7 @@ function dedupeRows(data){const seen=new Set();const out=[];for(const x of data)
 async function loadBreakdown(){
   const [a,b]=rangeIso(); const out=[]; const size=1000;
   for(let page=0;page<100;page++){
-    let q=supabase.from('mentions').select('id,title,source_url,content_hash,source_platform,priority_score,sentiment,published_at,detected_at,organization_id').gt('relevance_score',0).or(`and(published_at.gte.${a},published_at.lte.${b}),and(published_at.is.null,detected_at.gte.${a},detected_at.lte.${b})`).order('published_at',{ascending:false,nullsFirst:false}).order('detected_at',{ascending:false}).range(page*size,page*size+size-1);
+    let q=supabase.from('mentions').select('id,title,source_url,content_hash,source_platform,priority_score,sentiment,published_at,detected_at,organization_id,organizations(short_name)').gt('relevance_score',0).or(`and(published_at.gte.${a},published_at.lte.${b}),and(published_at.is.null,detected_at.gte.${a},detected_at.lte.${b})`).order('published_at',{ascending:false,nullsFirst:false}).order('detected_at',{ascending:false}).range(page*size,page*size+size-1);
     q=applyOrganizationScope(q,c.profile,organizationFilter?.value||'');
     const r=await q;
     if(r.error)throw r.error; const batch=r.data||[];out.push(...batch);if(batch.length<size)break;

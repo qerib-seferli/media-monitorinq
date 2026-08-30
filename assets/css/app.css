@@ -1257,3 +1257,123 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .catalog-location-card #district-form{grid-template-columns:minmax(0,1fr) 120px!important}
   .app-confirm-actions{grid-template-columns:1fr!important}
 }
+
+/* =========================================================
+   V10 SCOPE + FORM SYMMETRY PATCH — 2026-08-30
+   Yerli təşkilatda təkrarlanan təşkilat filtrini gizlədir,
+   mərkəzi əhatədə saxlayır və boş grid sahələrini yığışdırır.
+   ========================================================= */
+.btn.success{color:#052016;background:linear-gradient(145deg,#6ee7b7,#34d399);box-shadow:0 9px 22px rgba(52,211,153,.14),inset 0 1px rgba(255,255,255,.45)}
+.review-action-buttons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:stretch}
+.review-action-buttons .btn{height:42px;min-width:170px;white-space:nowrap}
+
+/* Lokal/rayon hesabında select DOM-da qalır (sorğu scope-u üçün), amma UI-də təkrarlanmır. */
+#organization-filter.scope-filter-local.hidden{display:none!important}
+
+@media (min-width:1051px){
+  /* Yerli dashboard: yalnız iki real əməl, boş üçüncü sütun yoxdur. */
+  .dashboard-head .page-actions:has(#organization-filter.hidden){
+    grid-template-columns:repeat(2,minmax(170px,1fr))!important;
+    max-width:440px!important;
+  }
+  .dashboard-head .page-actions:has(#organization-filter.hidden) .btn{height:42px!important}
+
+  /* Yerli monitorinq: 5 filtr tam eni balanslı doldurur. */
+  .monitor-head>.monitor-filters:has(#organization-filter.hidden){
+    display:grid!important;
+    grid-template-columns:repeat(6,minmax(0,1fr))!important;
+    grid-template-areas:none!important;
+    max-width:720px!important;
+  }
+  .monitor-filters:has(#organization-filter.hidden) #period{grid-column:1/3!important;grid-row:1!important}
+  .monitor-filters:has(#organization-filter.hidden) #date-from{grid-column:3/5!important;grid-row:1!important}
+  .monitor-filters:has(#organization-filter.hidden) #date-to{grid-column:5/7!important;grid-row:1!important}
+  .monitor-filters:has(#organization-filter.hidden) #platform{grid-column:1/4!important;grid-row:2!important}
+  .monitor-filters:has(#organization-filter.hidden) #sentiment{grid-column:4/7!important;grid-row:2!important}
+
+  /* Yerli hesabat: 4 idarəetmə elementi bir sətirdə, sağa dayalı və eyni boyda. */
+  .report-toolbar:has(#organization-filter.hidden){
+    display:grid!important;
+    grid-template-columns:repeat(4,minmax(0,1fr))!important;
+    grid-template-areas:none!important;
+    max-width:760px!important;
+  }
+  .report-toolbar:has(#organization-filter.hidden) #report-period{grid-column:1!important;grid-row:1!important}
+  .report-toolbar:has(#organization-filter.hidden) #from{grid-column:2!important;grid-row:1!important}
+  .report-toolbar:has(#organization-filter.hidden) #to{grid-column:3!important;grid-row:1!important}
+  .report-toolbar:has(#organization-filter.hidden) #apply{grid-column:4!important;grid-row:1!important}
+
+  /* Ad variantları: Təşkilat -> Növ -> Ad variantı -> əməl. */
+  .alias-inline-form{
+    display:grid!important;
+    grid-template-columns:minmax(190px,.9fr) minmax(150px,.7fr) minmax(300px,1.55fr) auto!important;
+    gap:10px!important;align-items:end!important;
+  }
+  .alias-inline-form .alias-org-field{grid-column:1!important}
+  .alias-inline-form .alias-type-field{grid-column:2!important}
+  .alias-inline-form .alias-value-field{grid-column:3!important}
+  .alias-inline-form .form-actions{grid-column:4!important;margin:0!important}
+  .alias-inline-form .select,.alias-inline-form .input,.alias-inline-form .btn{height:42px!important}
+}
+
+@media (max-width:700px){
+  /* Başlıq əməl zonalarında telefonda boş sağ sütun saxlanmır. */
+  .dashboard-head .page-actions:has(#organization-filter.hidden){
+    display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important;
+  }
+  .dashboard-head .page-actions:has(#organization-filter.hidden) .btn{width:100%!important}
+
+  .monitor-head>.monitor-filters:has(#organization-filter.hidden){
+    grid-template-columns:1fr 1fr!important;
+    grid-template-areas:"period period" "from to" "platform sentiment"!important;
+  }
+  .monitor-filters:has(#organization-filter.hidden) #period{grid-area:period!important}
+  .monitor-filters:has(#organization-filter.hidden) #date-from{grid-area:from!important}
+  .monitor-filters:has(#organization-filter.hidden) #date-to{grid-area:to!important}
+  .monitor-filters:has(#organization-filter.hidden) #platform{grid-area:platform!important}
+  .monitor-filters:has(#organization-filter.hidden) #sentiment{grid-area:sentiment!important}
+
+  .report-toolbar:has(#organization-filter.hidden){
+    grid-template-columns:1fr 1fr!important;
+    grid-template-areas:"period apply" "from to"!important;
+  }
+  .report-toolbar:has(#organization-filter.hidden) #report-period{grid-area:period!important}
+  .report-toolbar:has(#organization-filter.hidden) #apply{grid-area:apply!important}
+  .report-toolbar:has(#organization-filter.hidden) #from{grid-area:from!important}
+  .report-toolbar:has(#organization-filter.hidden) #to{grid-area:to!important}
+
+  /* Admin ad variantları: təşkilat + növ eyni sətir, sonra tam en ad və düymə. */
+  .alias-inline-form{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .alias-inline-form .alias-org-field{grid-column:1!important;grid-row:1!important}
+  .alias-inline-form .alias-type-field{grid-column:2!important;grid-row:1!important}
+  .alias-inline-form .alias-value-field{grid-column:1/-1!important;grid-row:2!important}
+  .alias-inline-form .form-actions{grid-column:1/-1!important;grid-row:3!important;margin:0!important}
+  .alias-inline-form .btn{width:100%!important;height:44px!important}
+
+  /* Admin səhifələrində tək əməl düyməsinin yanında boş zona saxlanmır. */
+  .admin-view[data-admin-view="organizations"] .page-head,
+  .admin-view[data-admin-view="users"] .page-head{display:grid!important;grid-template-columns:1fr!important}
+  .admin-view[data-admin-view="organizations"] .page-head>.btn,
+  .admin-view[data-admin-view="users"] .page-head>.btn{width:100%!important;max-width:none!important}
+
+  .catalog-position-card #position-form{grid-template-columns:1fr 1fr!important}
+  .catalog-position-card #position-form .form-actions{grid-column:1/-1!important}
+  .catalog-location-card #district-form{grid-template-columns:1fr!important}
+  .catalog-location-card #district-form .form-actions{grid-column:1!important}
+  .catalog-location-card #village-form{grid-template-columns:1fr 1fr!important}
+  .catalog-location-card #village-form .form-actions{grid-column:1/-1!important}
+  #keyword-form,#exclude-form{grid-template-columns:1fr!important}
+  #keyword-form .form-actions,#exclude-form .form-actions{grid-column:1!important}
+  .source-inline-form{grid-template-columns:1fr!important}
+  .source-inline-form .field,.source-inline-form .form-span-2,.source-inline-form .form-actions{grid-column:1!important}
+
+  .review-action-buttons{grid-template-columns:1fr!important}
+  .review-action-buttons .btn{width:100%!important;min-width:0!important}
+}
+
+@media (max-width:430px){
+  .monitor-filters input[type="date"],.report-toolbar input[type="date"]{
+    font-size:10.5px!important;letter-spacing:-.03em!important;padding-left:7px!important;padding-right:4px!important;
+  }
+  .alias-inline-form .select,.alias-inline-form .input{font-size:11px!important}
+}

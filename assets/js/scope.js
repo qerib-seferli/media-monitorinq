@@ -11,10 +11,42 @@ export async function loadGlobalExcludes(){
   return excludePromise;
 }
 export function resetGlobalExcludeCache(){ excludePromise=null; }
+function protectedExcludeTerms(row){
+  const protectedSet=new Set([
+    'su','sukanal','suvarma','meliorasiya','kanalizasiya','kollektor','drenaj',
+    'subartezian','artezian','irriqasiya','nasos','quyu','su təchizatı',
+    'adsea','smsii','rsmx','isst','isbtx','simdnx','sdnx','smeti','smkli','toom'
+  ].map(fold));
+  const orgName=fold(row?.organizations?.short_name||row?.organizations?.name||'');
+  const districtName=fold(row?.districts?.name||'');
+  for(const source of [orgName,districtName]){
+    source.split(/\s+/).filter(x=>x.length>=3).forEach(x=>protectedSet.add(x));
+  }
+  return protectedSet;
+}
+const BUILTIN_NOISE=[
+  'haryanvi song','dance video','music video','full video','viralshort','viral short','youtube shorts','shortvideo',
+  'minivlog','mini vlog','daily vlog','travel vlog','gaming','gameplay','football match','football highlights','kuboku',
+  'concert','konsert','movie trailer','film trailer','serial episode','makeup tutorial','fashion show','cute baby',
+  'dj remix','remix song','new song','romantic song','love song','stock market','cryptocurrency','forex trading',
+  'casino','betting','unboxing','smartphone review','car review','recipe video','cooking recipe'
+].map(fold);
+const WATER_SIGNAL_RE=/(?:suvar|melior|subartez|artez|drenaj|kollektor|irriq|sukanal|su təchiz|su techiz|içməli su|icmeli su|kanalizasiya|nasos stans|su anbar|su xətti|su xetti|quyu təmir|quyu temir)/i;
+const HARD_FOREIGN_SCRIPT_RE=/[\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u;
 export function isMentionExcluded(row,excludes=[]){
-  if(!row||!excludes.length) return false;
-  const hay=fold([row.title,row.summary,row.original_text].filter(Boolean).join(' '));
-  return excludes.some(term=>term&&hay.includes(term));
+  if(!row) return false;
+  const raw=[row.title,row.summary,row.original_text].filter(Boolean).join(' ');
+  const hay=fold(raw);
+  const hasWaterSignal=WATER_SIGNAL_RE.test(hay);
+  if(!hasWaterSignal && BUILTIN_NOISE.some(term=>hay.includes(term))) return true;
+  if(!hasWaterSignal && HARD_FOREIGN_SCRIPT_RE.test(raw)) return true;
+  if(!excludes.length) return false;
+  const protectedSet=protectedExcludeTerms(row);
+  return excludes.some(term=>{
+    const t=fold(term);
+    if(!t || protectedSet.has(t)) return false;
+    return hay.includes(t);
+  });
 }
 export function filterExcludedMentions(rows,excludes=[]){return (rows||[]).filter(row=>!isMentionExcluded(row,excludes));}
 export function youtubeVideoId(row){
@@ -47,9 +79,12 @@ export async function setupOrganizationFilter(profile, select){
     select.innerHTML=`<option value="${escapeHtml(ownId)}">${escapeHtml(ownName)}</option>`;
     select.value=ownId;
     select.disabled=true;
-    select.classList.remove('hidden','scope-filter-pending');
-    select.classList.add('scope-filter-local');
+    // Yerli/rayon istifadəçisi öz təşkilatından çıxa bilməz. Təşkilat adı artıq
+    // başlıqda göstərildiyi üçün ayrıca filtr nə telefonda, nə də kompüterdə təkrarlanmır.
+    select.classList.add('hidden','scope-filter-local');
+    select.classList.remove('scope-filter-pending');
     select.setAttribute('aria-label','Cari təşkilat');
+    select.setAttribute('aria-hidden','true');
     return select;
   }
   select.disabled=true;
