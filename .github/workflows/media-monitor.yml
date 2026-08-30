@@ -37,16 +37,19 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
+          # Edge Function-un 55s platform limitinə yaxınlaşmamaq üçün aktiv təşkilatlar
+          # 15 dəqiqəlik rotasiya ilə kiçik paketlərdə yoxlanır. Növbəti schedule qalanları götürür.
+          ROTATION_BUCKET=$(( $(date +%s) / 900 ))
           curl --fail-with-body --silent --show-error \
             --connect-timeout 15 \
-            --max-time 120 \
-            --retry 1 \
-            --retry-delay 5 \
+            --max-time 105 \
+            --retry 2 \
+            --retry-delay 4 \
             --retry-all-errors \
             -X POST \
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d '{"mode":"scheduled","debug":false,"quick_youtube_comments":true,"verify_existing":false}' \
+            -d "{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":true,\"verify_existing\":false,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":6,\"organization_rotation_bucket\":${ROTATION_BUCKET}}" \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
 
   youtube-global-rotation:
@@ -125,7 +128,7 @@ jobs:
           NEWS_FAST_FEED_LIMIT: '10'
           NEWS_MAX_INGEST_ITEMS: '100'
           NEWS_MAX_ENRICH_ITEMS: '6'
-          NEWS_MAX_SCREENSHOTS: '2'
+          NEWS_MAX_SCREENSHOTS: '0'
         run: node scripts/news-gateway.mjs
 
   web-archive-discovery:
@@ -174,7 +177,7 @@ jobs:
           NEWS_BROAD_QUERY_LIMIT: '4'
           NEWS_MAX_INGEST_ITEMS: '140'
           NEWS_MAX_ENRICH_ITEMS: '8'
-          NEWS_MAX_SCREENSHOTS: '3'
+          NEWS_MAX_SCREENSHOTS: '1'
         run: node scripts/news-gateway.mjs
 
   web-recent-priority-backfill:
@@ -225,7 +228,7 @@ jobs:
           NEWS_BING_PAGE_LIMIT: '2'
           NEWS_MAX_INGEST_ITEMS: '140'
           NEWS_MAX_ENRICH_ITEMS: '6'
-          NEWS_MAX_SCREENSHOTS: '2'
+          NEWS_MAX_SCREENSHOTS: '1'
           NEWS_SITEMAP_INDEX_LIMIT: '10'
           NEWS_SITEMAP_URL_LIMIT: '500'
           NEWS_SITEMAP_PROBE_LIMIT: '20'
