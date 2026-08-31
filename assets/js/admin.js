@@ -151,14 +151,14 @@ function renderOrgs() {
       <td>${escapeHtml(organizationTypeLabel(o.organization_type))}</td>
       <td>${escapeHtml(o.districts?.name || '—')}</td>
       <td>${statusBadge(o.service_status)}</td>
-      <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button></div></td>
+      <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger btn-sm" data-org-delete="${o.id}">Sil</button></div></td>
     </tr>`).join('') || '<tr><td colspan="5" class="empty">Təşkilat yoxdur.</td></tr>';
 
   mobile.innerHTML = sortedOrganizations().map(o => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
       <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
-      <div class="record-actions two"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button></div>
+      <div class="record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
     </article>`).join('') || '<div class="empty">Təşkilat yoxdur.</div>';
 }
 
@@ -668,10 +668,13 @@ function bindDynamicActions() {
   });
 
   document.querySelectorAll('[data-org-toggle]').forEach(b => b.onclick = () => toggleOrg(b.dataset.orgToggle));
+  document.querySelectorAll('[data-org-delete]').forEach(b => b.onclick = () => deleteOrganization(b.dataset.orgDelete));
   document.querySelectorAll('[data-org-edit]').forEach(b => b.onclick = () => modal('org', { organization_id:b.dataset.orgEdit }));
   document.querySelectorAll('[data-user-edit]').forEach(b => b.onclick = () => modal('user', { user_id:b.dataset.userEdit }));
   document.querySelectorAll('[data-user-toggle]').forEach(b => b.onclick = () => toggleUser(b.dataset.userToggle, b.dataset.active === 'true'));
   document.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => resetPassword(b.dataset.reset));
+  const fullRefilterBtn=document.querySelector('#full-refilter-btn');
+  if(fullRefilterBtn && !fullRefilterBtn.dataset.bound){fullRefilterBtn.dataset.bound='1';fullRefilterBtn.addEventListener('click',runFullDatabaseRefilter);}
   document.querySelectorAll('[data-modal]').forEach(b => b.onclick = () => modal(b.dataset.modal));
 }
 
@@ -687,6 +690,58 @@ async function toggleOrg(id) {
   const { error } = await supabase.from('organizations').update({ service_status: next }).eq('id', id);
   toast(error ? error.message : `Təşkilat ${next === 'active' ? 'aktivləşdirildi' : 'dayandırıldı'}`, error ? 'error' : 'success');
   if (!error) await refresh();
+}
+
+async function deleteOrganization(id) {
+  const org = orgs.find(x => x.id === id);
+  if (!org) return;
+  const attachedUsers = users.filter(u => u.organization_id === id).length;
+  const extra = attachedUsers ? ` Bu təşkilata bağlı ${attachedUsers} istifadəçi var; əvvəl onları başqa təşkilata köçürmək və ya silmək lazımdır.` : '';
+  const ok = await confirmDialog({
+    title:'Təşkilat birdəfəlik silinsin?',
+    message:`${org.short_name} reyestrdən, ona aid monitorinq nəticələri, ad variantları və təşkilata xüsusi mənbə/açar sözlərdən birdəfəlik silinəcək. Bundan sonra worker bu təşkilatı axtarmayacaq.${extra}`,
+    confirmText:'Bəli, birdəfəlik sil', cancelText:'Xeyr', tone:'danger'
+  });
+  if (!ok) return;
+  const { data, error } = await invokeBackend('monitor-worker', { mode:'delete_organization', organization_id:id });
+  if (error) return toast(error.message,'error');
+  if (!data?.ok) return toast(data?.error || 'Təşkilatı silmək mümkün olmadı.','error');
+  toast(`${org.short_name} və ona aid monitorinq məlumatları silindi.`,'success');
+  await refresh();
+}
+
+async function runFullDatabaseRefilter() {
+  const btn=document.querySelector('#full-refilter-btn');
+  if(!btn || btn.disabled) return;
+  const ok=await confirmDialog({
+    title:'Bütün baza ələkdən keçirilsin?',
+    message:'Bütün təşkilatların saxlanmış nəticələri cari Monitorinq açar sözləri və Axtarılmamalı sözlər bankı ilə yenidən yoxlanacaq. Uyğunsuz qeydlər silinməyəcək, görünməz ediləcək; uyğun qeydlər saxlanacaq. Bu əməliyyat bir neçə dəqiqə çəkə bilər.',
+    confirmText:'Bəli, süzgəcdən keçir',cancelText:'Xeyr'
+  });
+  if(!ok) return;
+  btn.disabled=true;
+  const original=btn.textContent;
+  let checked=0, filtered=0, failed=0;
+  try{
+    const activeOrgs=sortedOrganizations(orgs).filter(o=>o.service_status!=='archived');
+    for(let i=0;i<activeOrgs.length;i++){
+      const org=activeOrgs[i];
+      btn.textContent=`Ələnir ${i+1}/${activeOrgs.length}: ${org.short_name}`;
+      let before=null;
+      let pages=0;
+      while(pages<20){
+        const {data,error}=await invokeBackend('monitor-worker',{mode:'existing_refilter',organization_id:org.id,refilter_before:before,refilter_limit:500});
+        if(error || !data?.ok){failed++;break;}
+        checked+=Number(data.checked||0); filtered+=Number(data.filtered_out||0); pages++;
+        if(!data.next_before || Number(data.checked||0)<500) break;
+        before=data.next_before;
+      }
+    }
+    toast(`Süzgəc tamamlandı: ${checked} qeyd yoxlandı, ${filtered} uyğunsuz qeyd gizlədildi${failed?`, ${failed} təşkilatda xəta oldu`:''}.`,failed?'error':'success');
+    await renderRelevanceReview();
+  }finally{
+    btn.disabled=false; btn.textContent=original;
+  }
 }
 
 async function toggleUser(id, active) {

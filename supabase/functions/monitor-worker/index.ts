@@ -105,6 +105,39 @@ Deno.serve(async (req) => {
       org.aliases = await fetchOrganizationAliases(admin, String(org.id), 500);
     }
 
+    if (options.mode === 'delete_organization') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'delete_organization',error:'Təşkilat tapılmadı'},200);
+      try {
+        const linked:any=await admin.from('profiles').select('id',{count:'exact',head:true}).eq('organization_id',org.id);
+        if(linked?.error) throw linked.error;
+        if(Number(linked?.count||0)>0) return json({ok:false,run_id:runId,mode:'delete_organization',error:`Bu təşkilata bağlı ${linked.count} istifadəçi var. Əvvəl istifadəçini başqa təşkilata köçür və ya hesabı sil.`},200);
+        let offset=0;
+        while(true){
+          const mr:any=await admin.from('mentions').select('id').eq('organization_id',org.id).range(offset,offset+499);
+          if(mr?.error) throw mr.error;
+          const ids=(Array.isArray(mr?.data)?mr.data:[]).map((x:any)=>String(x.id));
+          if(!ids.length) break;
+          for(let i=0;i<ids.length;i+=100){
+            const chunk=ids.slice(i,i+100);
+            const mm:any=await admin.from('mention_media').delete().in('mention_id',chunk); if(mm?.error) throw mm.error;
+          }
+          if(ids.length<500) break;
+          offset+=ids.length;
+        }
+        for (const table of ['notifications','mentions','organization_aliases','sources','keywords','positions']) {
+          const del:any=await admin.from(table).delete().eq('organization_id',org.id);
+          if(del?.error) throw del.error;
+        }
+        await admin.from('audit_logs').update({organization_id:null}).eq('organization_id',org.id);
+        const removed:any=await admin.from('organizations').delete().eq('id',org.id);
+        if(removed?.error) throw removed.error;
+        return json({ok:true,run_id:runId,mode:'delete_organization',organization:org.short_name,deleted:true},200);
+      } catch(e) {
+        return json({ok:false,run_id:runId,mode:'delete_organization',error:errorInfo(e).message},200);
+      }
+    }
+
     // Web/Xəbər xarici şəbəkə sorğuları Supabase Edge datacenter-lərində Google News
     // və GDELT tərəfindən abort/503 ala bilir. Production discovery GitHub Actions
     // gateway-dən aparılır; Edge Function isə yalnız planı verir və tapılan materialları
@@ -367,7 +400,7 @@ Deno.serve(async (req) => {
         if (villageResult?.error) throw villageResult.error;
         villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
       }
-      const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,1200);
+      const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit,options.refilter_before);
       return json({ok:true,run_id:runId,mode:'existing_refilter',organization:org.short_name,...result},200);
     }
 
@@ -1722,12 +1755,14 @@ async function storedYoutubeCommentBackfillStep(
   return {items:dedupeItems(out),videos_checked:checked,inserted_hint:0};
 }
 
-async function refilterExistingMentions(admin:any,org:any,keywords:string[],villages:string[],limit=250){
-  const result:any=await admin.from('mentions')
-    .select('id,title,original_text,source_url,published_at,author_name,raw_payload,relevance_score')
+async function refilterExistingMentions(admin:any,org:any,keywords:string[],villages:string[],limit=250,before:string|null=null){
+  let query:any=admin.from('mentions')
+    .select('id,title,original_text,source_url,published_at,detected_at,author_name,raw_payload,relevance_score')
     .eq('organization_id',org.id)
-    .gt('relevance_score',0)
-    .order('published_at',{ascending:false,nullsFirst:false})
+    .gt('relevance_score',0);
+  if(before) query=query.lt('detected_at',before);
+  const result:any=await query
+    .order('detected_at',{ascending:false,nullsFirst:false})
     .limit(Math.max(1,limit));
   if(result?.error)throw result.error;
   let checked=0,filteredOut=0;
@@ -1746,7 +1781,9 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
       await admin.from('mentions').update({raw_payload:{...raw,admin_review_status:'auto-kept',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}}).eq('id',row.id);
     }
   }
-  return {checked,filtered_out:filteredOut};
+  const rows=Array.isArray(result?.data)?result.data:[];
+  const nextBefore=rows.length ? String(rows[rows.length-1]?.detected_at||'') : '';
+  return {checked,filtered_out:filteredOut,next_before:nextBefore||null};
 }
 
 function similarLongWebText(a:string,b:string):boolean{
@@ -2343,6 +2380,8 @@ type RunOptions = {
   organization_rotation_bucket:number;
   youtube_query_limit:number;
   screenshot_limit:number;
+  refilter_before:string|null;
+  refilter_limit:number;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -2377,7 +2416,9 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   organization_batch:0,
   organization_rotation_bucket:0,
   youtube_query_limit:4,
-  screenshot_limit:8
+  screenshot_limit:8,
+  refilter_before:null,
+  refilter_limit:500
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -2428,7 +2469,9 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       organization_batch:Math.max(0,Math.min(20,Number(body?.organization_batch || 0))),
       organization_rotation_bucket:Math.max(0,Number(body?.organization_rotation_bucket || 0)),
       youtube_query_limit:Math.max(1,Math.min(4,Number(body?.youtube_query_limit || 4))),
-      screenshot_limit:Math.max(1,Math.min(20,Number(body?.screenshot_limit || 8)))
+      screenshot_limit:Math.max(1,Math.min(20,Number(body?.screenshot_limit || 8))),
+      refilter_before:body?.refilter_before ? String(body.refilter_before) : null,
+      refilter_limit:Math.max(50,Math.min(800,Number(body?.refilter_limit || 500)))
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};

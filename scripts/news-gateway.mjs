@@ -529,13 +529,13 @@ function optimizeScreenshot(inputFile) {
   if(!tool) return null;
   const output=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`);
   const args=tool.endsWith('/magick')
-    ? [inputFile,'-auto-orient','-strip','-resize','900x1200>','-quality','58',output]
-    : [inputFile,'-auto-orient','-strip','-resize','900x1200>','-quality','58',output];
+    ? [inputFile,'-auto-orient','-strip','-resize','1280x1800>','-quality','72',output]
+    : [inputFile,'-auto-orient','-strip','-resize','1280x1800>','-quality','72',output];
   const r=spawnSync(tool,args,{encoding:'utf8',timeout:15000});
   if(r.status!==0 || !existsSync(output)) { try{unlinkSync(output)}catch{} return null; }
   try {
     const buf=readFileSync(output);
-    if(!buf.length || buf.length>950_000) return null;
+    if(!buf.length || buf.length>1_650_000) return null;
     return {base64:buf.toString('base64'),mime_type:'image/jpeg',bytes:buf.length};
   } finally { try{unlinkSync(output)}catch{} }
 }
@@ -544,8 +544,8 @@ async function captureScreenshot(target) {
   const chrome=findChrome();
   if (!chrome || !target?.url) return null;
   const profiles=[
-    {width:960,height:1280,scale:'0.55',budget:'4500'},
-    {width:820,height:1080,scale:'0.45',budget:'3500'}
+    {width:1280,height:1700,scale:'0.72',budget:'5000'},
+    {width:1100,height:1450,scale:'0.62',budget:'4200'}
   ];
   for(const profile of profiles){
     const file=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);

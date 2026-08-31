@@ -1422,3 +1422,18 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .review-action-row{display:grid!important;grid-template-columns:1fr!important;gap:8px!important}
 }
 @media(max-width:390px){.alias-inline-form{grid-template-columns:1fr!important}.alias-inline-form .alias-org-field{grid-column:1!important;grid-row:1!important}.alias-inline-form .alias-type-field{grid-column:1!important;grid-row:2!important}.alias-inline-form .alias-value-field{grid-column:1!important;grid-row:3!important}.alias-inline-form .form-actions{grid-column:1!important;grid-row:4!important}}
+
+
+/* 2026-09-01: Admin təşkilat əməliyyatları və ad variantları mobil düzəlişi */
+.admin-view[data-admin-view="organizations"] .inline-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.admin-view[data-admin-view="organizations"] .record-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.alias-inline-form .field{min-width:0!important}
+.alias-inline-form .select,.alias-inline-form .input{width:100%!important;min-width:0!important}
+@media (max-width:400px){
+  .alias-inline-form{grid-template-columns:1fr!important;gap:8px!important}
+  .alias-inline-form .alias-org-field{grid-column:1!important;grid-row:1!important}
+  .alias-inline-form .alias-type-field{grid-column:1!important;grid-row:2!important}
+  .alias-inline-form .alias-value-field{grid-column:1!important;grid-row:3!important}
+  .alias-inline-form .form-actions{grid-column:1!important;grid-row:4!important}
+  .admin-view[data-admin-view="organizations"] .record-actions{grid-template-columns:1fr!important}
+}
