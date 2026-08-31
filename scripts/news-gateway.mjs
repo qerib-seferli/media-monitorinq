@@ -354,6 +354,40 @@ function firstMatch(html, patterns) {
   }
   return '';
 }
+function authorFromStructuredValue(value) {
+  if(!value) return '';
+  if(typeof value==='string') return cleanArticleText(value);
+  if(Array.isArray(value)) return value.map(authorFromStructuredValue).filter(Boolean).join(', ');
+  if(typeof value==='object') return cleanArticleText(value.name || value.author || value.creator || '');
+  return '';
+}
+function extractAuthorFromHtml(html, articleLd={}, fallback='') {
+  const structured=authorFromStructuredValue(articleLd?.author || articleLd?.creator);
+  if(structured) return structured.slice(0,500);
+  const raw=String(html||'');
+  const meta=firstMatch(raw,[
+    /<meta[^>]+name=["']author["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+property=["']article:author["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+name=["']byl["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+(?:name|property)=["'](?:parsely-author|sailthru\.author)["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+itemprop=["']author["'][^>]+content=["']([^"']+)["']/i,
+    /"author"\s*:\s*\{[^{}]{0,700}?"name"\s*:\s*"([^"]+)"/i,
+    /"author"\s*:\s*"([^"]+)"/i,
+    /"creator"\s*:\s*"([^"]+)"/i
+  ]);
+  if(meta) return cleanArticleText(meta).slice(0,500);
+  const visiblePatterns=[
+    /<(?:span|div|p|a)[^>]*(?:class|id)=["'][^"']*(?:author|byline|writer|reporter|journalist|müəllif|muellif)[^"']*["'][^>]*>([\s\S]{1,400}?)<\/(?:span|div|p|a)>/i,
+    /(?:Müəllif|Muellif|Author|By)\s*[:\-–]\s*<[^>]*>([^<]{2,120})</i,
+    /(?:Müəllif|Muellif|Author|By)\s*[:\-–]\s*([^<\n]{2,120})/i
+  ];
+  for(const re of visiblePatterns){
+    const m=raw.match(re); if(!m?.[1]) continue;
+    const value=cleanArticleText(m[1]).replace(/^(?:müəllif|muellif|author|by)\s*[:\-–]?\s*/i,'').trim();
+    if(value && value.length<=180 && !/facebook|instagram|telegram|twitter|x\.com|reklam|editorial/i.test(value)) return value.slice(0,500);
+  }
+  return cleanArticleText(fallback||'').slice(0,500) || '';
+}
 function absoluteUrl(base, value='') {
   if (!value) return '';
   try { return new URL(decodeXml(value),base).toString(); } catch { return decodeXml(value); }
@@ -430,11 +464,11 @@ async function enrichPage(item) {
     else if(articleLd?.image?.url) image=articleLd.image.url;
     if(!image) image=firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i]);
     const published = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
-    const author = typeof articleLd?.author==='string' ? articleLd.author : (Array.isArray(articleLd?.author)?articleLd.author.map(x=>x?.name).filter(Boolean).join(', '):(articleLd?.author?.name||item.author||null));
+    const author = extractAuthorFromHtml(html, articleLd, item.author||'');
     return {
       ...item,
       title:stripHtml(title)||item.title,
-      text:String(body||item.text||'').slice(0,40000),
+      text:String(body||item.text||'').slice(0,120000),
       image:absoluteUrl(finalUrl,image||item.image||'' )||null,
       published_at:normalizeDate(published)||item.published_at,
       author:author||item.author||null,
@@ -1117,7 +1151,11 @@ for (const org of plan.organizations) {
   for (const source of sourceBatch) {
     if (gatewayBudgetLow()) break;
     const domain=domainFromUrl(source?.url||'');
-    const items = keepDomain(await directFeed(source,org),domain);
+    const feedTimeoutMs=Math.max(8000,Math.min(18000,Math.max(9000,GATEWAY_BUDGET_MS-(Date.now()-GATEWAY_STARTED_AT)-2500)));
+    const items = keepDomain(await Promise.race([
+      directFeed(source,org),
+      new Promise(resolve=>setTimeout(()=>{console.log(`[${org.short_name}] Birbaşa mənbə timeout: ${String(source?.url||'').slice(0,120)}`);resolve([]);},feedTimeoutMs))
+    ]),domain);
     if (/google/i.test(`${source.platform||''} ${source.name||''} ${source.url||''}`)) googleItems.push(...items);
     else directWebItems.push(...items);
   }

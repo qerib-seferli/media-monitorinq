@@ -116,7 +116,15 @@ async function load({reset=false}={}){
   finally{loading=false;sentinel.classList.remove('loading');}
 }
 
-function speechText(m){return [m.title,m.summary,m.original_text].filter(Boolean).join('. ');}
+function speechText(m){
+  const raw=m?.raw_payload||{};
+  if(isComment(m)){
+    const commentText=String(m?.original_text||raw?.text_original||raw?.comment_text||'').trim();
+    const videoTitle=String(raw?.video_title||'').trim();
+    return [m?.title,videoTitle?`Video: ${videoTitle}`:'',commentText].filter(Boolean).join('. ');
+  }
+  return [m?.title,m?.original_text].filter(Boolean).join('. ');
+}
 function bestSpeechVoice(){
   const voices=window.speechSynthesis?.getVoices?.()||[];
   return voices.find(v=>/^az([-_]|$)/i.test(v.lang))
@@ -156,31 +164,71 @@ async function openDetail(id){
   const media=mediaRows.map(x=>`<figure class="detail-media-wrap">${mediaImg(x.url)}<figcaption>${escapeHtml(String(x.media_type||'media')==='screenshot'?'Arxiv ekran görüntüsü':'Xəbər şəkli / media')}</figcaption></figure>`).join('');
   const screenshotState=hasScreenshot?'':`<div class="card detail-state"><p class="muted">Arxiv ekran görüntüsü hələ hazırlanır. Sistem növbəti monitorinq run-larında bunu avtomatik tamamlayacaq.</p></div>`;
   const raw=m.raw_payload||{}; const comment=isComment(m);
-  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Paylaşılma tarixi</strong><p>${fmtDate(publishedDate(m))}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(m.author_name||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><h3>AI xülasəsi</h3><p>${escapeHtml(m.summary||'Xülasə yoxdur.')}</p><details class="detail-original" open><summary>Orijinal mətn ${String(m.original_text||'').length>1800?'— aç / bağla':''}</summary><div class="muted detail-text">${escapeHtml(m.original_text||'Mətn saxlanmayıb.')}</div></details>${raw.comment_id?`<div class="detail-grid comment-detail-grid"><div><strong>Şərh müəllifi</strong><p>${escapeHtml(m.author_name||raw.author_name||'—')}</p></div><div><strong>Şərhin tarixi</strong><p>${fmtDate(m.published_at)}</p></div><div><strong>Video</strong><p>${escapeHtml(raw.video_title||'—')}</p></div><div><strong>Şərhin bəyənmə sayı</strong><p>${escapeHtml(raw.like_count ?? '0')}</p></div><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Növ</strong><p>${raw.parent_id?'Cavab':'Əsas şərh'}</p></div></div>`:''}${screenshotState}${media?`<h3>Media / arxiv görüntüsü</h3><div class="grid grid-2">${media}</div>`:''}</div></div>`;
+  const originalText=String(m.original_text||raw.text_original||raw.comment_text||'').trim();
+  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Paylaşılma tarixi</strong><p>${fmtDate(publishedDate(m))}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(m.author_name||raw.author_name||raw.channel_title||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><details class="detail-original" open><summary>Orijinal mətn ${originalText.length>1800?'— aç / bağla':''}</summary><div class="muted detail-text">${escapeHtml(originalText||'Mətn saxlanmayıb.')}</div></details>${raw.comment_id?`<div class="detail-grid comment-detail-grid"><div><strong>Şərh müəllifi</strong><p>${escapeHtml(m.author_name||raw.author_name||'—')}</p></div><div><strong>Şərhin tarixi</strong><p>${fmtDate(m.published_at)}</p></div><div><strong>Video</strong><p>${escapeHtml(raw.video_title||'—')}</p></div><div><strong>Şərhin bəyənmə sayı</strong><p>${escapeHtml(raw.like_count ?? '0')}</p></div><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Növ</strong><p>${raw.parent_id?'Cavab':'Əsas şərh'}</p></div></div>`:''}${screenshotState}${media?`<h3>Media / arxiv görüntüsü</h3><div class="grid grid-2">${media}</div>`:''}</div></div>`;
   document.querySelector('#detail-close').onclick=()=>{window.speechSynthesis?.cancel?.();document.querySelector('#modal-root').innerHTML='';};
   document.querySelector('#detail-bg').onclick=e=>{if(e.target.id==='detail-bg')document.querySelector('#detail-close').click();};
   document.querySelector('#detail-speak').onclick=e=>speak(m,e.currentTarget);
   document.querySelectorAll('[data-media]').forEach(x=>x.onclick=()=>openViewer(x.dataset.media));
 }
 
-let scale=1,currentUrl='',tx=0,ty=0,startX=0,startY=0,baseX=0,baseY=0,isDragging=false,pinchStart=0,pinchScale=1;
+let scale=1,currentUrl='',tx=0,ty=0,startX=0,startY=0,baseX=0,baseY=0,isDragging=false,pinchStart=0,pinchScale=1,pinchMidX=0,pinchMidY=0,pinchBaseX=0,pinchBaseY=0;
 const viewer=document.querySelector('#viewer'),img=document.querySelector('#viewer-img'),stage=document.querySelector('#viewer-stage');
-function applyTransform(){img.style.transform=`translate(${tx}px,${ty}px) scale(${scale})`;}
-function resetViewer(){scale=1;tx=0;ty=0;applyTransform();}
-function openViewer(url){currentUrl=url;resetViewer();img.src=url;document.querySelector('#save-media').href=url;viewer.classList.remove('hidden');document.body.style.overflow='hidden';}
-function closeViewer(){viewer.classList.add('hidden');document.body.style.overflow='';resetViewer();}
+function clampPan(){
+  const iw=Math.max(1,img.clientWidth||0), ih=Math.max(1,img.clientHeight||0);
+  const sw=Math.max(1,stage.clientWidth||0), sh=Math.max(1,stage.clientHeight||0);
+  const maxX=Math.max(0,(iw*scale-sw)/2), maxY=Math.max(0,(ih*scale-sh)/2);
+  tx=Math.max(-maxX,Math.min(maxX,tx)); ty=Math.max(-maxY,Math.min(maxY,ty));
+  if(scale<=1){tx=0;ty=0;}
+}
+function applyTransform(){clampPan();img.style.transform=`translate3d(${tx}px,${ty}px,0) scale(${scale})`;stage.classList.toggle('is-zoomed',scale>1.001);}
+function resetViewer(){scale=1;tx=0;ty=0;isDragging=false;pinchStart=0;applyTransform();}
+function zoomAt(nextScale,clientX,clientY){
+  const prev=scale; nextScale=Math.max(1,Math.min(6,nextScale));
+  if(Math.abs(nextScale-prev)<.001)return;
+  const r=stage.getBoundingClientRect(); const x=clientX-(r.left+r.width/2), y=clientY-(r.top+r.height/2);
+  tx=x-(x-tx)*(nextScale/prev); ty=y-(y-ty)*(nextScale/prev); scale=nextScale; applyTransform();
+}
+function openViewer(url){currentUrl=url;resetViewer();img.src=url;viewer.classList.remove('hidden');document.body.style.overflow='hidden';requestAnimationFrame(applyTransform);}
+function closeViewer(){viewer.classList.add('hidden');document.body.style.overflow='';img.removeAttribute('src');resetViewer();}
 document.querySelector('#viewer-close').onclick=closeViewer;
-document.querySelector('#zoom-in').onclick=()=>{scale=Math.min(4,scale+.25);applyTransform()};
-document.querySelector('#zoom-out').onclick=()=>{scale=Math.max(.75,scale-.25);if(scale<=1){tx=0;ty=0}applyTransform()};
+document.querySelector('#zoom-in').onclick=()=>zoomAt(scale+.35,innerWidth/2,innerHeight/2);
+document.querySelector('#zoom-out').onclick=()=>zoomAt(scale-.35,innerWidth/2,innerHeight/2);
 document.querySelector('#share-media').onclick=async()=>{if(navigator.share){try{await navigator.share({title:'Media Monitorinq — Media',url:currentUrl})}catch{}}else if(navigator.clipboard){await navigator.clipboard.writeText(currentUrl);toast('Media linki kopyalandı','success')}};
-stage.addEventListener('pointerdown',e=>{if(scale<=1)return;isDragging=true;startX=e.clientX;startY=e.clientY;baseX=tx;baseY=ty;stage.setPointerCapture?.(e.pointerId)});
-stage.addEventListener('pointermove',e=>{if(!isDragging)return;tx=baseX+(e.clientX-startX);ty=baseY+(e.clientY-startY);applyTransform()});
-stage.addEventListener('pointerup',()=>isDragging=false);stage.addEventListener('pointercancel',()=>isDragging=false);
-stage.addEventListener('dblclick',()=>{if(scale===1)scale=2;else resetViewer();applyTransform()});
-stage.addEventListener('touchstart',e=>{if(e.touches.length===2){pinchStart=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);pinchScale=scale}},{passive:true});
-stage.addEventListener('touchmove',e=>{if(e.touches.length===2&&pinchStart){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);scale=Math.max(.75,Math.min(4,pinchScale*(d/pinchStart)));applyTransform()}},{passive:true});
-stage.addEventListener('touchend',()=>{pinchStart=0});
-
+document.querySelector('#save-media').onclick=async()=>{
+  if(!currentUrl)return;
+  const ext=(currentUrl.match(/\.(png|jpe?g|webp)(?:\?|$)/i)?.[1]||'jpg').replace('jpeg','jpg');
+  const name=`media-monitorinq-${new Date().toISOString().replace(/[:.]/g,'-')}.${ext}`;
+  try{
+    const response=await fetch(currentUrl,{mode:'cors',credentials:'omit'}); if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    const blob=await response.blob(), href=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=href;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(href),1500);
+  }catch{
+    const a=document.createElement('a');a.href=currentUrl;a.download=name;a.target='_blank';a.rel='noopener';document.body.appendChild(a);a.click();a.remove();
+    toast('Brauzer birbaşa endirməyə icazə verməsə, şəkil yeni pəncərədə açılacaq.','info');
+  }
+};
+img.addEventListener('load',()=>{resetViewer();applyTransform();});
+stage.addEventListener('wheel',e=>{e.preventDefault();const factor=e.deltaY<0?1.16:1/1.16;zoomAt(scale*factor,e.clientX,e.clientY);},{passive:false});
+stage.addEventListener('pointerdown',e=>{if(e.pointerType==='touch'||scale<=1)return;isDragging=true;startX=e.clientX;startY=e.clientY;baseX=tx;baseY=ty;stage.setPointerCapture?.(e.pointerId);stage.classList.add('is-dragging');});
+stage.addEventListener('pointermove',e=>{if(!isDragging)return;tx=baseX+(e.clientX-startX);ty=baseY+(e.clientY-startY);applyTransform();});
+stage.addEventListener('pointerup',e=>{isDragging=false;stage.classList.remove('is-dragging');stage.releasePointerCapture?.(e.pointerId);});
+stage.addEventListener('pointercancel',()=>{isDragging=false;stage.classList.remove('is-dragging');});
+stage.addEventListener('dblclick',e=>{if(scale>1.01)resetViewer();else zoomAt(2.25,e.clientX,e.clientY);});
+stage.addEventListener('touchstart',e=>{
+  if(e.touches.length===2){
+    e.preventDefault();const a=e.touches[0],b=e.touches[1];pinchStart=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);pinchScale=scale;
+    pinchMidX=(a.clientX+b.clientX)/2;pinchMidY=(a.clientY+b.clientY)/2;pinchBaseX=tx;pinchBaseY=ty;isDragging=false;
+  }else if(e.touches.length===1&&scale>1){const t=e.touches[0];startX=t.clientX;startY=t.clientY;baseX=tx;baseY=ty;isDragging=true;}
+},{passive:false});
+stage.addEventListener('touchmove',e=>{
+  if(e.touches.length===2&&pinchStart){
+    e.preventDefault();const a=e.touches[0],b=e.touches[1],d=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY),midX=(a.clientX+b.clientX)/2,midY=(a.clientY+b.clientY)/2;
+    scale=Math.max(1,Math.min(6,pinchScale*(d/pinchStart)));tx=pinchBaseX+(midX-pinchMidX);ty=pinchBaseY+(midY-pinchMidY);applyTransform();
+  }else if(e.touches.length===1&&isDragging&&scale>1){e.preventDefault();const t=e.touches[0];tx=baseX+(t.clientX-startX);ty=baseY+(t.clientY-startY);applyTransform();}
+},{passive:false});
+stage.addEventListener('touchend',e=>{if(e.touches.length<2)pinchStart=0;if(e.touches.length===0)isDragging=false;});
+window.addEventListener('resize',applyTransform);
 const reset=()=>load({reset:true}); if(organizationFilter) organizationFilter.onchange=reset; platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{presetDates(period.value);updateDateInputs();reset();}; dateFrom.onchange=()=>{period.value='custom';reset();};dateTo.onchange=()=>{period.value='custom';reset();};
 new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)load();},{rootMargin:'500px'}).observe(sentinel);
 if(commentOnly){

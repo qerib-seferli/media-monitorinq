@@ -1380,3 +1380,45 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 
 /* Uyğunluq yoxlaması: 3 qərar düyməsi kompakt və responsiv */
 .review-action-buttons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.review-action-buttons .btn{width:100%;white-space:nowrap}@media(max-width:700px){.review-action-row{grid-template-columns:1fr}.review-action-buttons{grid-template-columns:1fr 1fr}.review-action-buttons .danger{grid-column:1/-1}}
+
+
+/* =========================================================
+   V11 DETAIL VIEWER + ADMIN LAYOUT STABILITY — 2026-08-31
+   Yalnız hədəfli override-lar: işləyən rəng/komponent davranışı qorunur.
+   ========================================================= */
+.viewer-stage{display:grid;place-items:center;overflow:hidden;min-height:0;position:relative;touch-action:none;overscroll-behavior:contain;cursor:zoom-in;user-select:none;-webkit-user-select:none}
+.viewer-stage.is-zoomed{cursor:grab}.viewer-stage.is-dragging{cursor:grabbing}
+.media-viewer img{max-width:100%;max-height:calc(100vh - 150px);margin:auto;object-fit:contain;transform-origin:center center;will-change:transform;transition:transform .08s ease;pointer-events:none;-webkit-user-drag:none}
+.viewer-stage.is-dragging img{transition:none}
+.viewer-action{min-width:44px;height:44px;padding:9px 12px}.viewer-download{font-size:20px;line-height:1}
+.detail-text{white-space:pre-wrap;line-height:1.65;overflow-wrap:anywhere;word-break:normal}
+.detail-original>.detail-text{max-height:none;overflow:visible}
+
+/* Ərazi & Vəzifə: desktopda hər iki arxa kart eyni hündürlükdə. */
+@media (min-width:1051px){
+  .catalog-panels{align-items:stretch!important}
+  .catalog-position-card,.catalog-location-card{height:100%!important;align-self:stretch!important}
+  .catalog-position-card{display:flex;flex-direction:column}
+  .catalog-position-card #position-list{align-content:flex-start}
+}
+
+/* Admin mobil: mənbə formu tam en; Təşkilat + Növ bir-birinin üstünə düşmür. */
+@media (max-width:700px){
+  .source-inline-form{display:grid!important;grid-template-columns:1fr!important;width:100%!important}
+  .source-inline-form .field,.source-inline-form .form-span-2,.source-inline-form .form-actions{grid-column:1/-1!important;width:100%!important;min-width:0!important}
+  .source-inline-form .input,.source-inline-form .select,.source-inline-form .btn{width:100%!important;max-width:none!important}
+
+  .alias-inline-form{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;gap:8px!important;align-items:end!important}
+  .alias-inline-form .alias-org-field{display:block!important;grid-column:1!important;grid-row:1!important;min-width:0!important;position:relative!important}
+  .alias-inline-form .alias-type-field{display:block!important;grid-column:2!important;grid-row:1!important;min-width:0!important;position:relative!important}
+  .alias-inline-form .alias-value-field{grid-column:1/-1!important;grid-row:2!important;min-width:0!important}
+  .alias-inline-form .form-actions{grid-column:1/-1!important;grid-row:3!important;margin:0!important}
+  .alias-inline-form .field label{display:block!important;position:static!important;margin:0 0 6px 2px!important;line-height:1.2!important}
+  .alias-inline-form .select,.alias-inline-form .input,.alias-inline-form .btn{width:100%!important;max-width:none!important;min-width:0!important}
+
+  .relevance-review-card{padding-left:12px!important;padding-right:12px!important}
+  .relevance-review-item>summary{padding:11px 10px!important;gap:8px!important}
+  .review-body{padding:10px!important}
+  .review-action-row{display:grid!important;grid-template-columns:1fr!important;gap:8px!important}
+}
+@media(max-width:390px){.alias-inline-form{grid-template-columns:1fr!important}.alias-inline-form .alias-org-field{grid-column:1!important;grid-row:1!important}.alias-inline-form .alias-type-field{grid-column:1!important;grid-row:2!important}.alias-inline-form .alias-value-field{grid-column:1!important;grid-row:3!important}.alias-inline-form .form-actions{grid-column:1!important;grid-row:4!important}}

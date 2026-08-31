@@ -435,7 +435,7 @@ const REVIEW_WATER_PHRASES = [
   'su təchizatı','su xətti','kanalizasiya xətti','tullantı su','su anbarı','suvarma mövsümü',
   'kanal təmizlənməsi','arx təmizlənməsi','su çatışmazlığı'
 ];
-const REVIEW_WATER_RE = /\b(su|sukanal|melior|suvar|kanal|kollektor|drenaj|subartez|artezian|quyu|nasos|hidroqov|bənd|anbar|irriqasiya|içməli|kanalizasiya|tullantı su|su təchizatı)\b/i;
+const REVIEW_WATER_RE = /(su(?:yun|yu|ya|da|dan|lar|ları|larımız|suz|lu)?|sukanal|melior|suvar|kanal|kollektor|drenaj|subartez|artezian|quyu|nasos|hidroqov|bənd|anbar|irriqasiya|içməli|kanalizasiya|tullantı su|su təchizatı)/i;
 const REVIEW_PROTECTED = new Set([
   'su','kanal','rayon','rayonu','bərdə','berde','goranboy','ağdam','agdam','tərtər','terter',
   'adsea','smsii','rsmx','isst','isbtx','simdnx','sdnx','smeti','smkli','toom','meliorasiya','suvarma'
@@ -472,7 +472,17 @@ async function renderRelevanceReview(){
     .gt('relevance_score',0).lte('relevance_score',75)
     .order('detected_at',{ascending:false}).limit(80);
   if(error){el.innerHTML=`<div class="empty compact">${escapeHtml(error.message)}</div>`;return;}
-  const rows=(data||[]).filter(row=>!isMentionExcluded(row,excludes) && !['kept','ignored','auto-kept','auto-blocked'].includes(String(row?.raw_payload?.admin_review_status||''))).slice(0,24);
+  const rows=(data||[]).filter(row=>{
+    if(isMentionExcluded(row,excludes) || ['kept','ignored','auto-kept','auto-blocked','auto-ignored'].includes(String(row?.raw_payload?.admin_review_status||''))) return false;
+    const kind=String(row?.raw_payload?.kind||'').toLowerCase();
+    if(kind.includes('comment')){
+      const ownText=reviewFold([row?.original_text,row?.summary].filter(Boolean).join(' '));
+      // Aidiyyəti videonun hər ümumi rəyi admin yoxlama siyahısını doldurmasın.
+      // Şərhin özündə su/meliorasiya/infrastruktur siqnalı varsa saxlanılır.
+      if(!REVIEW_WATER_RE.test(ownText)) return false;
+    }
+    return true;
+  }).slice(0,24);
   if(!rows.length){el.innerHTML='<div class="empty compact">Hazırda ayrıca yoxlanmalı material yoxdur.</div>';return;}
   el.innerHTML=rows.map(row=>{
     const term=suggestedReviewTerm(row);

@@ -2229,7 +2229,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
         ...((existing as any)?.raw_payload || {}),
         ...(item.raw || item),
         monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
-        ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{})
+        ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
+        ...(String((item.raw as any)?.kind||'').includes('comment') && match.reason==='aidiyyəti-videonun-rəyi' && !(match.matches||[]).length ? {admin_review_status:'auto-ignored'} : {})
       }
     };
     if (item.author) refresh.author_name=item.author;
@@ -2265,7 +2266,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     raw_payload:{
       ...(item.raw || item),
       monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
-      ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{})
+      ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
+      ...(String((item.raw as any)?.kind||'').includes('comment') && match.reason==='aidiyyəti-videonun-rəyi' && !(match.matches||[]).length ? {admin_review_status:'auto-ignored'} : {})
     },
     source_status:'active',
     last_seen_at:new Date().toISOString(),
@@ -2415,7 +2417,7 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       mime_type:String(body?.mime_type || 'image/jpeg').slice(0,80),
       media_type:String(body?.media_type || 'screenshot').slice(0,40),
       news_title:String(body?.title || '').slice(0,1000),
-      news_text:String(body?.text || '').slice(0,40000),
+      news_text:String(body?.text || '').slice(0,120000),
       news_published_at:body?.published_at ? String(body.published_at) : null,
       news_author:String(body?.author || '').slice(0,500),
       image_url:String(body?.image_url || '').slice(0,2000),
@@ -2463,9 +2465,27 @@ const AUTO_LEARN_POSITIVE_PHRASES = [
   'kollektor drenaj','kollektor drenaj şəbəkəsi','drenaj sistemi','meliorasiya sistemi',
   'meliorativ tədbirlər','hidrotexniki qurğu','hidrotexniki qurğuların təmiri',
   'kanal təmizlənməsi','kanalların lildən təmizlənməsi','arx təmizlənməsi',
-  'su çatışmazlığı','susuzluq problemi','su verilmir','su gəlmir','su yoxdur',
+  'su çatışmazlığı','susuzluq problemi','su verilmir','su gəlmir','su yoxdur','su zəif gəlir','su yaxşı gəlmir','sular yaxşı gəlmir','su kəsilib','su kəsintisi','suyun təzyiqi zəifdir',
   'su təminatı yaxşılaşacaq','su təchizatı yaxşılaşacaq','suvarma imkanları artırılacaq',
-  'fermerlərin su təminatı','əkin sahələrinin su təminatı','irriqasiya sistemi'
+  'fermerlərin su təminatı','əkin sahələrinin su təminatı','irriqasiya sistemi',
+  'suvarma suyunun verilməsi','suvarma suyunun çatdırılması','suvarma suyuna tələbat','suvarma suyu ilə təminat',
+  'suvarma arxlarının təmizlənməsi','suvarma kanallarının təmizlənməsi','suvarma kanallarının təmiri','kanalın əsaslı təmiri',
+  'kanalın cari təmiri','kanalın bərpası','kanalın beton üzlənməsi','kanalın yenidən qurulması','kanalda lil təmizlənməsi',
+  'kollektorun təmizlənməsi','drenaj şəbəkəsinin təmizlənməsi','kollektorun təmiri','drenaj xəttinin təmiri',
+  'nasos aqreqatı','nasosların təmiri','nasos stansiyasının yenidən qurulması','nasos stansiyasının istismarı',
+  'subartezian quyularının təmiri','subartezian quyularının bərpası','artezian quyularının təmiri','yeni subartezian quyusu',
+  'suvarma üçün quyu','meliorasiya xidmətləri','meliorasiya tədbirləri','meliorasiya işləri','su təsərrüfatı infrastrukturu',
+  'su təsərrüfatı obyekti','hidromeliorasiya sistemi','irriqasiya şəbəkəsi','irriqasiya kanalının təmiri',
+  'torpaqların meliorativ vəziyyəti','şoranlaşmaya qarşı mübarizə','qrunt sularının səviyyəsi','drenaj sularının axıdılması',
+  'su ehtiyatlarının idarə edilməsi','su ehtiyatlarının mühafizəsi','su təsərrüfatı balansı','suvarma suyu qrafiki',
+  'su növbəliliyi','su istifadəçiləri','sudan istifadə','su limitinin ayrılması','suvarma planı','vegetasiya suvarması',
+  'payız suvarması','yaz suvarması','əkinlərin suvarılması','pambıq sahələrinin suvarılması','taxıl sahələrinin suvarılması',
+  'meyvə bağlarının suvarılması','örüşlərin su təminatı','heyvandarlıq üçün su təminatı','kənd təsərrüfatı su təminatı',
+  'içməli su xəttinin çəkilişi','su xəttinin çəkilişi','su xəttinin yenilənməsi','su kəmərinin təmiri','su kəmərində qəza',
+  'kanalizasiya xəttinin çəkilişi','kanalizasiya kollektorunun tikintisi','kanalizasiya kollektorunun təmiri',
+  'çirkab suların təmizlənməsi','tullantı sularının təmizlənməsi','sutəmizləyici qurğu','su təmizləyici qurğu',
+  'su anbarının tikintisi','su anbarının təmiri','su anbarının bərpası','su anbarının istismarı','bəndin təmiri','bəndin bərpası',
+  'sel və daşqından mühafizə','çay məcrasının təmizlənməsi','çay sahilinin bərkidilməsi','sahilbərkitmə işləri'
 ];
 const AUTO_LEARN_EXCLUDE_PHRASES = [
   // Musiqi / əyləncə / video janrları
@@ -2508,7 +2528,28 @@ const AUTO_LEARN_EXCLUDE_PHRASES = [
   'old bike restoration','bicycle restoration','vieux vélo','oude kerk','haryanvi dress','cute baby school',
   'viralshort video','school pertamasekolah','guru baru','rock shorts','bhojpuri dj','haryanvi dance',
   // Balıqçılıq / fauna
-  'balıq ovu','balıqçılıq yarışı','qadağan olunmuş balıqçılıq','brakonyerlik','ov mövsümü','heyvan bazarı','pişik videosu','it videosu'
+  'balıq ovu','balıqçılıq yarışı','qadağan olunmuş balıqçılıq','brakonyerlik','ov mövsümü','heyvan bazarı','pişik videosu','it videosu',
+  // Siyasət / diplomatiya / hərbi mövzular (su infrastrukturu əlaqəsi yoxdursa)
+  'nazirdən yeni təyinat','kadr dəyişikliyi','vəzifəyə təyin edildi','vəzifədən azad edildi',
+  'siyasi partiya','seçki kampaniyası','parlament seçkiləri','prezident seçkiləri',
+  'hərbi əməliyyat','raket hücumu','bombardman','döyüş əməliyyatları','milli matəm','ordu xəbərləri',
+  // Təhsil / mədəniyyət / şou-biznes
+  'məktəb tədbiri','məktəb xəbərləri','universitet xəbərləri','imtahan nəticələri','məzun günü','məzuniyyət tədbiri',
+  'teatr tamaşası','muzey sərgisi','kitab təqdimatı','mədəniyyət festivalı','musiqi müsabiqəsi','gözəllik müsabiqəsi',
+  // Sağlamlıq / tibbi / sosial mövzular
+  'xəstəxana xəbərləri','tibbi əməliyyat','həkim məsləhəti','sağlamlıq xəbərləri','dərman vasitəsi','epidemioloji vəziyyət',
+  'sosial müavinət','pensiya ödənişi','əmək pensiyası','ünvanlı sosial yardım','dsmf xəbərləri',
+  // Hüquq / kriminal / fövqəladə hadisə
+  'narkotik vasitə','narkotik əməliyyatı','oğurluq hadisəsi','qətl hadisəsi','dələduzluq faktı','məhkəmə qərarı',
+  'prokurorluq araşdırması','polis əməliyyatı','saxlanılan şəxs','cinayət işi başlanıb',
+  // Enerji / rabitə / kommunal - su ilə bağlı deyilsə
+  'elektrik enerjisinin verilişi dayandırılacaq','işıq kəsiləcək','elektrik xətti','qaz təchizatı dayandırılacaq',
+  'internet xidməti','mobil operator','telekommunikasiya xidməti','fiber optik',
+  // Ümumi xəbər-küyü
+  'hava temperaturu','rekord istilər','qar yağacaq','güclü külək','zəlzələ xəbəri','turizm xəbərləri',
+  'okean səviyyəsi','çimərlik mövsümü','balıq ovu','ovçuluq mövsümü','meşə yanğını',
+  'qızıl qiyməti','neft qiyməti','benzin qiyməti','dizel qiyməti','gömrük rüsumu','vergi xəbərləri',
+  'hərrac elanı',
 ];
 
 async function ensureBaselineKeywordBank(admin:any) {
@@ -2879,7 +2920,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const azerbaijanContext = /(?:azerbaycan|azərbaycan|baki|bakı|qarabag|qarabağ|adsea|meliorasiya|suvarma|su techizati|su təchizatı)/.test(normalized);
   const ambiguousDirectSafe = ambiguousDirectMatches.length>0 && (locationHit || (coreTopicHit && azerbaijanContext));
   const hardForeignScript = /[\u0370-\u03FF\u0590-\u05FF\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(`${item.title||''} ${item.text||''}`);
-  const foreignScriptRejected = !webLike && hardForeignScript && strongDirectMatches.length===0 && !locationHit && !coreTopicHit && !azerbaijanContext;
+  const foreignScriptRejected = hardForeignScript && strongDirectMatches.length===0 && !locationHit && !coreTopicHit && !azerbaijanContext;
 
   const accepted = !ownPortalNoise && !excludedByRule && !foreignScriptRejected && (trustedParentComment || (!negativeOnly && !foreignHit && (
     strongDirectMatches.length>0 ||
