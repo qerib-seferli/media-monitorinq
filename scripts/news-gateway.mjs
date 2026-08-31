@@ -205,15 +205,46 @@ function normalizeDate(value='') {
   const d = new Date(raw);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
-function extractVisiblePublishedDate(html='') {
-  const raw=cleanArticleText(String(html||'').replace(/<script\b[\s\S]*?<\/script>/gi,' ').replace(/<style\b[\s\S]*?<\/style>/gi,' '));
+function extractVisiblePublishedDate(html='', title='') {
+  const page=cleanArticleText(String(html||'')
+    .replace(/<script\b[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi,' ')
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi,' '));
+  if(!page) return null;
   const patterns=[
-    /(?:tarix|date|paylasim|paylaşım)?\s*[:\-]?\s*(\d{1,2}\s+(?:yanvar|fevral|mart|aprel|may|iyun|iyul|avqust|sentyabr|oktyabr|noyabr|dekabr|january|february|march|april|june|july|august|september|october|november|december)[,\s]+(?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/i,
-    /((?:19|20)\d{2}[.\/-]\d{1,2}[.\/-]\d{1,2}(?:[T\s]+\d{1,2}:\d{2}(?::\d{2})?)?)/,
-    /(\d{1,2}[.\/-]\d{1,2}[.\/-](?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/
+    /(?:tarix|date|paylasim|paylaşım)?\s*[:\-]?\s*(\d{1,2}\s+(?:yanvar|fevral|mart|aprel|may|iyun|iyul|avqust|sentyabr|oktyabr|noyabr|dekabr|january|february|march|april|june|july|august|september|october|november|december)[,\s]+(?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/gi,
+    /((?:19|20)\d{2}[.\/-]\d{1,2}[.\/-]\d{1,2}(?:[T\s]+\d{1,2}:\d{2}(?::\d{2})?)?)/g,
+    /(\d{1,2}[.\/-]\d{1,2}[.\/-](?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/g
   ];
-  for(const re of patterns){const m=raw.match(re);const d=normalizeDate(m?.[1]||'');if(d)return d;}
-  return null;
+  const anchors=[];
+  const t=cleanArticleText(title||'');
+  if(t){
+    const hay=page.toLocaleLowerCase('az-AZ'), needle=t.toLocaleLowerCase('az-AZ');
+    let at=hay.indexOf(needle);
+    while(at>=0){anchors.push(at);at=hay.indexOf(needle,at+Math.max(8,needle.length));if(anchors.length>=8)break;}
+  }
+  const candidates=[];
+  for(const re of patterns){
+    re.lastIndex=0; let m;
+    while((m=re.exec(page))){
+      const iso=normalizeDate(m[1]||''); if(!iso) continue;
+      const ms=new Date(iso).getTime();
+      if(!Number.isFinite(ms) || ms>Date.now()+3*86400000) continue;
+      const year=new Date(ms).getUTCFullYear(); if(year<1995) continue;
+      const pos=m.index;
+      let distance=anchors.length?Math.min(...anchors.map(a=>Math.abs(pos-a))):999999;
+      let score=0;
+      if(distance<250) score+=160; else if(distance<900) score+=120; else if(distance<2500) score+=75; else if(distance<6000) score+=25;
+      const context=page.slice(Math.max(0,pos-80),Math.min(page.length,pos+80));
+      if(/tarix|date|paylaş|sosial|oxunma|saat/i.test(context)) score+=35;
+      // Xəbərin başlığına yaxın tarix, səhifənin sağ/alt hissəsindəki başqa xəbərlərin
+      // tarixindən daha etibarlıdır. Eyni balda daha yaxın olan tarix seçilir.
+      candidates.push({iso,score,distance,pos});
+      if(candidates.length>=120) break;
+    }
+  }
+  candidates.sort((a,b)=>b.score-a.score || a.distance-b.distance || a.pos-b.pos);
+  return candidates[0]?.iso || null;
 }
 function unwrapSearchUrl(value='') {
   let current=String(value||'').trim();
@@ -415,7 +446,9 @@ function extractArticleImages(html='', base='', primary='') {
   add(primary);
   for(const m of String(html).matchAll(/<meta[^>]+(?:property|name)=["'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["'][^>]+content=["']([^"']+)["']/gi))add(m[1]);
   for(const m of String(html).matchAll(/<img\b[^>]+(?:src|data-src|data-original)=["']([^"']+)["'][^>]*>/gi))add(m[1]);
-  return urls.slice(0,8);
+  // Monitorinq kartında ekran görüntüsündən əlavə yalnız xəbərin əsas/qapaq şəkli lazımdır.
+  // Sosial ikonlar və əlaqəsiz səhifə şəkilləri bazaya daşınmır.
+  return urls.slice(0,1);
 }
 function jsonLdObjects(html='') {
   const out=[];
@@ -435,6 +468,35 @@ function jsonLdObjects(html='') {
 }
 function cleanArticleText(value='') {
   return stripHtml(String(value||'').replace(/<br\s*\/?\s*>/gi,'\n').replace(/<\/p>/gi,'\n')).replace(/\s*\n\s*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+function titleAnchoredArticleText(html='', title='') {
+  const cleanedTitle=cleanArticleText(title||'');
+  if(cleanedTitle.length<6) return '';
+  const raw=String(html||'')
+    .replace(/<script\b[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi,' ')
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi,' ')
+    .replace(/<svg\b[\s\S]*?<\/svg>/gi,' ')
+    .replace(/<nav\b[\s\S]*?<\/nav>/gi,' ')
+    .replace(/<header\b[\s\S]*?<\/header>/gi,' ')
+    .replace(/<footer\b[\s\S]*?<\/footer>/gi,' ');
+  const text=cleanArticleText(raw);
+  const hay=text.toLocaleLowerCase('az-AZ');
+  const needle=cleanedTitle.toLocaleLowerCase('az-AZ');
+  let pos=hay.lastIndexOf(needle);
+  if(pos<0) pos=hay.indexOf(needle);
+  if(pos<0) return '';
+  let chunk=text.slice(pos+cleanedTitle.length,pos+cleanedTitle.length+90000).trim();
+  const endMarkers=['oxşar xəbərlər','digər xəbərlər','son xəbərlər','ən çox oxunan','bizi izləyin','şərhlər','comments','related news','read also'];
+  const low=chunk.toLocaleLowerCase('az-AZ');
+  let end=chunk.length;
+  for(const marker of endMarkers){const i=low.indexOf(marker,350); if(i>=350) end=Math.min(end,i);}
+  chunk=chunk.slice(0,end)
+    .replace(/^(?:sosial\s+)?\d{1,2}[.\/-]\d{1,2}[.\/-](?:19|20)\d{2}(?:\s+\d{1,2}:\d{2})?\s*/i,'')
+    .replace(/^oxunma sayı\s*:?\s*\d+\s*/i,'')
+    .trim();
+  const lines=chunk.split(/\n+/).map(x=>x.trim()).filter(x=>x.length>=25 && !/facebook|instagram|telegram|twitter|x\.com|reklam|cookie|abunə|subscribe/i.test(x));
+  return [...new Set(lines)].join('\n\n').slice(0,120000);
 }
 function paragraphText(html='') {
   const raw=String(html||'')
@@ -482,7 +544,10 @@ async function enrichPage(item) {
     const articleLd=ld.find(x=>String(x?.['@type']||'').toLowerCase().includes('article')) || ld.find(x=>x?.articleBody) || {};
     const title = articleLd?.headline || firstMatch(html,[/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,/<title[^>]*>([\s\S]*?)<\/title>/i]);
     const desc = articleLd?.description || firstMatch(html,[/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i]);
-    const body = cleanArticleText(articleLd?.articleBody || '') || paragraphText(html) || stripHtml(desc) || item.text || '';
+    const structuredBody=cleanArticleText(articleLd?.articleBody || '');
+    const paragraphBody=paragraphText(html);
+    const anchoredBody=titleAnchoredArticleText(html, stripHtml(title)||item.title||'');
+    const body = structuredBody || (anchoredBody.length>=180?anchoredBody:'') || paragraphBody || stripHtml(desc) || item.text || '';
     let image = '';
     if(typeof articleLd?.image==='string') image=articleLd.image;
     else if(Array.isArray(articleLd?.image)) image=typeof articleLd.image[0]==='string'?articleLd.image[0]:(articleLd.image[0]?.url||'');
@@ -497,7 +562,7 @@ async function enrichPage(item) {
       title:stripHtml(title)||item.title,
       text:String(body||item.text||'').slice(0,120000),
       image:imageUrls[0]||primaryImage||null,
-      published_at:normalizeDate(published)||extractVisiblePublishedDate(html)||item.published_at,
+      published_at:normalizeDate(published)||extractVisiblePublishedDate(html,stripHtml(title)||item.title||'')||item.published_at,
       author:author||item.author||null,
       raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url,image_urls:imageUrls}
     };

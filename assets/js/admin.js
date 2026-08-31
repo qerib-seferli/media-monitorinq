@@ -500,7 +500,7 @@ async function renderRelevanceReview(){
     .order('detected_at',{ascending:false}).limit(80);
   if(error){el.innerHTML=`<div class="empty compact">${escapeHtml(error.message)}</div>`;return;}
   const rows=(data||[]).filter(row=>{
-    if(isMentionExcluded(row,excludes) || ['kept','ignored','auto-kept','auto-blocked','auto-ignored'].includes(String(row?.raw_payload?.admin_review_status||''))) return false;
+    if(isMentionExcluded(row,excludes) || ['kept','ignored','auto-kept','auto-blocked','auto-ignored','auto-reviewed'].includes(String(row?.raw_payload?.admin_review_status||''))) return false;
     const kind=String(row?.raw_payload?.kind||'').toLowerCase();
     if(kind.includes('comment')){
       const ownText=reviewFold([row?.original_text,row?.summary].filter(Boolean).join(' '));
@@ -788,7 +788,7 @@ async function runReviewAutoSieve(event) {
     for(let i=0;i<activeOrgs.length;i++){
       const org=activeOrgs[i];
       setSieveButtonState(btn,Math.round(((i+1)/Math.max(1,activeOrgs.length))*100),`${i+1}/${activeOrgs.length} • ${org.short_name}`);
-      const {data,error}=await invokeBackend('monitor-worker',{mode:'existing_refilter',organization_id:org.id,refilter_limit:800});
+      const {data,error}=await invokeBackend('monitor-worker',{mode:'review_auto_sieve',organization_id:org.id,refilter_limit:800});
       if(error||!data?.ok){failed++;continue;}
       checked+=Number(data.checked||0); filtered+=Number(data.filtered_out||0);
     }

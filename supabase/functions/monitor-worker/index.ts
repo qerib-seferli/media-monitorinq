@@ -279,8 +279,8 @@ Deno.serve(async (req) => {
         }
         if (safeMetadata && options.news_published_at) patch.published_at=options.news_published_at;
         if (safeMetadata && options.news_author) patch.author_name=options.news_author;
-        const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,10);
-        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
+        const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,1);
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
         const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
         if (updated?.error) throw updated.error;
         if(safeMetadata && externalImages.length){
@@ -409,6 +409,22 @@ Deno.serve(async (req) => {
       }
       const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit,options.refilter_before);
       return json({ok:true,run_id:runId,mode:'existing_refilter',organization:org.short_name,...result},200);
+    }
+
+    if (options.mode === 'review_auto_sieve') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'review_auto_sieve',error:'Təşkilat tapılmadı'},200);
+      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 1200);
+      const keywords = installKeywordContext(org, activeKeywordRows);
+      const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
+      let villageNames:string[] = [];
+      if (org.district_id) {
+        const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
+        if (villageResult?.error) throw villageResult.error;
+        villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
+      }
+      const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit||800,null,true);
+      return json({ok:true,run_id:runId,mode:'review_auto_sieve',organization:org.short_name,...result},200);
     }
 
     if (options.mode === 'news_ingest') {
@@ -1762,7 +1778,7 @@ async function storedYoutubeCommentBackfillStep(
   return {items:dedupeItems(out),videos_checked:checked,inserted_hint:0};
 }
 
-async function refilterExistingMentions(admin:any,org:any,keywords:string[],villages:string[],limit=250,before:string|null=null){
+async function refilterExistingMentions(admin:any,org:any,keywords:string[],villages:string[],limit=250,before:string|null=null,markReviewed=false){
   let query:any=admin.from('mentions')
     .select('id,title,original_text,source_url,published_at,detected_at,author_name,raw_payload,relevance_score')
     .eq('organization_id',org.id)
@@ -1786,6 +1802,8 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
       if(!update?.error)filteredOut++;
     }else if(learned?.kind==='phrase'){
       await admin.from('mentions').update({raw_payload:{...raw,admin_review_status:'auto-kept',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}}).eq('id',row.id);
+    }else if(markReviewed){
+      await admin.from('mentions').update({raw_payload:{...raw,admin_review_status:'auto-reviewed',admin_review_at:new Date().toISOString()}}).eq('id',row.id);
     }
   }
   const rows=Array.isArray(result?.data)?result.data:[];
