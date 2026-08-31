@@ -128,7 +128,7 @@ jobs:
           NEWS_FAST_FEED_LIMIT: '10'
           NEWS_MAX_INGEST_ITEMS: '100'
           NEWS_MAX_ENRICH_ITEMS: '6'
-          NEWS_MAX_SCREENSHOTS: '0'
+          NEWS_MAX_SCREENSHOTS: '1'
         run: node scripts/news-gateway.mjs
 
   web-archive-discovery:
@@ -177,7 +177,7 @@ jobs:
           NEWS_BROAD_QUERY_LIMIT: '4'
           NEWS_MAX_INGEST_ITEMS: '140'
           NEWS_MAX_ENRICH_ITEMS: '8'
-          NEWS_MAX_SCREENSHOTS: '1'
+          NEWS_MAX_SCREENSHOTS: '2'
         run: node scripts/news-gateway.mjs
 
   web-recent-priority-backfill:
@@ -228,7 +228,7 @@ jobs:
           NEWS_BING_PAGE_LIMIT: '2'
           NEWS_MAX_INGEST_ITEMS: '140'
           NEWS_MAX_ENRICH_ITEMS: '6'
-          NEWS_MAX_SCREENSHOTS: '1'
+          NEWS_MAX_SCREENSHOTS: '2'
           NEWS_SITEMAP_INDEX_LIMIT: '10'
           NEWS_SITEMAP_URL_LIMIT: '500'
           NEWS_SITEMAP_PROBE_LIMIT: '20'
@@ -283,7 +283,7 @@ jobs:
           NEWS_BING_PAGE_LIMIT: '1'
           NEWS_MAX_INGEST_ITEMS: '180'
           NEWS_MAX_ENRICH_ITEMS: '4'
-          NEWS_MAX_SCREENSHOTS: '1'
+          NEWS_MAX_SCREENSHOTS: '2'
           NEWS_SITEMAP_INDEX_LIMIT: '12'
           NEWS_SITEMAP_URL_LIMIT: '600'
           NEWS_SITEMAP_PROBE_LIMIT: '45'
@@ -338,7 +338,7 @@ jobs:
           NEWS_BING_PAGE_LIMIT: '2'
           NEWS_MAX_INGEST_ITEMS: '140'
           NEWS_MAX_ENRICH_ITEMS: '4'
-          NEWS_MAX_SCREENSHOTS: '1'
+          NEWS_MAX_SCREENSHOTS: '2'
           NEWS_SITEMAP_INDEX_LIMIT: '8'
           NEWS_SITEMAP_URL_LIMIT: '450'
           NEWS_SITEMAP_PROBE_LIMIT: '16'
