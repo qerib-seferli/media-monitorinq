@@ -160,6 +160,42 @@ Deno.serve(async (req) => {
       return json({ok:true,run_id:runId,mode:'news_plan',organizations},200);
     }
 
+    if (options.mode === 'screenshot_backfill_targets') {
+      const org = orgs[0] || null;
+      if (!org) return json({ok:false,run_id:runId,mode:'screenshot_backfill_targets',error:'Təşkilat tapılmadı'},200);
+      try {
+        // Screenshot növbəsi ən köhnə boş qeydlərdən başlayır. Hər çağırış məhdud
+        // sayda qeyd qaytarır ki, Edge Function və Supabase egress yükü böyüməsin.
+        const scanLimit=Math.max(40,Math.min(180,options.screenshot_limit*18));
+        const result:any = await admin.from('mentions')
+          .select('id,title,source_url,source_platform,published_at,detected_at,mention_media(media_type,url)')
+          .eq('organization_id',org.id)
+          .gt('relevance_score',0)
+          .not('source_url','is',null)
+          .order('detected_at',{ascending:true,nullsFirst:false})
+          .limit(scanLimit);
+        if (result?.error) throw result.error;
+        const targets:any[]=[];
+        for (const row of (Array.isArray(result?.data)?result.data:[])) {
+          const hasScreenshot=(Array.isArray(row?.mention_media)?row.mention_media:[])
+            .some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot' && Boolean(m?.url));
+          if (hasScreenshot || !row?.source_url) continue;
+          targets.push({
+            mention_id:row.id,
+            title:row.title||'',
+            url:row.source_url,
+            source_url:row.source_url,
+            source_platform:row.source_platform||'',
+            published_at:row.published_at||null
+          });
+          if (targets.length>=options.screenshot_limit) break;
+        }
+        return json({ok:true,run_id:runId,mode:'screenshot_backfill_targets',organization:org.short_name,targets,scanned:Array.isArray(result?.data)?result.data.length:0},200);
+      } catch (e) {
+        return json({ok:false,run_id:runId,mode:'screenshot_backfill_targets',error:errorInfo(e).message},200);
+      }
+    }
+
     if (options.mode === 'news_enrich') {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_enrich',error:'Təşkilat tapılmadı'},200);
@@ -235,7 +271,7 @@ Deno.serve(async (req) => {
         const mention=mentionResult?.data||null;
         if(!mention?.id) return json({ok:true,run_id:runId,mode:'news_media',saved:false,skipped:'mention-not-found'},200);
         const mediaType=options.media_type==='screenshot'?'screenshot':'preview';
-        const already=(Array.isArray(mention.mention_media)?mention.mention_media:[]).some((m:any)=>String(m?.media_type||'').toLowerCase()===mediaType && /supabase\.co\/storage\/v1\/object\/public\//i.test(String(m?.url||'')));
+        const already=(Array.isArray(mention.mention_media)?mention.mention_media:[]).some((m:any)=>String(m?.media_type||'').toLowerCase()===mediaType && Boolean(m?.url));
         if(already) return json({ok:true,run_id:runId,mode:'news_media',saved:false,skipped:'already-exists'},200);
         const mime=/^image\/(png|jpeg|webp)$/i.test(options.mime_type)?options.mime_type.toLowerCase():'image/jpeg';
         const ext=mime.includes('png')?'png':mime.includes('webp')?'webp':'jpg';
@@ -2304,6 +2340,7 @@ type RunOptions = {
   organization_batch:number;
   organization_rotation_bucket:number;
   youtube_query_limit:number;
+  screenshot_limit:number;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -2337,7 +2374,8 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   organization_shard_index:0,
   organization_batch:0,
   organization_rotation_bucket:0,
-  youtube_query_limit:4
+  youtube_query_limit:4,
+  screenshot_limit:8
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -2387,7 +2425,8 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       organization_shard_index:Math.max(0,Math.min(19,Number(body?.organization_shard_index || 0))),
       organization_batch:Math.max(0,Math.min(20,Number(body?.organization_batch || 0))),
       organization_rotation_bucket:Math.max(0,Number(body?.organization_rotation_bucket || 0)),
-      youtube_query_limit:Math.max(1,Math.min(4,Number(body?.youtube_query_limit || 4)))
+      youtube_query_limit:Math.max(1,Math.min(4,Number(body?.youtube_query_limit || 4))),
+      screenshot_limit:Math.max(1,Math.min(20,Number(body?.screenshot_limit || 8)))
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};

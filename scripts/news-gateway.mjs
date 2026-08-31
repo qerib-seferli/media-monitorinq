@@ -478,28 +478,82 @@ async function fetchBinaryBase64(url) {
   }catch{return null;} finally{clearTimeout(timer);}
 }
 
-function findChrome() {
-  for (const bin of ['google-chrome','google-chrome-stable','chromium','chromium-browser']) {
+function findBinary(candidates=[]) {
+  for (const bin of candidates) {
     const r=spawnSync('which',[bin],{encoding:'utf8'});
     if (r.status===0 && r.stdout.trim()) return r.stdout.trim();
   }
   return '';
 }
 
+function findChrome() {
+  return findBinary(['google-chrome','google-chrome-stable','chromium','chromium-browser']);
+}
+
+function optimizeScreenshot(inputFile) {
+  const tool=findBinary(['magick','convert']);
+  if(!tool) return null;
+  const output=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`);
+  const args=tool.endsWith('/magick')
+    ? [inputFile,'-auto-orient','-strip','-resize','900x1200>','-quality','58',output]
+    : [inputFile,'-auto-orient','-strip','-resize','900x1200>','-quality','58',output];
+  const r=spawnSync(tool,args,{encoding:'utf8',timeout:15000});
+  if(r.status!==0 || !existsSync(output)) { try{unlinkSync(output)}catch{} return null; }
+  try {
+    const buf=readFileSync(output);
+    if(!buf.length || buf.length>950_000) return null;
+    return {base64:buf.toString('base64'),mime_type:'image/jpeg',bytes:buf.length};
+  } finally { try{unlinkSync(output)}catch{} }
+}
+
 async function captureScreenshot(target) {
   const chrome=findChrome();
   if (!chrome || !target?.url) return null;
-  const file=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
-  // Arxiv screenshot-u tam səhifə 1440x2400 PNG əvəzinə daha yüngül ölçüdə çəkilir.
-  // Mətn oxunaqlılığı qalır, Storage və egress ölçüsü xeyli azalır.
-  const args=['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--window-size=1024,1600','--force-device-scale-factor=0.65',`--screenshot=${file}`,target.url];
-  const r=spawnSync(chrome,args,{encoding:'utf8',timeout:25000});
-  if (r.status!==0 || !existsSync(file)) return null;
+  const profiles=[
+    {width:960,height:1280,scale:'0.55',budget:'4500'},
+    {width:820,height:1080,scale:'0.45',budget:'3500'}
+  ];
+  for(const profile of profiles){
+    const file=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
+    const args=[
+      '--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars',
+      '--disable-dev-shm-usage','--run-all-compositor-stages-before-draw',
+      `--virtual-time-budget=${profile.budget}`,
+      `--window-size=${profile.width},${profile.height}`,
+      `--force-device-scale-factor=${profile.scale}`,
+      `--screenshot=${file}`,target.url
+    ];
+    const r=spawnSync(chrome,args,{encoding:'utf8',timeout:30000});
+    if (r.status!==0 || !existsSync(file)) { try{unlinkSync(file)}catch{} continue; }
+    try {
+      // GitHub runner-də ImageMagick varsa PNG-ni JPEG-ə sıxırıq. Bu, Supabase
+      // Storage/egress xərclərini ciddi azaldır. Yoxdursa kiçik PNG təhlükəsiz fallback-dır.
+      const optimized=optimizeScreenshot(file);
+      if(optimized) return optimized;
+      const buf=readFileSync(file);
+      if(buf.length && buf.length<=1_050_000) return {base64:buf.toString('base64'),mime_type:'image/png',bytes:buf.length};
+    } finally { try{unlinkSync(file)}catch{} }
+  }
+  return null;
+}
+
+async function saveScreenshotForTarget(org,target) {
+  const sourceUrl=String(target?.source_url||target?.original_url||target?.url||'').trim();
+  const captureUrl=String(target?.capture_url||target?.url||sourceUrl).trim();
+  if(!sourceUrl || !captureUrl) return {saved:false,skipped:'url-yoxdur'};
+  const shot=await captureScreenshot({...target,url:captureUrl});
+  if(!shot) {
+    console.log(`[${org.short_name}] Screenshot alınmadı: ${captureUrl.slice(0,140)}`);
+    return {saved:false,skipped:'capture-failed'};
+  }
   try {
-    const base64=readFileSync(file).toString('base64');
-    if (base64.length > 2_400_000) return null;
-    return {base64,mime_type:'image/png'};
-  } finally { try{unlinkSync(file)}catch{} }
+    const saved=await callMonitor({mode:'news_media',organization_id:org.id,source_url:sourceUrl,image_base64:shot.base64,mime_type:shot.mime_type,media_type:'screenshot'});
+    console.log(`[${org.short_name}] Screenshot: ${saved?.ok && saved?.saved ? 'SAXLANDI' : (saved?.skipped||saved?.error||'buraxıldı')} | ${Math.round(Number(shot.bytes||0)/1024)} KB | ${String(target?.title||sourceUrl).slice(0,100)}`);
+    return saved||{saved:false};
+  } catch(e) {
+    console.log(`[${org.short_name}] Screenshot upload xəta: ${e?.message||e}`);
+    return {saved:false,error:e?.message||String(e)};
+  }
 }
 
 async function gdeltNews(query) {
@@ -1125,6 +1179,7 @@ for (const org of plan.organizations) {
   const rankedPositive=allWebCandidates.filter(item=>relevanceRank(item)>=70).length;
   console.log(`[${org.short_name}] Web namizədlər: direct=${directWebItems.length} sitemap-probe=${sitemapProbeItems.length} domain=${domainWebItems.length} google=${googleItems.length} broad=${broadWebItems.length} all=${allWebCandidates.length} yüksək-siqnal=${rankedPositive} unified=${unifiedWebItems.length}`);
 
+  const screenshotQueue=[];
   const batches = [
     {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}
   ];
@@ -1145,11 +1200,11 @@ for (const org of plan.organizations) {
     totalChunkFailures += Number(result?.chunk_failures||0);
     console.log(`[${org.short_name}] ${batch.label}: received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
     logIngestSamples(org.short_name,batch.label,result);
+    if(Array.isArray(result?.screenshot_targets)) screenshotQueue.push(...result.screenshot_targets);
 
     // Yalnız filtrdən keçmiş materialların öz səhifəsini açıb tam mətni, tarix/müəllif
     // və əsas xəbər şəklini dəqiqləşdiririk. Beləliklə axtarış snippet-i orijinal mətn kimi saxlanmır.
     const acceptedTargets=Array.isArray(result?.accepted_targets)?result.accepted_targets:[];
-    const screenshotFallback=[];
     for (const target of acceptedTargets.slice(0,MAX_ENRICH_ITEMS)) {
       const enriched=await enrichPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:target.image||null,author:target.author||null,raw:target.raw||{}});
       try {
@@ -1169,18 +1224,36 @@ for (const org of plan.organizations) {
       if(hasExternalPreview){
         console.log(`[${org.short_name}] Xəbər şəkli: XARİCİ CDN | ${String(enriched.title||target.title||'').slice(0,100)}`);
       }
-      if(!hasExternalPreview) screenshotFallback.push({...target,title:enriched.title||target.title||'',original_url:target.url,capture_url:enriched.raw?.canonical_url||target.url,url:target.url});
+      // Screenshot artıq preview-dən asılı deyil: hər qəbul edilmiş materialın ayrıca
+      // arxiv görüntüsü olmalıdır. Canonical URL bilinəndə capture üçün onu üstün tuturuq.
+      const queued=screenshotQueue.find(x=>String(x?.url||'')===String(target.url||''));
+      if(queued) queued.capture_url=enriched.raw?.canonical_url||target.url;
     }
 
-    // Xəbər şəkli yoxdursa arxiv screenshot saxlanılır. Hər run-da limit var; növbəti run
-    // screenshot-u olmayan növbəti materialları tamamlayacaq.
-    for (const target of screenshotFallback.slice(0,MAX_SCREENSHOTS)) {
-      const shot=await captureScreenshot({...target,url:target.capture_url||target.url});
-      if (!shot) { console.log(`[${org.short_name}] Screenshot alınmadı: ${String(target?.url||'').slice(0,120)}`); continue; }
-      try {
-        const saved=await callMonitor({mode:'news_media',organization_id:org.id,source_url:target.original_url||target.url,image_base64:shot.base64,mime_type:shot.mime_type,media_type:'screenshot'});
-        console.log(`[${org.short_name}] Screenshot: ${saved?.ok && saved?.saved ? 'SAXLANDI' : (saved?.skipped||saved?.error||'buraxıldı')} | ${String(target?.title||target?.url||'').slice(0,100)}`);
-      } catch(e) { console.log(`[${org.short_name}] Screenshot upload xəta: ${e?.message||e}`); }
+  }
+
+  // Yalnız yeni tapılan xəbərlər yox, bazada əvvəldən olan Web və YouTube qeydləri də
+  // mərhələli şəkildə screenshot ilə tamamlanır. Hər run üçün limit kiçik saxlanılır;
+  // beləliklə Supabase Free Storage/egress birdən-birə şişmir və növbəti run qaldığı
+  // yerdən davam edir.
+  if(MAX_SCREENSHOTS>0 && !gatewayBudgetLow()) {
+    try {
+      const backlog=await callMonitor({mode:'screenshot_backfill_targets',organization_id:org.id,screenshot_limit:Math.max(6,MAX_SCREENSHOTS*6)},45000);
+      if(Array.isArray(backlog?.targets)) screenshotQueue.push(...backlog.targets);
+      const uniqueTargets=dedupe(screenshotQueue.map(x=>({
+        ...x,
+        source_url:String(x?.source_url||x?.url||''),
+        url:String(x?.url||x?.source_url||'')
+      }))).filter(x=>x.source_url||x.url);
+      let completed=0;
+      for(const target of uniqueTargets) {
+        if(completed>=MAX_SCREENSHOTS || gatewayBudgetLow()) break;
+        const saved=await saveScreenshotForTarget(org,target);
+        if(saved?.saved || saved?.skipped==='already-exists') completed++;
+      }
+      console.log(`[${org.short_name}] Screenshot növbəsi: namizəd=${uniqueTargets.length}, bu run tamamlandı=${completed}/${MAX_SCREENSHOTS}`);
+    } catch(e) {
+      console.log(`[${org.short_name}] Screenshot backlog xəta: ${e?.message||e}`);
     }
   }
 }
