@@ -2,6 +2,7 @@ import { supabase, escapeHtml } from './core.js';
 
 let excludePromise=null;
 const fold=v=>String(v||'').toLocaleLowerCase('az-AZ').normalize('NFKC').replace(/\s+/g,' ').trim();
+const foldLoose=v=>fold(v).normalize('NFKD').replace(/[əƏ]/g,'e').replace(/[ıİ]/g,'i').replace(/[şŞ]/g,'s').replace(/[çÇ]/g,'c').replace(/[öÖ]/g,'o').replace(/[üÜ]/g,'u').replace(/[ğĞ]/g,'g').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
 export async function loadGlobalExcludes(){
   if(!excludePromise) excludePromise=(async()=>{
     const {data,error}=await supabase.from('keywords').select('value').is('organization_id',null).eq('is_active',true).eq('kind','exclude').limit(1000);
@@ -44,10 +45,11 @@ export function isMentionExcluded(row,excludes=[]){
   if(!hasWaterSignal && HARD_FOREIGN_SCRIPT_RE.test(raw)) return true;
   if(!excludes.length) return false;
   const protectedSet=protectedExcludeTerms(row);
+  const looseHay=foldLoose(raw);
   return excludes.some(term=>{
-    const t=fold(term);
-    if(!t || protectedSet.has(t)) return false;
-    return hay.includes(t);
+    const t=fold(term), loose=foldLoose(term);
+    if(!t || protectedSet.has(t) || protectedSet.has(loose)) return false;
+    return hay.includes(t) || (loose.length>=3 && looseHay.includes(loose));
   });
 }
 export function filterExcludedMentions(rows,excludes=[]){return (rows||[]).filter(row=>!isMentionExcluded(row,excludes));}

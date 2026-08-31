@@ -28,8 +28,8 @@ const BROAD_QUERY_LIMIT = Math.max(0, Math.min(12, Number(process.env.NEWS_BROAD
 const FAST_LINK_LIMIT = Math.max(4, Math.min(20, Number(process.env.NEWS_FAST_LINK_LIMIT || 8)));
 const FAST_FEED_LIMIT = Math.max(4, Math.min(20, Number(process.env.NEWS_FAST_FEED_LIMIT || 10)));
 const MAX_INGEST_ITEMS = Math.max(20, Math.min(400, Number(process.env.NEWS_MAX_INGEST_ITEMS || (DIRECT_ONLY ? 90 : 160))));
-const MAX_ENRICH_ITEMS = Math.max(2, Math.min(24, Number(process.env.NEWS_MAX_ENRICH_ITEMS || (DIRECT_ONLY ? 8 : 12))));
-const MAX_SCREENSHOTS = Math.max(0, Math.min(12, Number(process.env.NEWS_MAX_SCREENSHOTS ?? (DIRECT_ONLY ? 3 : 5))));
+const MAX_ENRICH_ITEMS = Math.max(4, Math.min(80, Number(process.env.NEWS_MAX_ENRICH_ITEMS || 80)));
+const MAX_SCREENSHOTS = Math.max(0, Math.min(24, Number(process.env.NEWS_MAX_SCREENSHOTS ?? 24)));
 const SITEMAP_FOCUS = ['1','true','yes'].includes(String(process.env.NEWS_SITEMAP_FOCUS || '').toLowerCase());
 const SITEMAP_INDEX_LIMIT = Math.max(2, Math.min(20, Number(process.env.NEWS_SITEMAP_INDEX_LIMIT || (RECENT_PRIORITY ? 10 : DEEP_BACKFILL ? 8 : 5))));
 const SITEMAP_URL_LIMIT = Math.max(40, Math.min(1200, Number(process.env.NEWS_SITEMAP_URL_LIMIT || (RECENT_PRIORITY ? 700 : DEEP_BACKFILL ? 450 : 140))));
@@ -195,8 +195,25 @@ function attr(block, tagName, attrName) {
 }
 function normalizeDate(value='') {
   if (!value) return null;
-  const d = new Date(value);
+  const raw=String(value).trim();
+  const months={yanvar:1,fevral:2,mart:3,aprel:4,may:5,iyun:6,iyul:7,avqust:8,sentyabr:9,oktyabr:10,noyabr:11,dekabr:12,january:1,february:2,march:3,april:4,june:6,july:7,august:8,september:9,october:10,november:11,december:12};
+  const folded=raw.toLocaleLowerCase('az-AZ').normalize('NFKD').replace(/[əƏ]/g,'e').replace(/[ıİ]/g,'i').replace(/[şŞ]/g,'s').replace(/[çÇ]/g,'c').replace(/[öÖ]/g,'o').replace(/[üÜ]/g,'u').replace(/[ğĞ]/g,'g').replace(/[\u0300-\u036f]/g,'');
+  const named=folded.match(/(?:^|\D)(\d{1,2})\s+([a-z]+)[,\s]+(20\d{2}|19\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/i);
+  if(named && months[named[2]]){const d=new Date(Date.UTC(Number(named[3]),months[named[2]]-1,Number(named[1]),Number(named[4]||9),Number(named[5]||0),Number(named[6]||0)));return d.toISOString();}
+  const dotted=folded.match(/(?:^|\D)(\d{1,2})[.\/-](\d{1,2})[.\/-](20\d{2}|19\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if(dotted){const d=new Date(Date.UTC(Number(dotted[3]),Number(dotted[2])-1,Number(dotted[1]),Number(dotted[4]||9),Number(dotted[5]||0),Number(dotted[6]||0)));if(!Number.isNaN(d.getTime()))return d.toISOString();}
+  const d = new Date(raw);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+function extractVisiblePublishedDate(html='') {
+  const raw=cleanArticleText(String(html||'').replace(/<script\b[\s\S]*?<\/script>/gi,' ').replace(/<style\b[\s\S]*?<\/style>/gi,' '));
+  const patterns=[
+    /(?:tarix|date|paylasim|paylaşım)?\s*[:\-]?\s*(\d{1,2}\s+(?:yanvar|fevral|mart|aprel|may|iyun|iyul|avqust|sentyabr|oktyabr|noyabr|dekabr|january|february|march|april|june|july|august|september|october|november|december)[,\s]+(?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/i,
+    /((?:19|20)\d{2}[.\/-]\d{1,2}[.\/-]\d{1,2}(?:[T\s]+\d{1,2}:\d{2}(?::\d{2})?)?)/,
+    /(\d{1,2}[.\/-]\d{1,2}[.\/-](?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/
+  ];
+  for(const re of patterns){const m=raw.match(re);const d=normalizeDate(m?.[1]||'');if(d)return d;}
+  return null;
 }
 function unwrapSearchUrl(value='') {
   let current=String(value||'').trim();
@@ -392,6 +409,14 @@ function absoluteUrl(base, value='') {
   if (!value) return '';
   try { return new URL(decodeXml(value),base).toString(); } catch { return decodeXml(value); }
 }
+function extractArticleImages(html='', base='', primary='') {
+  const urls=[];
+  const add=value=>{const url=absoluteUrl(base,String(value||'').trim());if(!/^https?:\/\//i.test(url))return;const low=url.toLowerCase();if(/(?:logo|icon|avatar|sprite|banner|emoji|tracking|pixel|favicon)/.test(low))return;if(!urls.includes(url))urls.push(url);};
+  add(primary);
+  for(const m of String(html).matchAll(/<meta[^>]+(?:property|name)=["'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["'][^>]+content=["']([^"']+)["']/gi))add(m[1]);
+  for(const m of String(html).matchAll(/<img\b[^>]+(?:src|data-src|data-original)=["']([^"']+)["'][^>]*>/gi))add(m[1]);
+  return urls.slice(0,8);
+}
 function jsonLdObjects(html='') {
   const out=[];
   for (const m of String(html).matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
@@ -465,14 +490,16 @@ async function enrichPage(item) {
     if(!image) image=firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i]);
     const published = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
     const author = extractAuthorFromHtml(html, articleLd, item.author||'');
+    const primaryImage=absoluteUrl(finalUrl,image||item.image||'')||null;
+    const imageUrls=extractArticleImages(html,finalUrl,primaryImage||'');
     return {
       ...item,
       title:stripHtml(title)||item.title,
       text:String(body||item.text||'').slice(0,120000),
-      image:absoluteUrl(finalUrl,image||item.image||'' )||null,
-      published_at:normalizeDate(published)||item.published_at,
+      image:imageUrls[0]||primaryImage||null,
+      published_at:normalizeDate(published)||extractVisiblePublishedDate(html)||item.published_at,
       author:author||item.author||null,
-      raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url}
+      raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url,image_urls:imageUrls}
     };
   } catch { return item; }
 }
@@ -529,13 +556,13 @@ function optimizeScreenshot(inputFile) {
   if(!tool) return null;
   const output=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`);
   const args=tool.endsWith('/magick')
-    ? [inputFile,'-auto-orient','-strip','-resize','1280x1800>','-quality','72',output]
-    : [inputFile,'-auto-orient','-strip','-resize','1280x1800>','-quality','72',output];
+    ? [inputFile,'-auto-orient','-strip','-resize','1600x5200>','-quality','80',output]
+    : [inputFile,'-auto-orient','-strip','-resize','1600x5200>','-quality','80',output];
   const r=spawnSync(tool,args,{encoding:'utf8',timeout:15000});
   if(r.status!==0 || !existsSync(output)) { try{unlinkSync(output)}catch{} return null; }
   try {
     const buf=readFileSync(output);
-    if(!buf.length || buf.length>1_650_000) return null;
+    if(!buf.length || buf.length>2_650_000) return null;
     return {base64:buf.toString('base64'),mime_type:'image/jpeg',bytes:buf.length};
   } finally { try{unlinkSync(output)}catch{} }
 }
@@ -544,8 +571,8 @@ async function captureScreenshot(target) {
   const chrome=findChrome();
   if (!chrome || !target?.url) return null;
   const profiles=[
-    {width:1280,height:1700,scale:'0.72',budget:'5000'},
-    {width:1100,height:1450,scale:'0.62',budget:'4200'}
+    {width:1440,height:5000,scale:'0.9',budget:'6500'},
+    {width:1280,height:4000,scale:'0.8',budget:'5200'}
   ];
   for(const profile of profiles){
     const file=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
@@ -565,7 +592,7 @@ async function captureScreenshot(target) {
       const optimized=optimizeScreenshot(file);
       if(optimized) return optimized;
       const buf=readFileSync(file);
-      if(buf.length && buf.length<=1_050_000) return {base64:buf.toString('base64'),mime_type:'image/png',bytes:buf.length};
+      if(buf.length && buf.length<=2_400_000) return {base64:buf.toString('base64'),mime_type:'image/png',bytes:buf.length};
     } finally { try{unlinkSync(file)}catch{} }
   }
   return null;
@@ -1249,7 +1276,7 @@ for (const org of plan.organizations) {
         const refreshed=await callMonitor({
           mode:'news_enrich', organization_id:org.id, source_url:target.url,
           title:enriched.title||target.title||'', text:enriched.text||target.text||'',
-          image_url:enriched.image||'', published_at:enriched.published_at||target.published_at||null,
+          image_url:enriched.image||'', image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[], published_at:enriched.published_at||target.published_at||null,
           author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url
         });
         if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);

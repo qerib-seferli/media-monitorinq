@@ -234,6 +234,31 @@ function keywordGroupSummary(stat, mode) {
     </details>`;
 }
 
+function renderKeywordSearchResults(target, rows, mode) {
+  if (!target) return;
+  if (!rows?.length) { target.innerHTML='<div class="empty compact">Uyğun söz tapılmadı.</div>'; target.classList.remove('hidden'); return; }
+  target.innerHTML=rows.map(x=>`<div class="keyword-search-hit"><span>${escapeHtml(x.value)}</span><small>${mode==='exclude'?'Axtarılmamalı':'Monitorinq açar sözü'}</small></div>`).join('');
+  target.classList.remove('hidden');
+}
+
+function bindKeywordSearch(inputId, resultId, mode) {
+  const input=document.querySelector(inputId), result=document.querySelector(resultId);
+  if(!input||!result||input.dataset.bound==='1') return;
+  input.dataset.bound='1';
+  let timer=null, token=0;
+  input.addEventListener('input',()=>{
+    clearTimeout(timer); const value=input.value.trim(); const current=++token;
+    if(value.length<2){result.classList.add('hidden');result.innerHTML='';return;}
+    timer=setTimeout(async()=>{
+      let q=supabase.from('keywords').select('id,value,kind').is('organization_id',null).eq('is_active',true).ilike('value',`%${value.replace(/[%_]/g,'')}%`).order('value').limit(30);
+      q=mode==='exclude'?q.eq('kind','exclude'):q.neq('kind','exclude');
+      const {data,error}=await q; if(current!==token)return;
+      if(error){result.innerHTML=`<div class="empty compact">${escapeHtml(error.message)}</div>`;result.classList.remove('hidden');return;}
+      renderKeywordSearchResults(result,data||[],mode);
+    },220);
+  });
+}
+
 function renderKeywords() {
   const el = document.querySelector('#keyword-list');
   const excludeEl = document.querySelector('#exclude-list');
@@ -254,6 +279,8 @@ function renderKeywords() {
       if (group.open && group.dataset.loaded !== '1') loadKeywordGroup(group, 0, false);
     });
   });
+  bindKeywordSearch('#keyword-search','#keyword-search-results','positive');
+  bindKeywordSearch('#exclude-search','#exclude-search-results','exclude');
 }
 
 async function loadKeywordGroup(group, offset=0, append=false) {
@@ -675,6 +702,8 @@ function bindDynamicActions() {
   document.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => resetPassword(b.dataset.reset));
   const fullRefilterBtn=document.querySelector('#full-refilter-btn');
   if(fullRefilterBtn && !fullRefilterBtn.dataset.bound){fullRefilterBtn.dataset.bound='1';fullRefilterBtn.addEventListener('click',runFullDatabaseRefilter);}
+  const reviewSieveBtn=document.querySelector('#review-auto-sieve-btn');
+  if(reviewSieveBtn && !reviewSieveBtn.dataset.bound){reviewSieveBtn.dataset.bound='1';reviewSieveBtn.addEventListener('click',runReviewAutoSieve);}
   document.querySelectorAll('[data-modal]').forEach(b => b.onclick = () => modal(b.dataset.modal));
 }
 
@@ -710,26 +739,30 @@ async function deleteOrganization(id) {
   await refresh();
 }
 
+function setSieveButtonState(btn, progress, text) {
+  if(!btn) return;
+  const pct=Math.max(0,Math.min(100,Number(progress||0)));
+  btn.style.setProperty('--sieve-progress',`${pct}%`);
+  const label=btn.querySelector('.sieve-label'); if(label && text) label.textContent=text;
+}
+
 async function runFullDatabaseRefilter() {
   const btn=document.querySelector('#full-refilter-btn');
   if(!btn || btn.disabled) return;
   const ok=await confirmDialog({
     title:'Bütün baza ələkdən keçirilsin?',
-    message:'Bütün təşkilatların saxlanmış nəticələri cari Monitorinq açar sözləri və Axtarılmamalı sözlər bankı ilə yenidən yoxlanacaq. Uyğunsuz qeydlər silinməyəcək, görünməz ediləcək; uyğun qeydlər saxlanacaq. Bu əməliyyat bir neçə dəqiqə çəkə bilər.',
+    message:'Bütün təşkilatların saxlanmış nəticələri cari Monitorinq açar sözləri və Axtarılmamalı sözlər bankı ilə yenidən yoxlanacaq. YouTube şərhlərinin öz mətni də filtrə salınacaq. Uyğunsuz qeydlər silinməyəcək, görünməz ediləcək; uyğun qeydlər saxlanacaq.',
     confirmText:'Bəli, süzgəcdən keçir',cancelText:'Xeyr'
   });
   if(!ok) return;
-  btn.disabled=true;
-  const original=btn.textContent;
+  btn.disabled=true; setSieveButtonState(btn,2,'Ələk hazırlanır…');
   let checked=0, filtered=0, failed=0;
   try{
     const activeOrgs=sortedOrganizations(orgs).filter(o=>o.service_status!=='archived');
     for(let i=0;i<activeOrgs.length;i++){
-      const org=activeOrgs[i];
-      btn.textContent=`Ələnir ${i+1}/${activeOrgs.length}: ${org.short_name}`;
-      let before=null;
-      let pages=0;
-      while(pages<20){
+      const org=activeOrgs[i]; let before=null, pages=0;
+      setSieveButtonState(btn,Math.max(3,Math.round((i/Math.max(1,activeOrgs.length))*100)),`Ələnir ${i+1}/${activeOrgs.length}: ${org.short_name}`);
+      while(pages<30){
         const {data,error}=await invokeBackend('monitor-worker',{mode:'existing_refilter',organization_id:org.id,refilter_before:before,refilter_limit:500});
         if(error || !data?.ok){failed++;break;}
         checked+=Number(data.checked||0); filtered+=Number(data.filtered_out||0); pages++;
@@ -737,10 +770,33 @@ async function runFullDatabaseRefilter() {
         before=data.next_before;
       }
     }
+    setSieveButtonState(btn,100,'Ələk tamamlandı');
     toast(`Süzgəc tamamlandı: ${checked} qeyd yoxlandı, ${filtered} uyğunsuz qeyd gizlədildi${failed?`, ${failed} təşkilatda xəta oldu`:''}.`,failed?'error':'success');
-    await renderRelevanceReview();
+    resetGlobalExcludeCache(); await renderRelevanceReview();
   }finally{
-    btn.disabled=false; btn.textContent=original;
+    setTimeout(()=>{btn.disabled=false;setSieveButtonState(btn,0,'Bütün bazanı ələkdən keçir');},900);
+  }
+}
+
+async function runReviewAutoSieve(event) {
+  event?.preventDefault?.(); event?.stopPropagation?.();
+  const btn=document.querySelector('#review-auto-sieve-btn'); if(!btn||btn.disabled)return;
+  btn.disabled=true; setSieveButtonState(btn,3,'Tövsiyələr ələnir…');
+  let checked=0,filtered=0,failed=0;
+  try{
+    const activeOrgs=sortedOrganizations(orgs).filter(o=>o.service_status!=='archived');
+    for(let i=0;i<activeOrgs.length;i++){
+      const org=activeOrgs[i];
+      setSieveButtonState(btn,Math.round(((i+1)/Math.max(1,activeOrgs.length))*100),`${i+1}/${activeOrgs.length} • ${org.short_name}`);
+      const {data,error}=await invokeBackend('monitor-worker',{mode:'existing_refilter',organization_id:org.id,refilter_limit:800});
+      if(error||!data?.ok){failed++;continue;}
+      checked+=Number(data.checked||0); filtered+=Number(data.filtered_out||0);
+    }
+    setSieveButtonState(btn,100,'Tövsiyələr təmizləndi');
+    resetGlobalExcludeCache(); await refresh(); await renderRelevanceReview();
+    toast(`Uyğunluq siyahısı yeniləndi: ${checked} qeyd yoxlandı, ${filtered} qeyd kənarlaşdırıldı${failed?`, ${failed} təşkilatda xəta oldu`:''}.`,failed?'error':'success');
+  } finally {
+    setTimeout(()=>{btn.disabled=false;setSieveButtonState(btn,0,'Tövsiyələri avtomatik ələkdən keçir');},900);
   }
 }
 
@@ -1024,6 +1080,8 @@ document.querySelector('#keyword-form').onsubmit = async e => {
   e.preventDefault();
   const value=document.querySelector('#keyword-value').value.trim();
   if (!value) return;
+  const existing=await supabase.from('keywords').select('id').is('organization_id',null).neq('kind','exclude').ilike('value',value).limit(1).maybeSingle();
+  if(existing?.data?.id) return toast('Bu qlobal açar söz artıq mövcuddur.','info');
   const { error } = await supabase.from('keywords').insert({organization_id:null,value,kind:'phrase',is_active:true});
   toast(error?.code==='23505'?'Bu qlobal açar söz artıq mövcuddur.':(error?.message||'Qlobal açar söz əlavə edildi'),error?'error':'success');
   if(!error){e.target.reset();await refresh();}
@@ -1032,6 +1090,8 @@ document.querySelector('#exclude-form').onsubmit = async e => {
   e.preventDefault();
   const value = document.querySelector('#exclude-value').value.trim();
   if (!value) return;
+  const existing=await supabase.from('keywords').select('id').is('organization_id',null).eq('kind','exclude').ilike('value',value).limit(1).maybeSingle();
+  if(existing?.data?.id) return toast('Bu qlobal filtr artıq mövcuddur.','info');
   const { error } = await supabase.from('keywords').insert({organization_id:null,value,kind:'exclude',is_active:true});
   toast(error?.code==='23505'?'Bu qlobal filtr artıq mövcuddur.':(error?.message||'Qlobal axtarılmamalı söz əlavə edildi'), error ? 'error' : 'success');
   if (!error) { resetGlobalExcludeCache(); e.target.reset(); await refresh(); toast('Filtr görünüşlərdə dərhal tətbiq olunur; bazadakı köhnə qeydlər növbəti worker yoxlamasında təsdiqlənəcək.','success'); }

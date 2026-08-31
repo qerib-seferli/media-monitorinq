@@ -1,6 +1,24 @@
-import { avatarText, escapeHtml, signOut } from './core.js';
+import { avatarText, escapeHtml, signOut, supabase } from './core.js';
 
 let outsideProfileHandler = null;
+
+function notificationSeenKey(profile){return `media-monitor-notifications-seen:${profile?.id||profile?.organization_id||'user'}`;}
+export function markNotificationsSeen(profile, stamp=new Date().toISOString()){
+  try{localStorage.setItem(notificationSeenKey(profile),String(stamp||new Date().toISOString()));}catch{}
+  document.querySelectorAll('.notification-unread-badge').forEach(x=>x.remove());
+}
+async function refreshNotificationBadge(profile){
+  if(!profile || profile.system_role==='super_admin') return;
+  const nav=document.querySelector('#bottom-nav a[href="bildirisler.html"],#bottom-nav a[href="./bildirisler.html"]');
+  if(!nav) return;
+  let seen='1970-01-01T00:00:00.000Z'; try{seen=localStorage.getItem(notificationSeenKey(profile))||seen;}catch{}
+  let q=supabase.from('notifications').select('id',{count:'exact',head:true}).gt('created_at',seen);
+  if(profile.organization_id) q=q.eq('organization_id',profile.organization_id);
+  const {count,error}=await q; if(error)return;
+  const n=Math.max(0,Number(count||0)); nav.querySelector('.notification-unread-badge')?.remove();
+  if(n>0){const badge=document.createElement('span');badge.className='notification-unread-badge';badge.textContent=String(Math.min(n,99));badge.setAttribute('aria-label',`${n} yeni bildiriş`);nav.appendChild(badge);}
+}
+
 
 const ICONS = {
   dashboard:'<svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>',
@@ -68,6 +86,7 @@ export function renderShell(profile, active='dashboard') {
     const mobileNav = isAdmin ? nav.slice(0,5) : nav;
     bottom.classList.toggle('admin-bottom-nav', isAdmin);
     bottom.innerHTML = mobileNav.map(([href,iconKey,label,key])=>`<a href="${href}" class="${key===active?'active':''}">${icon(iconKey)}<small>${label}</small></a>`).join('') + (isAdmin ? `<button type="button" class="bottom-signout" data-action="signout">${icon('signout')}<small>Çıxış</small></button>` : '');
+    if(!isAdmin) setTimeout(()=>refreshNotificationBadge(profile),0);
   }
 
   document.querySelectorAll('[data-action="signout"]').forEach(el => el.addEventListener('click', signOut));

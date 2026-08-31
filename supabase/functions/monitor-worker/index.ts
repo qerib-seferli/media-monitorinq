@@ -270,7 +270,7 @@ Deno.serve(async (req) => {
           const candidate:Item={title:options.news_title||current.data.title||'',text:options.news_text||'',url:options.canonical_url||options.source_url,published_at:options.news_published_at||current.data.published_at||null,raw:{kind:'web_enrich',provider:'web'}};
           contentRelevant=evaluateMatch(org,candidate,positiveKeywords.map((x:string)=>x.toLocaleLowerCase('az-AZ')),villageNames).accepted;
         }
-        const safeMetadata = titleConsistent && dateConsistent && contentRelevant;
+        const safeMetadata = titleConsistent && contentRelevant;
         const patch:any = {last_seen_at:new Date().toISOString(),last_verified_at:new Date().toISOString(),source_status:'active'};
         if (safeMetadata && options.news_title) patch.title=options.news_title;
         if (safeMetadata && options.news_text) {
@@ -279,10 +279,17 @@ Deno.serve(async (req) => {
         }
         if (safeMetadata && options.news_published_at) patch.published_at=options.news_published_at;
         if (safeMetadata && options.news_author) patch.author_name=options.news_author;
-        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,canonical_url:options.canonical_url||options.source_url,image_url:options.image_url||undefined,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
+        const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,10);
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
         const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
         if (updated?.error) throw updated.error;
-        return json({ok:true,run_id:runId,mode:'news_enrich',updated:true,metadata_updated:safeMetadata,mention_id:current.data.id},200);
+        if(safeMetadata && externalImages.length){
+          const mediaResult:any=await admin.from('mention_media').select('url,media_type').eq('mention_id',current.data.id);
+          const existingUrls=new Set((Array.isArray(mediaResult?.data)?mediaResult.data:[]).map((x:any)=>String(x?.url||'')));
+          const missing=externalImages.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()}));
+          if(missing.length){const mediaInsert:any=await admin.from('mention_media').insert(missing); if(mediaInsert?.error) console.error('news-enrich-media',mediaInsert.error);}
+        }
+        return json({ok:true,run_id:runId,mode:'news_enrich',updated:true,metadata_updated:safeMetadata,mention_id:current.data.id,media_count:externalImages.length},200);
       } catch(e) {
         return json({ok:false,run_id:runId,mode:'news_enrich',updated:false,error:errorInfo(e).message},200);
       }
@@ -2372,6 +2379,7 @@ type RunOptions = {
   news_published_at:string|null;
   news_author:string;
   image_url:string;
+  image_urls:string[];
   canonical_url:string;
   include_archived:boolean;
   organization_shard_count:number;
@@ -2409,6 +2417,7 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   news_published_at:null,
   news_author:'',
   image_url:'',
+  image_urls:[],
   canonical_url:'',
   include_archived:false,
   organization_shard_count:1,
@@ -2462,6 +2471,7 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       news_published_at:body?.published_at ? String(body.published_at) : null,
       news_author:String(body?.author || '').slice(0,500),
       image_url:String(body?.image_url || '').slice(0,2000),
+      image_urls:[...new Set((Array.isArray(body?.image_urls)?body.image_urls:[]).map((x:any)=>String(x||'').slice(0,2000)).filter((x:string)=>/^https?:\/\//i.test(x)))].slice(0,12),
       canonical_url:String(body?.canonical_url || '').slice(0,2000),
       include_archived:body?.include_archived === true,
       organization_shard_count:Math.max(1,Math.min(20,Number(body?.organization_shard_count || 1))),
@@ -2892,7 +2902,8 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
 
   // Web üçün axtarılmamalı filtr sərt veto-dur: müsbət açar söz və ya rayon adı
   // tapılsa belə, aktiv exclude qaydasına düşən material istifadəçiyə göstərilmir.
-  // YouTube/rəy axınının hazırkı davranışını dəyişməmək üçün sərt veto yalnız Web-dədir.
+  // YouTube rəylərində də adminin Axtarılmamalı söz bankına saldığı açıq ifadə sərt veto-dur.
+  // Beləliklə aidiyyəti videonun altında olsa belə “cute cute girl” tipli əlaqəsiz şərhlər geri qayıtmır.
   // Quyu ilə bağlı bədbəxt hadisə / ölüm xəbərləri su infrastrukturu monitorinqi deyil.
   // Əvvəllər təkcə "su quyusu" ifadəsi güclü mövzu sayıldığı üçün belə materiallar
   // Bərdə adı ilə birlikdə səhvən qəbul oluna bilirdi. İnfrastruktur işi ayrıca görünürsə veto tətbiq etmirik.
@@ -2914,7 +2925,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const fishingContext = webLike && /baliq/.test(normalized) && /(?:ov|brakonyer|tor|qadagan olunmus alet)/.test(normalized)
     && !/(?:suvarma|meliorasiya|subartez|artez|drenaj|kollektor|nasos stansiyasi|su teminati)/.test(normalized);
 
-  const excludedByRule = webLike && (exclusionHits.length > 0 || nonInfrastructureWellIncident || nonInfrastructureHumanIncident || fishingContext);
+  const excludedByRule = (webLike || isComment) && (exclusionHits.length > 0 || nonInfrastructureWellIncident || nonInfrastructureHumanIncident || fishingContext);
   const negativeOnly = !webLike && exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
 
   const foreignDistricts = [
