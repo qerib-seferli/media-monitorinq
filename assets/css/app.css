@@ -1521,3 +1521,19 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 
 .notification-unread-badge{min-width:17px!important;height:17px!important;padding:0 4px!important;font-size:8px!important;line-height:17px!important;border:2px solid #0b1b2d!important;box-shadow:0 0 0 1px rgba(255,73,104,.24),0 1px 8px rgba(255,73,104,.32)!important;top:3px!important;right:calc(50% - 20px)!important}
 @media(max-width:430px){.notification-unread-badge{min-width:16px!important;height:16px!important;font-size:7.5px!important;line-height:16px!important;top:2px!important;right:calc(50% - 19px)!important}}
+
+
+/* 2026-09-02 final radar/mobile stability overrides */
+.dashboard-central-monitor{width:100%}.dashboard-central-monitor .central-monitor-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:720px){
+  .org-record-actions{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:5px!important}
+  .org-record-actions .btn{width:100%!important;min-width:0!important;padding:9px 2px!important;font-size:8px!important;line-height:1.05!important;white-space:nowrap!important}
+  .alias-inline-form{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;gap:8px!important;align-items:end!important}
+  .alias-inline-form .alias-org-field{grid-column:1!important;grid-row:1!important;min-width:0!important}
+  .alias-inline-form .alias-type-field{grid-column:2!important;grid-row:1!important;min-width:0!important}
+  .alias-inline-form .alias-value-field{grid-column:1/-1!important;grid-row:2!important}
+  .alias-inline-form .form-actions{grid-column:1/-1!important;grid-row:3!important}
+  .alias-inline-form .field label{position:static!important;display:block!important;margin:0 0 5px 2px!important;height:auto!important;line-height:1.15!important;font-size:9px!important}
+  .alias-inline-form .select{width:100%!important;min-width:0!important;height:42px!important;font-size:9px!important;padding:0 23px 0 7px!important}
+  .dashboard-central-monitor .central-monitor-overview{grid-template-columns:1fr!important}
+}

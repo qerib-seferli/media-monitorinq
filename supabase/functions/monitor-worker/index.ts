@@ -229,6 +229,39 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (options.mode === 'news_enrich_backfill_targets') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'news_enrich_backfill_targets',error:'Təşkilat tapılmadı'},200);
+      try {
+        const limit=Math.max(1,Math.min(20,options.screenshot_limit||12));
+        const result:any=await admin.from('mentions')
+          .select('id,title,summary,original_text,source_url,source_platform,published_at,author_name,raw_payload,mention_media(media_type,url)')
+          .eq('organization_id',org.id)
+          .in('source_platform',['Web','Google News'])
+          .gt('relevance_score',0)
+          .not('source_url','is',null)
+          .order('last_verified_at',{ascending:true,nullsFirst:true})
+          .limit(160);
+        if(result?.error) throw result.error;
+        const rows=Array.isArray(result?.data)?result.data:[];
+        const targets=[];
+        for(const row of rows){
+          const raw=row?.raw_payload||{};
+          const text=clean(row?.original_text||row?.summary||'');
+          const media=Array.isArray(row?.mention_media)?row.mention_media:[];
+          const hasShot=media.some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot' && Boolean(m?.url));
+          const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase()) && Boolean(m?.url));
+          const needs=text.length<80 || raw?.enrichment_complete!==true || !row?.published_at || !row?.author_name || !hasShot || !hasCover;
+          if(!needs) continue;
+          targets.push({id:row.id,title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:row.published_at||null,author:row.author_name||null,raw,has_screenshot:hasShot,has_cover:hasCover});
+          if(targets.length>=limit) break;
+        }
+        return json({ok:true,run_id:runId,mode:'news_enrich_backfill_targets',organization:org.short_name,targets,scanned:rows.length},200);
+      } catch(e) {
+        return json({ok:false,run_id:runId,mode:'news_enrich_backfill_targets',error:errorInfo(e).message},200);
+      }
+    }
+
     if (options.mode === 'news_enrich') {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_enrich',error:'Təşkilat tapılmadı'},200);

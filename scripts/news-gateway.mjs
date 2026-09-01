@@ -583,23 +583,27 @@ async function enrichPage(item) {
     const paragraphBody=paragraphText(html);
     const anchoredBody=titleAnchoredArticleText(html, stripHtml(title)||item.title||'');
     const body = structuredBody || (anchoredBody.length>=180?anchoredBody:'') || paragraphBody || stripHtml(desc) || item.text || '';
-    let image = '';
-    if(typeof articleLd?.image==='string') image=articleLd.image;
-    else if(Array.isArray(articleLd?.image)) image=typeof articleLd.image[0]==='string'?articleLd.image[0]:(articleLd.image[0]?.url||'');
-    else if(articleLd?.image?.url) image=articleLd.image.url;
-    if(!image) image=firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i]);
+    let structuredImage = '';
+    if(typeof articleLd?.image==='string') structuredImage=articleLd.image;
+    else if(Array.isArray(articleLd?.image)) structuredImage=typeof articleLd.image[0]==='string'?articleLd.image[0]:(articleLd.image[0]?.url||'');
+    else if(articleLd?.image?.url) structuredImage=articleLd.image.url;
+    const metaImage=firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i]);
     const published = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
     const author = extractAuthorFromHtml(html, articleLd, item.author||'');
-    const primaryImage=absoluteUrl(finalUrl,image||item.image||'')||null;
+    const pagePublished=normalizeDate(published)||extractVisiblePublishedDate(html,stripHtml(title)||item.title||'');
+    const articleScope=[...html.matchAll(/<(?:article|main)\b[^>]*>([\s\S]*?)<\/(?:article|main)>/gi)].map(m=>m[1]).join('\n');
+    const hasArticleImage=/<img\b/i.test(articleScope);
+    const primaryCandidate=structuredImage || (hasArticleImage?metaImage:'') || '';
+    const primaryImage=absoluteUrl(finalUrl,primaryCandidate)||null;
     const imageUrls=extractArticleImages(html,finalUrl,primaryImage||'',stripHtml(title)||item.title||'');
     return {
       ...item,
       title:stripHtml(title)||item.title,
       text:String(body||item.text||'').slice(0,120000),
-      image:imageUrls[0]||primaryImage||null,
-      published_at:normalizeDate(published)||extractVisiblePublishedDate(html,stripHtml(title)||item.title||'')||item.published_at,
+      image:imageUrls[0]||null,
+      published_at:pagePublished||item.published_at,
       author:author||item.author||null,
-      raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url,image_urls:imageUrls}
+      raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished)}
     };
   } catch { return item; }
 }
@@ -669,8 +673,8 @@ function optimizeScreenshot(inputFile) {
   if(!tool) return null;
   const output=join(tmpdir(),`media-monitor-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`);
   const args=tool.endsWith('/magick')
-    ? [inputFile,'-auto-orient','-strip','-resize','1600x5200>','-quality','80',output]
-    : [inputFile,'-auto-orient','-strip','-resize','1600x5200>','-quality','80',output];
+    ? [inputFile,'-auto-orient','-strip','-fuzz','4%','-trim','+repage','-resize','1800x5200>','-quality','88',output]
+    : [inputFile,'-auto-orient','-strip','-fuzz','4%','-trim','+repage','-resize','1800x5200>','-quality','88',output];
   const r=spawnSync(tool,args,{encoding:'utf8',timeout:15000});
   if(r.status!==0 || !existsSync(output)) { try{unlinkSync(output)}catch{} return null; }
   try {
@@ -711,10 +715,19 @@ async function captureScreenshot(target) {
   return null;
 }
 
+function isSecurityChallengeHtml(html='') {
+  return /performing security verification|verify you are not a bot|checking your browser|cloudflare|cf-chl|attention required/i.test(String(html||''));
+}
+
 async function saveScreenshotForTarget(org,target) {
   const sourceUrl=String(target?.source_url||target?.original_url||target?.url||'').trim();
   const captureUrl=String(target?.capture_url||target?.url||sourceUrl).trim();
   if(!sourceUrl || !captureUrl) return {saved:false,skipped:'url-yoxdur'};
+  const probeHtml=fetchRenderedHtml(captureUrl,12000);
+  if(isSecurityChallengeHtml(probeHtml)){
+    console.log(`[${org.short_name}] Screenshot buraxıldı: anti-bot/security challenge | ${captureUrl.slice(0,140)}`);
+    return {saved:false,skipped:'security-challenge'};
+  }
   const shot=await captureScreenshot({...target,url:captureUrl});
   if(!shot) {
     console.log(`[${org.short_name}] Screenshot alınmadı: ${captureUrl.slice(0,140)}`);
@@ -1412,6 +1425,33 @@ for (const org of plan.organizations) {
       if(queued) queued.capture_url=enriched.raw?.canonical_url||target.url;
     }
 
+  }
+
+  // Bazada əvvəldən olan Web materiallarını da eyni run daxilində mərhələli tam yenilə:
+  // tam mətn, orijinal tarix, müəllif və yalnız xəbərə aid bir qapaq şəkli. Bu, köhnə
+  // "Mətn saxlanmayıb" və discovery vaxtının səhvən paylaşım tarixi kimi qalmasını düzəldir.
+  if(!gatewayBudgetLow()) {
+    try {
+      const backlog=await callMonitor({mode:'news_enrich_backfill_targets',organization_id:org.id,screenshot_limit:20},45000);
+      const refreshTargets=Array.isArray(backlog?.targets)?backlog.targets:[];
+      let refreshedCount=0;
+      for(const target of refreshTargets){
+        if(gatewayBudgetLow()) break;
+        const enriched=await enrichPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:null,author:target.author||null,raw:target.raw||{}});
+        try {
+          const refreshed=await callMonitor({
+            mode:'news_enrich',organization_id:org.id,source_url:target.url,
+            title:enriched.title||target.title||'',text:enriched.text||target.text||'',
+            image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],
+            published_at:enriched.published_at||target.published_at||null,author:enriched.author||null,
+            canonical_url:enriched.raw?.canonical_url||target.url
+          });
+          if(refreshed?.ok) refreshedCount++;
+          if(!target.has_screenshot) screenshotQueue.push({title:enriched.title||target.title||'',url:target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});
+        } catch(e) { console.log(`[${org.short_name}] Arxiv metadata yeniləmə xətası: ${e?.message||e}`); }
+      }
+      if(refreshTargets.length) console.log(`[${org.short_name}] Arxiv tamamlama: namizəd=${refreshTargets.length}, yeniləndi=${refreshedCount}`);
+    } catch(e) { console.log(`[${org.short_name}] Arxiv tamamlama növbəsi xətası: ${e?.message||e}`); }
   }
 
   // Yalnız yeni tapılan xəbərlər yox, bazada əvvəldən olan Web və YouTube qeydləri də

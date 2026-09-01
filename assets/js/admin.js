@@ -1035,6 +1035,7 @@ async function configureBarda() {
 }
 
 async function renderBardaStatus() {
+  const renderSeq=++bardaStatusRenderSeq;
   const el = document.querySelector('#barda-status');
   const globalEl = document.querySelector('#global-status');
   if (!el && !globalEl) return;
@@ -1071,6 +1072,7 @@ async function renderBardaStatus() {
     supabase.from('mentions').select('published_at').eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0).not('published_at','is',null).order('published_at',{ascending:true}).limit(1).maybeSingle()
   ]);
   if (!web.error && !youtube.error) {
+    if(renderSeq!==bardaStatusRenderSeq) return;
     const last = latest?.data?.detected_at ? fmtDate(latest.data.detected_at) : '—';
     const totalWeb = Number(web.count || 0);
     const currentWeb = recentWeb?.error ? 0 : Number(recentWeb.count || 0);
@@ -1087,6 +1089,7 @@ let networkRadarStopRequested=false;
 let networkRadarRunning=false;
 let networkRadarStartedAt=0;
 let networkRadarTimer=null;
+let bardaStatusRenderSeq=0;
 
 function radarTime(ms){
   const total=Math.max(0,Math.floor(ms/1000));
@@ -1117,7 +1120,7 @@ function radarFeed(name,data,error){
   if(feed.querySelector('.empty'))feed.innerHTML='';
   const details=Array.isArray(data?.details)?data.details:[];
   const inserted=Number(data?.new_mentions ?? data?.inserted ?? details.reduce((n,d)=>n+Number(d?.inserted||0),0));
-  const found=details.reduce((n,d)=>n+Number(d?.videos_found||d?.found||d?.comments_accepted||0),0);
+  const found=Math.max(0,Number(data?.checked||0),details.reduce((n,d)=>n+Number(d?.videos_checked||0)+Number(d?.comments_seen||0)+Number(d?.found||0)+Number(d?.received||0),0));
   const row=document.createElement('div');row.className=`radar-feed-row ${error?'error':inserted?'hit':''}`;
   row.innerHTML=`<span>${error?'×':inserted?'●':'○'}</span><div><strong>${escapeHtml(name)}</strong><small>${error?escapeHtml(error.message||String(error)):`Yoxlanıldı: ${found} • Yeni: ${inserted}`}</small></div><b>${inserted}</b>`;
   feed.prepend(row);while(feed.children.length>40)feed.lastElementChild?.remove();
@@ -1137,8 +1140,11 @@ async function runNetworkRadarScan(){
   try{
     for(let i=0;i<active.length;i++){
       if(networkRadarStopRequested)break;
-      const org=active[i];radarSetProgress(done,active.length,foundTotal,org.short_name,'YouTube + Web/RSS + qlobal xəbər mənbələri yoxlanır…');
-      const {data,error}=await invokeBackend('monitor-worker',{organization_id:org.id,mode:'scheduled',force_youtube:true,youtube_query_limit:4,edge_news_probe:true,refilter_existing:true,verify_existing:true,debug:false});
+      const org=active[i];radarSetProgress(done,active.length,foundTotal,org.short_name,'Baza yenidən süzülür və YouTube şərhləri dərin yoxlanır…');
+      const refilter=await invokeBackend('monitor-worker',{organization_id:org.id,mode:'existing_refilter',refilter_limit:800});
+      const commentSweep=await invokeBackend('monitor-worker',{organization_id:org.id,mode:'scheduled',quick_youtube_comments:true,full_comment_sweep:true,browser_quick:false,refilter_existing:false,verify_existing:false,debug:false});
+      const error=refilter.error||commentSweep.error||null;
+      const data={ok:!error,checked:Number(refilter.data?.checked||0)+Number(commentSweep.data?.checked||0),new_mentions:Number(commentSweep.data?.new_mentions||0),details:[...(Array.isArray(refilter.data?.details)?refilter.data.details:[]),...(Array.isArray(commentSweep.data?.details)?commentSweep.data.details:[]) ]};
       const added=radarFeed(org.short_name,data,error);foundTotal+=Number(added||0);done++;
       radarAddBlip(org.short_name,i,active.length,error?'error':added?'hit':'ok');radarSetProgress(done,active.length,foundTotal,org.short_name,error?'Xəta oldu, növbəti təşkilata keçilir':`Tamamlandı • yeni ${Number(added||0)}`);
       await new Promise(r=>setTimeout(r,350));
@@ -1148,7 +1154,8 @@ async function runNetworkRadarScan(){
     const elapsed=document.querySelector('#radar-elapsed');if(elapsed)elapsed.textContent=radarTime(Date.now()-networkRadarStartedAt);
     const state=document.querySelector('#radar-state');if(state)state.textContent=networkRadarStopRequested?'Dayandırıldı':'Tamamlandı';
     const current=document.querySelector('#radar-current-source');if(current)current.textContent=networkRadarStopRequested?'Skan istifadəçi tərəfindən dayandırıldı.':'Dərin skan tamamlandı. Worker növbəti avtomatik run-larda nəticələri yeniləməyə davam edəcək.';
-    toast(networkRadarStopRequested?`Skan dayandırıldı. ${done}/${active.length} təşkilat yoxlanıldı.`:`Şəbəkə skanı tamamlandı. ${done} təşkilat yoxlanıldı, ${foundTotal} yeni nəticə yazıldı.`,networkRadarStopRequested?'info':'success');
+    await renderBardaStatus();
+    toast(networkRadarStopRequested?`Skan dayandırıldı. ${done}/${active.length} təşkilat yoxlanıldı.`:`Şəbəkə skanı tamamlandı. ${done} təşkilat yoxlanıldı, ${foundTotal} yeni nəticə yazıldı. Web mətn/tarix/media yenilənməsi GitHub worker növbəsində davam edir.`,networkRadarStopRequested?'info':'success');
   }
 }
 
