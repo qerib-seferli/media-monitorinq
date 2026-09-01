@@ -3,6 +3,22 @@
 <section class="admin-view" data-admin-view="dashboard">
   <section class="page-head admin-hero"><div><span class="eyebrow">Sistem idarəetməsi</span><h1>Super Administrator</h1><p>Təşkilatlar, istifadəçilər, ərazi və qlobal monitorinq infrastrukturu.</p></div><div class="toolbar hero-actions"><button class="btn" data-modal="org">+ Təşkilat</button><button class="btn secondary" data-modal="user">+ İstifadəçi</button></div></section>
   <section class="grid grid-4 metrics-grid" id="metrics"></section>
+  <section class="card network-radar-card" id="network-radar-card">
+    <div class="network-radar-head">
+      <div><span class="eyebrow">Dərin şəbəkə skanı</span><h2>Qlobal Mənbə Radarı</h2><p>Aktiv təşkilatları növbə ilə YouTube, Web/RSS və qlobal xəbər mənbələrində dərin yoxlayır; tapılan real nəticələri təşkilata yazır.</p></div>
+      <div class="network-radar-actions"><button class="btn radar-start-btn" id="network-radar-start" type="button">Tam şəbəkəni skan et</button><button class="btn ghost hidden" id="network-radar-stop" type="button">Dayandır</button></div>
+    </div>
+    <div class="network-radar-layout">
+      <div class="radar-visual" id="radar-visual" aria-label="Şəbəkə radar skanı">
+        <span class="radar-ring r1"></span><span class="radar-ring r2"></span><span class="radar-ring r3"></span><span class="radar-ring r4"></span><span class="radar-axis x"></span><span class="radar-axis y"></span><span class="radar-sweep"></span><div class="radar-center"><b id="radar-percent">0%</b><small id="radar-state">Hazır</small></div><div class="radar-blips" id="radar-blips"></div>
+      </div>
+      <div class="radar-telemetry">
+        <div class="radar-stats"><div><span>Aktiv təşkilat</span><b id="radar-org-total">0</b></div><div><span>Yoxlanılıb</span><b id="radar-org-done">0</b></div><div><span>Yeni nəticə</span><b id="radar-found">0</b></div><div><span>Müddət</span><b id="radar-elapsed">00:00</b></div></div>
+        <div class="radar-current"><span>Hazırkı skan</span><strong id="radar-current-org">Başlamaq üçün düyməni vur</strong><small id="radar-current-source">YouTube + Web/RSS + qlobal xəbər mənbələri</small></div>
+        <div class="radar-feed" id="radar-feed"><div class="empty compact">Skan başladıqda real nəticələr burada canlı görünəcək.</div></div>
+      </div>
+    </div>
+  </section>
   <section class="grid grid-2 admin-summary-grid" style="margin-top:16px">
     <article class="card summary-card"><div class="section-head"><div><span class="eyebrow">Sürətli keçid</span><h2>Təşkilat idarəetməsi</h2><p>Təşkilat, səlahiyyət və rayon bağlamalarını idarə et.</p></div></div><div class="quick-links"><a class="quick-link" href="#organizations"><span>▦</span><div><strong>Təşkilatlar</strong><small>Aktivlik, növ və ərazi</small></div><b>›</b></a><a class="quick-link" href="#users"><span>👥</span><div><strong>İstifadəçilər</strong><small>Nazirlik və yerli idarə hesabları</small></div><b>›</b></a></div></article>
     <article class="card summary-card central-monitor-card"><div class="section-head"><div><span class="eyebrow">Mərkəzi monitorinq</span><h2>Qlobal sistem və pilot nəzarəti</h2><p>Qlobal mənbələr, söz bankı və təşkilat nəticələri bir paneldə izlənir.</p></div></div><div class="central-monitor-overview"><section class="central-monitor-block"><strong>Qlobal sistem</strong><small>Bütün təşkilatlar üzrə ümumi infrastruktur</small><div class="setup-status" id="global-status">Qlobal vəziyyət yoxlanılır…</div></section><section class="central-monitor-block"><strong>Bərdə keyfiyyət nəzarəti</strong><small>Pilot təşkilatın nəticə və arxiv göstəriciləri</small><div class="setup-status" id="barda-status">Bərdə vəziyyəti yoxlanılır…</div></section></div><div class="quick-actions central-monitor-actions"><button class="btn secondary" id="configure-barda">Bərdə profilini yoxla</button><button class="btn" id="run-monitor">Sürətli monitorinq yoxlaması</button></div></article>

@@ -39,6 +39,8 @@ function route() {
   });
   window.scrollTo({ top: 0, behavior: 'instant' });
   bindRouteLinks();
+  if(view==='monitoring') setTimeout(()=>renderRelevanceReview(),0);
+  if(view==='dashboard') setTimeout(()=>{ renderBardaStatus(); renderNetworkRadarIdle(); },0);
 }
 
 function bindRouteLinks() {
@@ -95,10 +97,11 @@ async function refresh() {
   renderKeywords();
   renderSources();
   renderAliases();
-  renderRelevanceReview();
+  if (currentView() === 'monitoring') renderRelevanceReview();
   renderAudit();
   fillSelects();
-  renderBardaStatus();
+  if (currentView() === 'dashboard') renderBardaStatus();
+  renderNetworkRadarIdle();
   bindDynamicActions();
 }
 
@@ -158,7 +161,7 @@ function renderOrgs() {
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
       <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Rayon</span><b>${escapeHtml(o.districts?.name || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
-      <div class="record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Xidməti aktivləşdir' : 'Xidməti dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
+      <div class="record-actions org-record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
     </article>`).join('') || '<div class="empty">Təşkilat yoxdur.</div>';
 }
 
@@ -220,7 +223,7 @@ function keywordGroupSummary(stat, mode) {
   const count = mode === 'exclude' ? stat.excluded_count : stat.positive_count;
   if (!count) return '';
   const orgKey = stat.organization_id || '';
-  const css = mode === 'exclude' ? 'keyword-group exclusion-group' : 'keyword-group';
+  const css = mode === 'exclude' ? 'keyword-group exclusion-group' : 'keyword-group positive-group';
   const label = mode === 'exclude' ? 'aktiv filtr' : 'açar söz';
   return `
     <details class="${css}" data-keyword-group="1" data-mode="${mode}" data-org-id="${escapeHtml(orgKey)}" data-total="${count}">
@@ -704,6 +707,10 @@ function bindDynamicActions() {
   if(fullRefilterBtn && !fullRefilterBtn.dataset.bound){fullRefilterBtn.dataset.bound='1';fullRefilterBtn.addEventListener('click',runFullDatabaseRefilter);}
   const reviewSieveBtn=document.querySelector('#review-auto-sieve-btn');
   if(reviewSieveBtn && !reviewSieveBtn.dataset.bound){reviewSieveBtn.dataset.bound='1';reviewSieveBtn.addEventListener('click',runReviewAutoSieve);}
+  const radarStart=document.querySelector('#network-radar-start');
+  if(radarStart && !radarStart.dataset.bound){radarStart.dataset.bound='1';radarStart.addEventListener('click',runNetworkRadarScan);}
+  const radarStop=document.querySelector('#network-radar-stop');
+  if(radarStop && !radarStop.dataset.bound){radarStop.dataset.bound='1';radarStop.addEventListener('click',()=>{networkRadarStopRequested=true;});}
   document.querySelectorAll('[data-modal]').forEach(b => b.onclick = () => modal(b.dataset.modal));
 }
 
@@ -828,8 +835,12 @@ async function invokeBackend(name, body) {
   // Uzun admin əməliyyatlarında JWT müddəti bitə bilər. 401/403 olduqda sessiyanı
   // bir dəfə yeniləyib eyni əməliyyatı təkrar edirik; beləliklə ələk zamanı ardıcıl 403 yaranmır.
   if(error && (status===401||status===403||/jwt|unauthorized|forbidden|403|401/i.test(String(error?.message||'')))){
-    const retry=await call(true);
-    data=retry.data; error=retry.error;
+    const current=await supabase.auth.getSession();
+    const session=current?.data?.session||null;
+    if(session?.access_token){
+      const retry=await supabase.functions.invoke(name,{body,headers:{Authorization:`Bearer ${session.access_token}`}});
+      data=retry.data; error=retry.error;
+    }
   }
   if (error) {
     const raw = `${error.message || ''} ${error.context?.status || ''}`.toLowerCase();
@@ -1070,6 +1081,76 @@ async function renderBardaStatus() {
   }
 }
 
+
+
+let networkRadarStopRequested=false;
+let networkRadarRunning=false;
+let networkRadarStartedAt=0;
+let networkRadarTimer=null;
+
+function radarTime(ms){
+  const total=Math.max(0,Math.floor(ms/1000));
+  const h=Math.floor(total/3600),m=Math.floor((total%3600)/60),s=total%60;
+  return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+function renderNetworkRadarIdle(){
+  const total=document.querySelector('#radar-org-total');
+  if(total) total.textContent=String(sortedOrganizations(orgs).filter(o=>['active','grace'].includes(o.service_status)).length);
+}
+function radarSetProgress(done,total,found,current='',source=''){
+  const pct=total?Math.min(100,Math.round(done/total*100)):0;
+  const set=(id,v)=>{const e=document.querySelector(id);if(e)e.textContent=String(v)};
+  set('#radar-percent',`${pct}%`);set('#radar-org-done',done);set('#radar-org-total',total);set('#radar-found',found);
+  if(current)set('#radar-current-org',current); if(source)set('#radar-current-source',source);
+  const state=document.querySelector('#radar-state');if(state)state.textContent=networkRadarRunning?'Skan edilir':(pct===100?'Tamamlandı':'Hazır');
+}
+function radarAddBlip(name,index,total,tone='ok'){
+  const box=document.querySelector('#radar-blips');if(!box)return;
+  const angle=((index*137.5)%360)*Math.PI/180;
+  const radius=18+((index*29)%30);
+  const x=50+Math.cos(angle)*radius,y=50+Math.sin(angle)*radius;
+  const dot=document.createElement('span');dot.className=`radar-blip ${tone}`;dot.style.left=`${x}%`;dot.style.top=`${y}%`;dot.innerHTML=`<i></i><small>${escapeHtml(name)}</small>`;box.appendChild(dot);
+  while(box.children.length>22)box.firstElementChild?.remove();
+}
+function radarFeed(name,data,error){
+  const feed=document.querySelector('#radar-feed');if(!feed)return;
+  if(feed.querySelector('.empty'))feed.innerHTML='';
+  const details=Array.isArray(data?.details)?data.details:[];
+  const inserted=Number(data?.new_mentions ?? data?.inserted ?? details.reduce((n,d)=>n+Number(d?.inserted||0),0));
+  const found=details.reduce((n,d)=>n+Number(d?.videos_found||d?.found||d?.comments_accepted||0),0);
+  const row=document.createElement('div');row.className=`radar-feed-row ${error?'error':inserted?'hit':''}`;
+  row.innerHTML=`<span>${error?'×':inserted?'●':'○'}</span><div><strong>${escapeHtml(name)}</strong><small>${error?escapeHtml(error.message||String(error)):`Yoxlanıldı: ${found} • Yeni: ${inserted}`}</small></div><b>${inserted}</b>`;
+  feed.prepend(row);while(feed.children.length>40)feed.lastElementChild?.remove();
+  return inserted;
+}
+async function runNetworkRadarScan(){
+  if(networkRadarRunning)return;
+  const active=sortedOrganizations(orgs).filter(o=>['active','grace'].includes(o.service_status));
+  if(!active.length)return toast('Skan ediləcək aktiv təşkilat yoxdur.','error');
+  const ok=await confirmDialog({title:'Tam şəbəkə skanı başlasın?',message:`${active.length} aktiv təşkilat növbə ilə YouTube və Web/RSS/q xəbər mənbələrində dərin yoxlanacaq. Bu proses uzun çəkə bilər; admin səhifəsini açıq saxla. Tapılan real nəticələr dərhal uyğun təşkilata yazılacaq.`,confirmText:'Bəli, skanı başlat',cancelText:'Xeyr'});
+  if(!ok)return;
+  networkRadarRunning=true;networkRadarStopRequested=false;networkRadarStartedAt=Date.now();
+  const card=document.querySelector('#network-radar-card'),start=document.querySelector('#network-radar-start'),stop=document.querySelector('#network-radar-stop'),visual=document.querySelector('#radar-visual'),feed=document.querySelector('#radar-feed');
+  card?.classList.add('is-scanning');visual?.classList.add('is-scanning');if(start)start.disabled=true;stop?.classList.remove('hidden');if(feed)feed.innerHTML='';
+  let done=0,foundTotal=0;
+  networkRadarTimer=setInterval(()=>{const e=document.querySelector('#radar-elapsed');if(e)e.textContent=radarTime(Date.now()-networkRadarStartedAt)},1000);
+  try{
+    for(let i=0;i<active.length;i++){
+      if(networkRadarStopRequested)break;
+      const org=active[i];radarSetProgress(done,active.length,foundTotal,org.short_name,'YouTube + Web/RSS + qlobal xəbər mənbələri yoxlanır…');
+      const {data,error}=await invokeBackend('monitor-worker',{organization_id:org.id,mode:'scheduled',force_youtube:true,youtube_query_limit:4,edge_news_probe:true,refilter_existing:true,verify_existing:true,debug:false});
+      const added=radarFeed(org.short_name,data,error);foundTotal+=Number(added||0);done++;
+      radarAddBlip(org.short_name,i,active.length,error?'error':added?'hit':'ok');radarSetProgress(done,active.length,foundTotal,org.short_name,error?'Xəta oldu, növbəti təşkilata keçilir':`Tamamlandı • yeni ${Number(added||0)}`);
+      await new Promise(r=>setTimeout(r,350));
+    }
+  }finally{
+    networkRadarRunning=false;clearInterval(networkRadarTimer);networkRadarTimer=null;card?.classList.remove('is-scanning');visual?.classList.remove('is-scanning');if(start)start.disabled=false;stop?.classList.add('hidden');
+    const elapsed=document.querySelector('#radar-elapsed');if(elapsed)elapsed.textContent=radarTime(Date.now()-networkRadarStartedAt);
+    const state=document.querySelector('#radar-state');if(state)state.textContent=networkRadarStopRequested?'Dayandırıldı':'Tamamlandı';
+    const current=document.querySelector('#radar-current-source');if(current)current.textContent=networkRadarStopRequested?'Skan istifadəçi tərəfindən dayandırıldı.':'Dərin skan tamamlandı. Worker növbəti avtomatik run-larda nəticələri yeniləməyə davam edəcək.';
+    toast(networkRadarStopRequested?`Skan dayandırıldı. ${done}/${active.length} təşkilat yoxlanıldı.`:`Şəbəkə skanı tamamlandı. ${done} təşkilat yoxlanıldı, ${foundTotal} yeni nəticə yazıldı.`,networkRadarStopRequested?'info':'success');
+  }
+}
 
 async function runMonitorNow() {
   const btn = document.querySelector('#run-monitor');
