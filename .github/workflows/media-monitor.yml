@@ -127,8 +127,8 @@ jobs:
           NEWS_FAST_LINK_LIMIT: '8'
           NEWS_FAST_FEED_LIMIT: '10'
           NEWS_MAX_INGEST_ITEMS: '100'
-          NEWS_MAX_ENRICH_ITEMS: '6'
-          NEWS_MAX_SCREENSHOTS: '1'
+          NEWS_MAX_ENRICH_ITEMS: '10'
+          NEWS_MAX_SCREENSHOTS: '2'
         run: node scripts/news-gateway.mjs
 
   web-archive-discovery:
@@ -176,7 +176,7 @@ jobs:
           NEWS_DOMAIN_SEARCH_BATCH: '0'
           NEWS_BROAD_QUERY_LIMIT: '4'
           NEWS_MAX_INGEST_ITEMS: '140'
-          NEWS_MAX_ENRICH_ITEMS: '8'
+          NEWS_MAX_ENRICH_ITEMS: '10'
           NEWS_MAX_SCREENSHOTS: '2'
         run: node scripts/news-gateway.mjs
 
