@@ -1537,3 +1537,75 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .alias-inline-form .select{width:100%!important;min-width:0!important;height:42px!important;font-size:9px!important;padding:0 23px 0 7px!important}
   .dashboard-central-monitor .central-monitor-overview{grid-template-columns:1fr!important}
 }
+
+
+/* 2026-09-02 — son mobil sabitləmə: yalnız təşkilat düymələri və ad variantı formu */
+@media (max-width:720px){
+  .admin-view[data-admin-view="organizations"] .mobile-record-list .record-card .record-actions.org-record-actions,
+  .admin-view[data-admin-view="organizations"] .record-actions.org-record-actions{
+    display:grid!important;
+    grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    gap:6px!important;
+    width:100%!important;
+    min-width:0!important;
+  }
+  .admin-view[data-admin-view="organizations"] .record-actions.org-record-actions .btn{
+    width:100%!important;
+    min-width:0!important;
+    max-width:none!important;
+    height:42px!important;
+    padding:0 4px!important;
+    font-size:8.7px!important;
+    line-height:1.05!important;
+    white-space:nowrap!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    border-radius:13px!important;
+  }
+  .alias-collapsible-card .admin-collapsible-body .alias-inline-form,
+  form#alias-form.alias-inline-form{
+    display:grid!important;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;
+    grid-template-areas:"aliasOrg aliasType" "aliasValue aliasValue" "aliasButton aliasButton"!important;
+    gap:10px 8px!important;
+    align-items:end!important;
+    width:100%!important;
+  }
+  .alias-collapsible-card .alias-org-field{grid-area:aliasOrg!important;min-width:0!important;max-width:none!important;display:block!important;position:relative!important}
+  .alias-collapsible-card .alias-type-field{grid-area:aliasType!important;min-width:0!important;max-width:none!important;display:block!important;position:relative!important}
+  .alias-collapsible-card .alias-value-field{grid-area:aliasValue!important;min-width:0!important;max-width:none!important}
+  .alias-collapsible-card .form-actions{grid-area:aliasButton!important;margin:0!important;width:100%!important}
+  .alias-collapsible-card .field label{
+    position:static!important;
+    display:block!important;
+    height:auto!important;
+    min-height:0!important;
+    margin:0 0 6px 2px!important;
+    padding:0!important;
+    transform:none!important;
+    line-height:1.15!important;
+    font-size:9px!important;
+    white-space:nowrap!important;
+    opacity:.88!important;
+  }
+  .alias-collapsible-card .select,
+  .alias-collapsible-card .input,
+  .alias-collapsible-card .btn{
+    width:100%!important;
+    min-width:0!important;
+    max-width:none!important;
+    height:44px!important;
+  }
+  .alias-collapsible-card .select{
+    font-size:9px!important;
+    padding:0 22px 0 7px!important;
+    text-overflow:ellipsis!important;
+    overflow:hidden!important;
+  }
+}
+@media (max-width:360px){
+  .admin-view[data-admin-view="organizations"] .record-actions.org-record-actions{gap:4px!important}
+  .admin-view[data-admin-view="organizations"] .record-actions.org-record-actions .btn{height:38px!important;font-size:7.2px!important;padding:0 2px!important;border-radius:11px!important}
+  .alias-collapsible-card .select{font-size:8px!important;padding-right:18px!important;padding-left:6px!important}
+  .alias-collapsible-card .field label{font-size:8px!important}
+}

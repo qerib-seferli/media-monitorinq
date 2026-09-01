@@ -1121,8 +1121,11 @@ function radarFeed(name,data,error){
   const details=Array.isArray(data?.details)?data.details:[];
   const inserted=Number(data?.new_mentions ?? data?.inserted ?? details.reduce((n,d)=>n+Number(d?.inserted||0),0));
   const found=Math.max(0,Number(data?.checked||0),details.reduce((n,d)=>n+Number(d?.videos_checked||0)+Number(d?.comments_seen||0)+Number(d?.found||0)+Number(d?.received||0),0));
+  const positiveWords=Number(data?.keyword_positive_count||0);
+  const excludeWords=Number(data?.keyword_exclude_count||0);
+  const wordNote=positiveWords||excludeWords ? `Söz bankı: ${positiveWords} açar / ${excludeWords} filtr • Material: ${found} • Yeni: ${inserted}` : `Material: ${found} • Yeni: ${inserted}`;
   const row=document.createElement('div');row.className=`radar-feed-row ${error?'error':inserted?'hit':''}`;
-  row.innerHTML=`<span>${error?'×':inserted?'●':'○'}</span><div><strong>${escapeHtml(name)}</strong><small>${error?escapeHtml(error.message||String(error)):`Yoxlanıldı: ${found} • Yeni: ${inserted}`}</small></div><b>${inserted}</b>`;
+  row.innerHTML=`<span>${error?'×':inserted?'●':'○'}</span><div><strong>${escapeHtml(name)}</strong><small>${error?escapeHtml(error.message||String(error)):wordNote}</small></div><b>${inserted}</b>`;
   feed.prepend(row);while(feed.children.length>40)feed.lastElementChild?.remove();
   return inserted;
 }
@@ -1136,15 +1139,18 @@ async function runNetworkRadarScan(){
   const card=document.querySelector('#network-radar-card'),start=document.querySelector('#network-radar-start'),stop=document.querySelector('#network-radar-stop'),visual=document.querySelector('#radar-visual'),feed=document.querySelector('#radar-feed');
   card?.classList.add('is-scanning');visual?.classList.add('is-scanning');if(start)start.disabled=true;stop?.classList.remove('hidden');if(feed)feed.innerHTML='';
   let done=0,foundTotal=0;
+  const wordBank=keywordStats[0]||{};
+  const keywordPositiveCount=Number(wordBank.positive_count||0);
+  const keywordExcludeCount=Number(wordBank.excluded_count||0);
   networkRadarTimer=setInterval(()=>{const e=document.querySelector('#radar-elapsed');if(e)e.textContent=radarTime(Date.now()-networkRadarStartedAt)},1000);
   try{
     for(let i=0;i<active.length;i++){
       if(networkRadarStopRequested)break;
-      const org=active[i];radarSetProgress(done,active.length,foundTotal,org.short_name,'Baza yenidən süzülür və YouTube şərhləri dərin yoxlanır…');
+      const org=active[i];radarSetProgress(done,active.length,foundTotal,org.short_name,`Bütün söz bankı yoxlamadadır: ${keywordPositiveCount} açar söz + ${keywordExcludeCount} filtr. Baza yenidən süzülür və YouTube şərhləri dərin yoxlanır…`);
       const refilter=await invokeBackend('monitor-worker',{organization_id:org.id,mode:'existing_refilter',refilter_limit:800});
       const commentSweep=await invokeBackend('monitor-worker',{organization_id:org.id,mode:'scheduled',quick_youtube_comments:true,full_comment_sweep:true,browser_quick:false,refilter_existing:false,verify_existing:false,debug:false});
       const error=refilter.error||commentSweep.error||null;
-      const data={ok:!error,checked:Number(refilter.data?.checked||0)+Number(commentSweep.data?.checked||0),new_mentions:Number(commentSweep.data?.new_mentions||0),details:[...(Array.isArray(refilter.data?.details)?refilter.data.details:[]),...(Array.isArray(commentSweep.data?.details)?commentSweep.data.details:[]) ]};
+      const data={ok:!error,keyword_positive_count:keywordPositiveCount,keyword_exclude_count:keywordExcludeCount,checked:Number(refilter.data?.checked||0)+Number(commentSweep.data?.checked||0),new_mentions:Number(commentSweep.data?.new_mentions||0),details:[...(Array.isArray(refilter.data?.details)?refilter.data.details:[]),...(Array.isArray(commentSweep.data?.details)?commentSweep.data.details:[]) ]};
       const added=radarFeed(org.short_name,data,error);foundTotal+=Number(added||0);done++;
       radarAddBlip(org.short_name,i,active.length,error?'error':added?'hit':'ok');radarSetProgress(done,active.length,foundTotal,org.short_name,error?'Xəta oldu, növbəti təşkilata keçilir':`Tamamlandı • yeni ${Number(added||0)}`);
       await new Promise(r=>setTimeout(r,350));
