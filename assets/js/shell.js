@@ -16,7 +16,7 @@ async function refreshNotificationBadge(profile){
   if(profile.organization_id) q=q.eq('organization_id',profile.organization_id);
   const {count,error}=await q; if(error)return;
   const n=Math.max(0,Number(count||0)); nav.querySelector('.notification-unread-badge')?.remove();
-  if(n>0){const badge=document.createElement('span');badge.className='notification-unread-badge';badge.textContent=String(Math.min(n,99));badge.setAttribute('aria-label',`${n} yeni bildiriş`);nav.appendChild(badge);}
+  if(n>0){const badge=document.createElement('span');badge.className='notification-unread-badge';badge.textContent=n>9?'9+':String(n);badge.setAttribute('aria-label',`${n} yeni bildiriş`);nav.appendChild(badge);}
 }
 
 

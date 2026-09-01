@@ -782,7 +782,7 @@ async function runReviewAutoSieve(event) {
   event?.preventDefault?.(); event?.stopPropagation?.();
   const btn=document.querySelector('#review-auto-sieve-btn'); if(!btn||btn.disabled)return;
   btn.disabled=true; setSieveButtonState(btn,3,'Tövsiyələr ələnir…');
-  let checked=0,filtered=0,failed=0;
+  let checked=0,filtered=0,learnedPositive=0,learnedExclude=0,failed=0;
   try{
     const activeOrgs=sortedOrganizations(orgs).filter(o=>o.service_status!=='archived');
     for(let i=0;i<activeOrgs.length;i++){
@@ -791,10 +791,11 @@ async function runReviewAutoSieve(event) {
       const {data,error}=await invokeBackend('monitor-worker',{mode:'review_auto_sieve',organization_id:org.id,refilter_limit:800});
       if(error||!data?.ok){failed++;continue;}
       checked+=Number(data.checked||0); filtered+=Number(data.filtered_out||0);
+      learnedPositive+=Number(data.positive_added||0); learnedExclude+=Number(data.exclude_added||0);
     }
     setSieveButtonState(btn,100,'Tövsiyələr təmizləndi');
     resetGlobalExcludeCache(); await refresh(); await renderRelevanceReview();
-    toast(`Uyğunluq siyahısı yeniləndi: ${checked} qeyd yoxlandı, ${filtered} qeyd kənarlaşdırıldı${failed?`, ${failed} təşkilatda xəta oldu`:''}.`,failed?'error':'success');
+    toast(`Uyğunluq siyahısı yeniləndi: ${checked} qeyd yoxlandı, ${filtered} qeyd kənarlaşdırıldı, ${learnedPositive} yeni açar söz, ${learnedExclude} yeni filtr əlavə edildi${failed?`, ${failed} təşkilatda xəta oldu`:''}.`,failed?'error':'success');
   } finally {
     setTimeout(()=>{btn.disabled=false;setSieveButtonState(btn,0,'Tövsiyələri avtomatik ələkdən keçir');},900);
   }
@@ -810,9 +811,26 @@ async function toggleUser(id, active) {
 }
 
 async function invokeBackend(name, body) {
-  const { data:{ session } } = await supabase.auth.getSession();
-  const headers = session?.access_token ? { Authorization:`Bearer ${session.access_token}` } : {};
-  const { data, error } = await supabase.functions.invoke(name, { body, headers });
+  const call = async (forceRefresh=false) => {
+    let session=null;
+    if(forceRefresh){
+      const refreshed=await supabase.auth.refreshSession();
+      session=refreshed?.data?.session||null;
+    }else{
+      const current=await supabase.auth.getSession();
+      session=current?.data?.session||null;
+    }
+    const headers=session?.access_token?{Authorization:`Bearer ${session.access_token}`}:{ };
+    return supabase.functions.invoke(name,{body,headers});
+  };
+  let {data,error}=await call(false);
+  const status=Number(error?.context?.status||error?.status||0);
+  // Uzun admin əməliyyatlarında JWT müddəti bitə bilər. 401/403 olduqda sessiyanı
+  // bir dəfə yeniləyib eyni əməliyyatı təkrar edirik; beləliklə ələk zamanı ardıcıl 403 yaranmır.
+  if(error && (status===401||status===403||/jwt|unauthorized|forbidden|403|401/i.test(String(error?.message||'')))){
+    const retry=await call(true);
+    data=retry.data; error=retry.error;
+  }
   if (error) {
     const raw = `${error.message || ''} ${error.context?.status || ''}`.toLowerCase();
     if (raw.includes('404') || raw.includes('not found') || raw.includes('failed to send')) {

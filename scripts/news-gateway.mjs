@@ -440,16 +440,42 @@ function absoluteUrl(base, value='') {
   if (!value) return '';
   try { return new URL(decodeXml(value),base).toString(); } catch { return decodeXml(value); }
 }
-function extractArticleImages(html='', base='', primary='') {
-  const urls=[];
-  const add=value=>{const url=absoluteUrl(base,String(value||'').trim());if(!/^https?:\/\//i.test(url))return;const low=url.toLowerCase();if(/(?:logo|icon|avatar|sprite|banner|emoji|tracking|pixel|favicon)/.test(low))return;if(!urls.includes(url))urls.push(url);};
-  add(primary);
-  for(const m of String(html).matchAll(/<meta[^>]+(?:property|name)=["'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["'][^>]+content=["']([^"']+)["']/gi))add(m[1]);
-  for(const m of String(html).matchAll(/<img\b[^>]+(?:src|data-src|data-original)=["']([^"']+)["'][^>]*>/gi))add(m[1]);
-  // Monitorinq kartında ekran görüntüsündən əlavə yalnız xəbərin əsas/qapaq şəkli lazımdır.
-  // Sosial ikonlar və əlaqəsiz səhifə şəkilləri bazaya daşınmır.
-  return urls.slice(0,1);
+function extractArticleImages(html='', base='', primary='', articleTitle='') {
+  const raw=String(html||'');
+  const genericRe=/(?:logo|icon|avatar|sprite|banner|emoji|tracking|pixel|favicon|heyder|heydar|president|prezident|gerb|emblem|facebook|instagram|linkedin|telegram|twitter|youtube)/i;
+  const candidates=[];
+  const genericContextUrls=new Set();
+  for(const m of raw.matchAll(/<a\b[^>]*>[\s\S]{0,900}?<\/a>/gi)){
+    const block=m[0];
+    if(!/(?:ulu\s+onder|ulu\s+öndər|heyder|heydar|prezident|president|vitse-prezident|fond|dovlet\s+qurumlari|dövlət\s+qurumları)/i.test(cleanArticleText(block))) continue;
+    for(const im of block.matchAll(/<img\b[^>]+(?:src|data-src|data-original)=['\"]([^'\"]+)['\"]/gi)){
+      const u=absoluteUrl(base,im[1]); if(u) genericContextUrls.add(u.split('?')[0]);
+    }
+  }
+  const add=(value,score=0,source='')=>{
+    const url=absoluteUrl(base,String(value||'').trim());
+    if(!/^https?:\/\//i.test(url) || genericRe.test(url) || genericContextUrls.has(url.split('?')[0])) return;
+    const key=url.split('?')[0];
+    const existing=candidates.find(x=>x.key===key);
+    if(existing){existing.score=Math.max(existing.score,score);return;}
+    candidates.push({url,key,score,source});
+  };
+  // JSON-LD/real article image is strongest. Generic site-wide OG images are deliberately weak.
+  add(primary,90,'primary');
+  const title=cleanArticleText(articleTitle||'').toLocaleLowerCase('az-AZ');
+  const articleBlocks=[...raw.matchAll(/<(?:article|main)\b[^>]*>([\s\S]*?)<\/(?:article|main)>/gi)].map(m=>m[1]);
+  const scope=(articleBlocks.join('\n')||raw);
+  for(const m of scope.matchAll(/<img\b[^>]+(?:src|data-src|data-original)=['\"]([^'\"]+)['\"][^>]*>/gi)) add(m[1],75,'article-img');
+  // OG/Twitter şəkli yalnız URL generic görünmürsə və səhifə başlığı real məqalə başlığına uyğundursa saxlanır.
+  const pageTitle=cleanArticleText(firstMatch(raw,[/<meta[^>]+property=['\"]og:title['\"][^>]+content=['\"]([^'\"]+)['\"]/i,/<title[^>]*>([\s\S]*?)<\/title>/i])).toLocaleLowerCase('az-AZ');
+  const titleOk=!title || !pageTitle || title.split(/\s+/).filter(x=>x.length>=5).some(x=>pageTitle.includes(x));
+  if(titleOk){
+    for(const m of raw.matchAll(/<meta[^>]+(?:property|name)=['\"](?:og:image(?::secure_url)?|twitter:image(?::src)?)['\"][^>]+content=['\"]([^'\"]+)['\"]/gi)) add(m[1],50,'meta');
+  }
+  candidates.sort((a,b)=>b.score-a.score);
+  return candidates.slice(0,1).map(x=>x.url);
 }
+
 function jsonLdObjects(html='') {
   const out=[];
   for (const m of String(html).matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
@@ -539,7 +565,16 @@ async function fetchPage(url,{timeoutMs=10000}={}) {
 async function enrichPage(item) {
   if (!item?.url) return item;
   try {
-    const {html,finalUrl}=await fetchPage(item.url,{timeoutMs:10000});
+    let html='', finalUrl=item.url;
+    try { const fetched=await fetchPage(item.url,{timeoutMs:10000}); html=fetched.html; finalUrl=fetched.finalUrl||item.url; } catch {}
+    // Bəzi dövlət/media saytları məzmunu yalnız JavaScript-dən sonra verir. GitHub runner-də
+    // Chrome varsa DOM-u render edib ikinci mənbə kimi götürürük; bir məlumat qəbul edilirsə
+    // həmin run-da tarix + tam mətn + düzgün qapaq şəkli birlikdə tamamlanır.
+    let rendered='';
+    const firstText=cleanArticleText(html);
+    if(!html || firstText.length<500 || !extractVisiblePublishedDate(html,item.title||'')) rendered=fetchRenderedHtml(finalUrl||item.url,18000);
+    if(rendered && cleanArticleText(rendered).length>firstText.length) html=rendered;
+    if(!html) return item;
     const ld=jsonLdObjects(html);
     const articleLd=ld.find(x=>String(x?.['@type']||'').toLowerCase().includes('article')) || ld.find(x=>x?.articleBody) || {};
     const title = articleLd?.headline || firstMatch(html,[/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,/<title[^>]*>([\s\S]*?)<\/title>/i]);
@@ -556,7 +591,7 @@ async function enrichPage(item) {
     const published = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
     const author = extractAuthorFromHtml(html, articleLd, item.author||'');
     const primaryImage=absoluteUrl(finalUrl,image||item.image||'')||null;
-    const imageUrls=extractArticleImages(html,finalUrl,primaryImage||'');
+    const imageUrls=extractArticleImages(html,finalUrl,primaryImage||'',stripHtml(title)||item.title||'');
     return {
       ...item,
       title:stripHtml(title)||item.title,
@@ -614,6 +649,19 @@ function findBinary(candidates=[]) {
 
 function findChrome() {
   return findBinary(['google-chrome','google-chrome-stable','chromium','chromium-browser']);
+}
+
+function fetchRenderedHtml(url, timeoutMs=18000) {
+  const chrome=findChrome();
+  if(!chrome || !url) return '';
+  try{
+    const r=spawnSync(chrome,[
+      '--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage',
+      '--run-all-compositor-stages-before-draw','--virtual-time-budget=4500',
+      '--dump-dom',url
+    ],{encoding:'utf8',timeout:timeoutMs,maxBuffer:12*1024*1024});
+    return r.status===0?String(r.stdout||''):'';
+  }catch{return '';}
 }
 
 function optimizeScreenshot(inputFile) {
@@ -902,7 +950,10 @@ async function directWebsite(source, org) {
       try {
         const {html}=await fetchPage(base,{timeoutMs:3000});
         homepageHtml=html;
-        const links=linkItemsFromHtml(html,base);
+        let links=linkItemsFromHtml(html,base);
+        // berdesmsii.az kimi xəbərləri JS ilə yükləyən saytlarda ilkin HTML-də real xəbər
+        // linkləri olmaya bilər. Bu halda Chrome render edilmiş DOM-dan linkləri bir dəfə götürürük.
+        if(links.length<3){const rendered=fetchRenderedHtml(base,15000);if(rendered){homepageHtml=rendered;links=linkItemsFromHtml(rendered,base);}}
         const relevant=links.filter(x=>configuredLinkIsRelevant(x,org));
         out.push(...relevant.slice(0,FAST_LINK_LIMIT));
       } catch {}
@@ -964,7 +1015,8 @@ async function directWebsite(source, org) {
     if(!SITEMAP_FOCUS){
       try {
         const {html}=await fetchPage(base,{timeoutMs:5500});
-        const links=linkItemsFromHtml(html,base);
+        let links=linkItemsFromHtml(html,base);
+        if(links.length<3){const rendered=fetchRenderedHtml(base,16000);if(rendered)links=linkItemsFromHtml(rendered,base);}
         const relevant=links.filter(x=>configuredLinkIsRelevant(x,org));
         out.push(...(relevant.length ? relevant.slice(0,20) : links.slice(0,8)));
       } catch {}

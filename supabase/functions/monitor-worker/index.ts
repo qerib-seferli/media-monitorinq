@@ -1788,12 +1788,14 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
     .order('detected_at',{ascending:false,nullsFirst:false})
     .limit(Math.max(1,limit));
   if(result?.error)throw result.error;
-  let checked=0,filteredOut=0;
+  let checked=0,filteredOut=0,positiveAdded=0,excludeAdded=0;
   for(const row of result?.data||[]){
     const item:Item={title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',published_at:row?.published_at||null,author:row?.author_name||null,raw:row?.raw_payload||{}};
     const match=evaluateMatch(org,item,keywords,villages);
     checked++;
-    const learned=await autoLearnKeywordBank(admin,org,item,match);
+    const learned=await autoLearnKeywordBank(admin,org,item,match,markReviewed);
+    if(learned?.kind==='phrase') positiveAdded++;
+    if(learned?.kind==='exclude') excludeAdded++;
     const raw={...(row?.raw_payload||{})};
     if(!match.accepted){
       const patch:any={relevance_score:0};
@@ -1808,7 +1810,7 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
   }
   const rows=Array.isArray(result?.data)?result.data:[];
   const nextBefore=rows.length ? String(rows[rows.length-1]?.detected_at||'') : '';
-  return {checked,filtered_out:filteredOut,next_before:nextBefore||null};
+  return {checked,filtered_out:filteredOut,positive_added:positiveAdded,exclude_added:excludeAdded,next_before:nextBefore||null};
 }
 
 function similarLongWebText(a:string,b:string):boolean{
@@ -2663,25 +2665,66 @@ async function ensureBaselineKeywordBank(admin:any) {
   return {positive_added:positiveAdded,exclude_added:excludeAdded,total_added:positiveAdded+excludeAdded};
 }
 
-async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any) {
+function adaptiveLearningCandidate(org:any,item:Item,match:any,kind:'phrase'|'exclude') {
+  const rawText=normalizeForMatch(`${item?.title||''} ${item?.text||''}`);
+  if(!rawText) return '';
+  const tokens=rawText.split(/\s+/).filter(Boolean);
+  const directTokens=new Set([
+    normalizeForMatch(String(org?.districts?.name||'')),
+    normalizeForMatch(String(org?.short_name||'')),
+    normalizeForMatch(String(org?.name||''))
+  ].flatMap(x=>x.split(/\s+/)).filter(x=>x.length>=3));
+  const stop=new Set(['azerbaycan','rayonu','rayonunda','seheri','kendinde','kendinin','haqqinda','ucun','olan','ile','ve','yeni','edilib','olub','video','serh','paylasim','material',...directTokens]);
+  const topicRoots=['suvar','melior','icmeli','kanaliz','subartez','artez','drenaj','kollektor','nasos','irriqasiya','hidrotex','su','kanal','quyu','anbar','bend'];
+  if(kind==='phrase'){
+    for(let i=0;i<tokens.length;i++){
+      if(!topicRoots.some(root=>tokens[i].startsWith(root))) continue;
+      const window=tokens.slice(Math.max(0,i-1),Math.min(tokens.length,i+3)).filter(x=>x.length>=3&&!stop.has(x));
+      for(const size of [3,2]){
+        if(window.length<size) continue;
+        const phrase=window.slice(0,size).join(' ').trim();
+        if(phrase.length>=8 && phrase.length<=70 && topicRoots.some(root=>phrase.split(/\s+/).some(x=>x.startsWith(root)))) return phrase;
+      }
+    }
+    return '';
+  }
+  // Lazımsız bankı üçün sərbəst söz uydurmuruq. Yalnız açıq-aşkar əlaqəsiz kateqoriya
+  // siqnalı olan qısa frazanı öyrənirik ki, düzgün su xəbərləri təsadüfən bloklanmasın.
+  const noiseRoots=['futbol','football','song','music','vlog','game','gaming','crypto','bitcoin','casino','lottery','recipe','makeup','smartphone','unboxing','narkotik','polis','cinayet','qetl','konsert','serial','film','toy','nisan','vakansiya','kredit','valyuta'];
+  for(let i=0;i<tokens.length;i++){
+    if(!noiseRoots.some(root=>tokens[i].startsWith(root))) continue;
+    const window=tokens.slice(i,Math.min(tokens.length,i+3)).filter(x=>x.length>=3&&!stop.has(x));
+    const phrase=window.slice(0,2).join(' ').trim();
+    if(phrase.length>=5 && phrase.length<=55) return phrase;
+  }
+  return '';
+}
+
+async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any, allowAdaptive=false) {
   const normalized=String(match?.normalized||normalizeForMatch(`${item?.title||''} ${item?.text||''}`));
   if(!normalized) return null;
   const globalPositive=new Set((Array.isArray(org.__normalized_global_keywords)?org.__normalized_global_keywords:[]).map(String));
   const excludes=new Set((Array.isArray(org.__normalized_excludes)?org.__normalized_excludes:[]).map(String));
-  const positiveCandidate=match?.accepted
+  let positiveCandidate=match?.accepted
     ? AUTO_LEARN_POSITIVE_PHRASES.find(value=>normalized.includes(normalizeForMatch(value)))
     : null;
-  const excludeCandidate=!match?.accepted
+  let excludeCandidate=!match?.accepted
     ? AUTO_LEARN_EXCLUDE_PHRASES.find(value=>normalized.includes(normalizeForMatch(value)))
     : null;
+  if(allowAdaptive){
+    if(match?.accepted && (!positiveCandidate || globalPositive.has(normalizeForMatch(positiveCandidate)))) positiveCandidate=adaptiveLearningCandidate(org,item,match,'phrase')||positiveCandidate;
+    if(!match?.accepted && (!excludeCandidate || excludes.has(normalizeForMatch(excludeCandidate)))) excludeCandidate=adaptiveLearningCandidate(org,item,match,'exclude')||excludeCandidate;
+  }
   const value=positiveCandidate||excludeCandidate;
   if(!value) return null;
   const kind=positiveCandidate?'phrase':'exclude';
   const normalizedValue=normalizeForMatch(value);
+  if(!normalizedValue || normalizedValue.length<4) return null;
   if((kind==='phrase' && globalPositive.has(normalizedValue)) || (kind==='exclude' && excludes.has(normalizedValue))) return null;
   try{
     const insert:any=await admin.from('keywords').insert({organization_id:null,value,kind,is_active:true});
     if(insert?.error && String(insert.error?.code||'')!=='23505') throw insert.error;
+    if(insert?.error && String(insert.error?.code||'')==='23505') return null;
     if(kind==='phrase'){
       org.__normalized_global_keywords=[...globalPositive,normalizedValue];
       org.__normalized_keywords=[...new Set([...(Array.isArray(org.__normalized_keywords)?org.__normalized_keywords:[]),normalizedValue])];
