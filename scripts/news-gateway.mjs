@@ -17,6 +17,9 @@ const DIRECT_ONLY = ['1','true','yes'].includes(String(process.env.NEWS_DIRECT_O
 const DEEP_BACKFILL = ['1','true','yes'].includes(String(process.env.NEWS_DEEP_BACKFILL || '').toLowerCase());
 const RECENT_PRIORITY = ['1','true','yes'].includes(String(process.env.NEWS_RECENT_PRIORITY || '').toLowerCase());
 const REFILTER_EXISTING = ['1','true','yes'].includes(String(process.env.NEWS_REFILTER_EXISTING || '').toLowerCase());
+const FULL_RADAR = ['1','true','yes'].includes(String(process.env.NEWS_FULL_RADAR || '').toLowerCase());
+const QUERY_PASS_COUNT = Math.max(1, Math.min(12, Number(process.env.NEWS_QUERY_PASS_COUNT || 1)));
+const QUERY_PASS = Math.max(0, Math.min(QUERY_PASS_COUNT - 1, Number(process.env.NEWS_QUERY_PASS || 0)));
 const CURRENT_YEAR = new Date().getFullYear();
 const DEFAULT_RECENT_YEAR_START = Math.max(2000, CURRENT_YEAR - 2);
 const ARCHIVE_YEAR_START = Math.max(2000, Math.min(CURRENT_YEAR, Number(process.env.NEWS_ARCHIVE_YEAR_START || (RECENT_PRIORITY ? DEFAULT_RECENT_YEAR_START : 2000))));
@@ -24,7 +27,7 @@ const ARCHIVE_YEAR_END = Math.max(ARCHIVE_YEAR_START, Math.min(CURRENT_YEAR, Num
 const BING_PAGE_LIMIT = Math.max(1, Math.min(10, Number(process.env.NEWS_BING_PAGE_LIMIT || (DEEP_BACKFILL ? 6 : 3))));
 const SOURCE_BATCH_SIZE = Math.max(4, Math.min(40, Number(process.env.NEWS_SOURCE_BATCH || (DIRECT_ONLY ? 24 : 8))));
 const DOMAIN_SEARCH_BATCH = Math.max(0, Math.min(SOURCE_BATCH_SIZE, Number(process.env.NEWS_DOMAIN_SEARCH_BATCH ?? (DIRECT_ONLY ? 0 : 6))));
-const BROAD_QUERY_LIMIT = Math.max(0, Math.min(12, Number(process.env.NEWS_BROAD_QUERY_LIMIT ?? (DIRECT_ONLY ? 0 : 2))));
+const BROAD_QUERY_LIMIT = Math.max(0, Math.min(FULL_RADAR ? 24 : 12, Number(process.env.NEWS_BROAD_QUERY_LIMIT ?? (DIRECT_ONLY ? 0 : FULL_RADAR ? 18 : 2))));
 const FAST_LINK_LIMIT = Math.max(4, Math.min(20, Number(process.env.NEWS_FAST_LINK_LIMIT || 8)));
 const FAST_FEED_LIMIT = Math.max(4, Math.min(20, Number(process.env.NEWS_FAST_FEED_LIMIT || 10)));
 const MAX_INGEST_ITEMS = Math.max(20, Math.min(400, Number(process.env.NEWS_MAX_INGEST_ITEMS || (DIRECT_ONLY ? 90 : 160))));
@@ -41,7 +44,7 @@ const ORG_SHARD_COUNT = Math.max(1, Math.min(20, Number(process.env.NEWS_ORG_SHA
 const ORG_SHARD_INDEX = Math.max(0, Math.min(ORG_SHARD_COUNT - 1, Number(process.env.NEWS_ORG_SHARD_INDEX ?? SOURCE_SHARD_INDEX ?? 0)));
 const ORG_BATCH = Math.max(0, Math.min(20, Number(process.env.NEWS_ORG_BATCH || 0)));
 const ROTATION_MINUTES = Math.max(5, Math.min(360, Number(process.env.NEWS_ORG_ROTATION_MINUTES || 15)));
-const ORG_ROTATION_BUCKET = Math.floor(Date.now() / (ROTATION_MINUTES * 60 * 1000));
+const ORG_ROTATION_BUCKET = process.env.NEWS_ORG_ROTATION_BUCKET !== undefined ? Math.max(0,Number(process.env.NEWS_ORG_ROTATION_BUCKET||0)) : Math.floor(Date.now() / (ROTATION_MINUTES * 60 * 1000));
 const GATEWAY_STARTED_AT = Date.now();
 const GATEWAY_BUDGET_MS = Math.max(60_000, Math.min(1_800_000, Number(process.env.NEWS_GATEWAY_BUDGET_MS || 0))) || 0;
 const GATEWAY_SAFETY_MS = 20_000;
@@ -1125,7 +1128,7 @@ try {
   throw e;
 }
 if (!plan?.ok || !Array.isArray(plan.organizations)) throw new Error(`News plan alınmadı: ${JSON.stringify(plan).slice(0,800)}`);
-console.log(`NEWS_GATEWAY_MODE ${SITEMAP_FOCUS?'SITEMAP_ARCHIVE':DIRECT_ONLY?'FAST_WATCH':RECENT_PRIORITY?'RECENT_PRIORITY':DEEP_BACKFILL?'HISTORICAL_BACKFILL':'ARCHIVE_DISCOVERY'} | shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} | bing_pages=${BING_PAGE_LIMIT}${DEEP_BACKFILL?` | year_window=${ARCHIVE_YEAR_START}-${ARCHIVE_YEAR_END} | archive_slice=${archiveWindowForShard('run').label}`:''}${SITEMAP_FOCUS?` | sitemap_indexes=${SITEMAP_INDEX_LIMIT} sitemap_urls=${SITEMAP_URL_LIMIT} probes=${SITEMAP_PROBE_LIMIT}`:''}`);
+console.log(`NEWS_GATEWAY_MODE ${FULL_RADAR?'FULL_RADAR:':''}${SITEMAP_FOCUS?'SITEMAP_ARCHIVE':DIRECT_ONLY?'FAST_WATCH':RECENT_PRIORITY?'RECENT_PRIORITY':DEEP_BACKFILL?'HISTORICAL_BACKFILL':'ARCHIVE_DISCOVERY'} | org_shard ${ORG_SHARD_INDEX+1}/${ORG_SHARD_COUNT} | source_shard ${SOURCE_SHARD_INDEX+1}/${SOURCE_SHARD_COUNT} | query_pass=${QUERY_PASS+1}/${QUERY_PASS_COUNT} | bing_pages=${BING_PAGE_LIMIT}${DEEP_BACKFILL?` | year_window=${ARCHIVE_YEAR_START}-${ARCHIVE_YEAR_END} | archive_slice=${archiveWindowForShard('run').label}`:''}${SITEMAP_FOCUS?` | sitemap_indexes=${SITEMAP_INDEX_LIMIT} sitemap_urls=${SITEMAP_URL_LIMIT} probes=${SITEMAP_PROBE_LIMIT}`:''}`);
 
 let totalReceived=0, totalAccepted=0, totalRejected=0, totalInserted=0, totalFailures=0, totalChunkFailures=0;
 let gdeltUsedThisRun=false;
@@ -1149,6 +1152,8 @@ for (const org of plan.organizations) {
   }
   const allGoogle = Array.isArray(org.google_queries) ? org.google_queries.filter(Boolean) : [];
   const keywordBank = Array.isArray(org.keyword_queries) ? org.keyword_queries.filter(Boolean) : [];
+  const villageQueryBank = Array.isArray(org.village_queries) ? org.village_queries.filter(Boolean) : [];
+  const aliasQueryBank = Array.isArray(org.alias_queries) ? org.alias_queries.filter(Boolean) : [];
   // Planın ilk 3 sorğusu həmişəlik əsas discovery sorğularıdır:
   // 1) rayonun özü (geniş discovery), 2) rayon + suvarma, 3) rayon + subartezian.
   // Qalan sorğulardan yalnız biri rotasiya olunur. Beləliklə hər manual run-da real
@@ -1166,7 +1171,15 @@ for (const org of plan.organizations) {
     `\"${districtName}\" kanal`, `\"${districtName}\" subartezian`, `\"${districtName}\" artezian`,
     `\"${districtName}\" fermer su`, `\"${districtName}\" əkin su`, `\"${districtName}\" su təchizatı`
   ] : [];
-  const keywordQueries = shardQueryWindow(keywordBank, Math.max(BROAD_QUERY_LIMIT, 8), SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
+  const keywordQueries = FULL_RADAR
+    ? shardQueryWindow(keywordBank, Math.max(BROAD_QUERY_LIMIT, 18), QUERY_PASS, QUERY_PASS_COUNT)
+    : shardQueryWindow(keywordBank, Math.max(BROAD_QUERY_LIMIT, 8), SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
+  const villageQueries = FULL_RADAR
+    ? shardQueryWindow(villageQueryBank, Math.max(8,Math.min(18,BROAD_QUERY_LIMIT)), QUERY_PASS, QUERY_PASS_COUNT)
+    : shardQueryWindow(villageQueryBank, Math.max(2,Math.min(5,BROAD_QUERY_LIMIT)), SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
+  const aliasQueries = FULL_RADAR
+    ? shardQueryWindow(aliasQueryBank, Math.max(6,Math.min(12,BROAD_QUERY_LIMIT)), QUERY_PASS, QUERY_PASS_COUNT)
+    : shardQueryWindow(aliasQueryBank, Math.max(2,Math.min(4,BROAD_QUERY_LIMIT)), SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT);
   // Əvvəlki variantda bütün 5 shard faktiki olaraq eyni 1-2 geniş sorğunu işlədirdi.
   // Buna görə eyni köhnə 5 xəbər təkrar tapılır, yeni material tapılsa belə çox vaxt
   // dublikat kimi insert olunmurdu. İndi hər shard rayon+mövzu və açar-söz bankının
@@ -1176,6 +1189,8 @@ for (const org of plan.organizations) {
     ...discoveryCore,
     ...topicCore,
     ...rotatingQueries,
+    ...aliasQueries,
+    ...villageQueries,
     ...keywordQueries,
     ...azDomainQueries,
     ...directDomainQueries
@@ -1183,8 +1198,8 @@ for (const org of plan.organizations) {
   const selectedDiscoveryQueries = DIRECT_ONLY ? [] : shardQueryWindow(
     shardDiscoveryPool,
     Math.max(1,BROAD_QUERY_LIMIT),
-    SOURCE_SHARD_INDEX,
-    SOURCE_SHARD_COUNT
+    FULL_RADAR ? QUERY_PASS : SOURCE_SHARD_INDEX,
+    FULL_RADAR ? QUERY_PASS_COUNT : SOURCE_SHARD_COUNT
   ).slice(0,Math.max(1,BROAD_QUERY_LIMIT));
   const webQueries = DEEP_BACKFILL
     ? deepArchiveQueries(org, selectedDiscoveryQueries).slice(0,Math.max(4,BROAD_QUERY_LIMIT+4))
@@ -1193,12 +1208,14 @@ for (const org of plan.organizations) {
   // ikinci/üçüncü sorğular isə həmin shard-ın açar söz pəncərəsindən seçilir.
   const googleBaseQueries = DIRECT_ONLY ? [] : [...new Set([
     ...(broadDistrict.length ? broadDistrict : topicCore.slice(0,1)),
-    ...shardQueryWindow([...rotatingQueries,...keywordQueries], 3, SOURCE_SHARD_INDEX, SOURCE_SHARD_COUNT)
-  ].filter(Boolean))].slice(0,4);
+    ...aliasQueries.slice(0,FULL_RADAR?4:1),
+    ...villageQueries.slice(0,FULL_RADAR?5:1),
+    ...shardQueryWindow([...rotatingQueries,...keywordQueries], FULL_RADAR?6:3, FULL_RADAR?QUERY_PASS:SOURCE_SHARD_INDEX, FULL_RADAR?QUERY_PASS_COUNT:SOURCE_SHARD_COUNT)
+  ].filter(Boolean))].slice(0,FULL_RADAR?14:4);
   const googleQueries = DEEP_BACKFILL
     ? deepArchiveQueries(org, googleBaseQueries).slice(0,8)
     : googleBaseQueries;
-  console.log(`[${org.short_name}] Açar söz bankı: ${Number(org.keyword_count||keywordBank.length)} aktiv | bu shard: ${keywordQueries.length} sorğu`);
+  console.log(`[${org.short_name}] Discovery bankı: ${Number(org.keyword_count||keywordBank.length)} açar söz + ${Number(org.village_count||0)} kənd + ${Number(org.alias_count||0)} alias | bu keçid: keyword=${keywordQueries.length}, village=${villageQueries.length}, alias=${aliasQueries.length}`);
   console.log(`[${org.short_name}] Web discovery sorğuları: ${webQueries.join(' || ')}`);
   console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
 
@@ -1230,13 +1247,19 @@ for (const org of plan.organizations) {
     const host=itemDomain(item);
     if(!host) return false;
     if(allowedDomains.some(domain=>host===domain || host.endsWith(`.${domain}`))) return true;
+    // Manual Tam Radar rejimində discovery yalnız .az domenləri ilə məhdudlaşmır.
+    // Xarici TLD-də yerləşən Azərbaycan mediası da namizəd hovuzuna daxil olur;
+    // yekun qəbul qərarını Supabase-dəki təşkilat/rayon/kənd + mövzu filtri verir.
+    if(FULL_RADAR) return !/(^|\.)google\.|(^|\.)bing\.|youtube\.com$|youtu\.be$/i.test(host);
     return host.endsWith('.az') || host==='az';
   }));
 
   // Arxiv discovery aktiv açar söz bankının shard-a düşən frazalarını da Google News-də yoxlayır.
   // Discovery genişdir; qəbul mərhələsi isə sərt rayon/kənd + mövzu filtri ilə qorunur.
-  const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,DEEP_BACKFILL?12:8).map(q=>DEEP_BACKFILL?withArchiveWindow(q,org):q);
-  const allGoogleQueries=[...new Set([...googleQueries,...keywordGoogleQueries])].slice(0,DEEP_BACKFILL?16:10);
+  const keywordGoogleQueries = DIRECT_ONLY ? [] : keywordQueries.slice(0,FULL_RADAR?12:DEEP_BACKFILL?12:8).map(q=>DEEP_BACKFILL?withArchiveWindow(q,org):q);
+  const villageGoogleQueries = DIRECT_ONLY ? [] : villageQueries.slice(0,FULL_RADAR?8:2).map(q=>DEEP_BACKFILL?withArchiveWindow(q,org):q);
+  const aliasGoogleQueries = DIRECT_ONLY ? [] : aliasQueries.slice(0,FULL_RADAR?6:2).map(q=>DEEP_BACKFILL?withArchiveWindow(q,org):q);
+  const allGoogleQueries=[...new Set([...googleQueries,...aliasGoogleQueries,...villageGoogleQueries,...keywordGoogleQueries])].slice(0,FULL_RADAR?24:DEEP_BACKFILL?16:10);
   if(!DIRECT_ONLY && !SITEMAP_FOCUS) for (const q of allGoogleQueries) {
     if (gatewayBudgetLow()) break;
     try {

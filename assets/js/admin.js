@@ -710,7 +710,7 @@ function bindDynamicActions() {
   const radarStart=document.querySelector('#network-radar-start');
   if(radarStart && !radarStart.dataset.bound){radarStart.dataset.bound='1';radarStart.addEventListener('click',runNetworkRadarScan);}
   const radarStop=document.querySelector('#network-radar-stop');
-  if(radarStop && !radarStop.dataset.bound){radarStop.dataset.bound='1';radarStop.addEventListener('click',()=>{networkRadarStopRequested=true;});}
+  if(radarStop && !radarStop.dataset.bound){radarStop.dataset.bound='1';radarStop.addEventListener('click',cancelNetworkRadarScan);}
   document.querySelectorAll('[data-modal]').forEach(b => b.onclick = () => modal(b.dataset.modal));
 }
 
@@ -1085,10 +1085,14 @@ async function renderBardaStatus() {
 
 
 
-let networkRadarStopRequested=false;
+const NETWORK_RADAR_STORAGE_KEY='media_monitorinq_full_radar_v2';
 let networkRadarRunning=false;
 let networkRadarStartedAt=0;
 let networkRadarTimer=null;
+let networkRadarPollTimer=null;
+let networkRadarRunId=0;
+let networkRadarScanId='';
+let networkRadarLastFeedSignature='';
 let bardaStatusRenderSeq=0;
 
 function radarTime(ms){
@@ -1096,73 +1100,199 @@ function radarTime(ms){
   const h=Math.floor(total/3600),m=Math.floor((total%3600)/60),s=total%60;
   return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
+function radarStorageRead(){
+  try{
+    const raw=localStorage.getItem(NETWORK_RADAR_STORAGE_KEY);
+    return raw?JSON.parse(raw):null;
+  }catch{return null}
+}
+function radarStorageWrite(value){
+  try{localStorage.setItem(NETWORK_RADAR_STORAGE_KEY,JSON.stringify(value||{}))}catch{}
+}
+function radarStorageClear(){
+  try{localStorage.removeItem(NETWORK_RADAR_STORAGE_KEY)}catch{}
+}
 function renderNetworkRadarIdle(){
   const total=document.querySelector('#radar-org-total');
   if(total) total.textContent=String(sortedOrganizations(orgs).filter(o=>['active','grace'].includes(o.service_status)).length);
+  const saved=radarStorageRead();
+  if(saved?.scan_id && !networkRadarRunning && !['success','failure','cancelled'].includes(String(saved?.conclusion||''))){
+    networkRadarScanId=String(saved.scan_id);
+    networkRadarRunId=Number(saved.github_run_id||0);
+    networkRadarStartedAt=new Date(saved.scan_started_at||Date.now()).getTime()||Date.now();
+    setTimeout(()=>startRadarPolling(true),0);
+  }
 }
-function radarSetProgress(done,total,found,current='',source=''){
-  const pct=total?Math.min(100,Math.round(done/total*100)):0;
+function radarSetProgress(pct,jobsDone,jobsTotal,found,current='',source='',stateLabel=''){
   const set=(id,v)=>{const e=document.querySelector(id);if(e)e.textContent=String(v)};
-  set('#radar-percent',`${pct}%`);set('#radar-org-done',done);set('#radar-org-total',total);set('#radar-found',found);
-  if(current)set('#radar-current-org',current); if(source)set('#radar-current-source',source);
-  const state=document.querySelector('#radar-state');if(state)state.textContent=networkRadarRunning?'Skan edilir':(pct===100?'Tamamlandı':'Hazır');
+  const safePct=Math.max(0,Math.min(100,Number(pct||0)));
+  set('#radar-percent',`${Math.round(safePct)}%`);
+  set('#radar-org-done',`${Number(jobsDone||0)}/${Number(jobsTotal||0)}`);
+  set('#radar-found',Number(found||0));
+  if(current)set('#radar-current-org',current);
+  if(source)set('#radar-current-source',source);
+  const state=document.querySelector('#radar-state');
+  if(state) state.textContent=stateLabel || (networkRadarRunning?'Skan edilir':safePct===100?'Tamamlandı':'Hazır');
 }
-function radarAddBlip(name,index,total,tone='ok'){
-  const box=document.querySelector('#radar-blips');if(!box)return;
-  const angle=((index*137.5)%360)*Math.PI/180;
-  const radius=18+((index*29)%30);
-  const x=50+Math.cos(angle)*radius,y=50+Math.sin(angle)*radius;
-  const dot=document.createElement('span');dot.className=`radar-blip ${tone}`;dot.style.left=`${x}%`;dot.style.top=`${y}%`;dot.innerHTML=`<i></i><small>${escapeHtml(name)}</small>`;box.appendChild(dot);
-  while(box.children.length>22)box.firstElementChild?.remove();
+function radarPlatformText(platforms={}){
+  const entries=Object.entries(platforms||{}).filter(([,count])=>Number(count)>0);
+  if(!entries.length)return 'Hələ yeni qəbul edilmiş nəticə yoxdur.';
+  return entries.map(([name,count])=>`${name}: ${count}`).join(' • ');
 }
-function radarFeed(name,data,error){
+function radarFeedStatus(data,error=null){
   const feed=document.querySelector('#radar-feed');if(!feed)return;
   if(feed.querySelector('.empty'))feed.innerHTML='';
-  const details=Array.isArray(data?.details)?data.details:[];
-  const inserted=Number(data?.new_mentions ?? data?.inserted ?? details.reduce((n,d)=>n+Number(d?.inserted||0),0));
-  const found=Math.max(0,Number(data?.checked||0),details.reduce((n,d)=>n+Number(d?.videos_checked||0)+Number(d?.comments_seen||0)+Number(d?.found||0)+Number(d?.received||0),0));
-  const positiveWords=Number(data?.keyword_positive_count||0);
-  const excludeWords=Number(data?.keyword_exclude_count||0);
-  const wordNote=positiveWords||excludeWords ? `Söz bankı: ${positiveWords} açar / ${excludeWords} filtr • Material: ${found} • Yeni: ${inserted}` : `Material: ${found} • Yeni: ${inserted}`;
-  const row=document.createElement('div');row.className=`radar-feed-row ${error?'error':inserted?'hit':''}`;
-  row.innerHTML=`<span>${error?'×':inserted?'●':'○'}</span><div><strong>${escapeHtml(name)}</strong><small>${error?escapeHtml(error.message||String(error)):wordNote}</small></div><b>${inserted}</b>`;
-  feed.prepend(row);while(feed.children.length>40)feed.lastElementChild?.remove();
-  return inserted;
+  const signature=error
+    ? `error:${error.message||error}`
+    : `${data?.status}|${data?.conclusion}|${data?.jobs_completed}|${data?.jobs_total}|${data?.new_mentions}|${data?.current_job}`;
+  if(signature===networkRadarLastFeedSignature)return;
+  networkRadarLastFeedSignature=signature;
+  const row=document.createElement('div');
+  const failed=Boolean(error)||Number(data?.jobs_failed||0)>0||['failure','cancelled'].includes(String(data?.conclusion||''));
+  const hit=Number(data?.new_mentions||0)>0;
+  row.className=`radar-feed-row ${failed?'error':hit?'hit':''}`;
+  const title=error?'Radar xətası':String(data?.current_job||'Tam internet discovery');
+  const detail=error
+    ? String(error.message||error)
+    : `İş paketi: ${Number(data?.jobs_completed||0)}/${Number(data?.jobs_total||0)} • Yeni: ${Number(data?.new_mentions||0)} • ${radarPlatformText(data?.platforms||{})}`;
+  row.innerHTML=`<span>${failed?'×':hit?'●':'○'}</span><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div><b>${Number(data?.new_mentions||0)}</b>`;
+  feed.prepend(row);
+  while(feed.children.length>30)feed.lastElementChild?.remove();
+}
+function radarSetVisualRunning(running){
+  const card=document.querySelector('#network-radar-card');
+  const start=document.querySelector('#network-radar-start');
+  const stop=document.querySelector('#network-radar-stop');
+  const visual=document.querySelector('#radar-visual');
+  card?.classList.toggle('is-scanning',running);
+  visual?.classList.toggle('is-scanning',running);
+  if(start)start.disabled=running;
+  if(stop)stop.classList.toggle('hidden',!running);
+}
+function stopRadarTimers(){
+  if(networkRadarTimer){clearInterval(networkRadarTimer);networkRadarTimer=null}
+  if(networkRadarPollTimer){clearTimeout(networkRadarPollTimer);networkRadarPollTimer=null}
+}
+async function pollNetworkRadarStatus(){
+  if(!networkRadarScanId)return;
+  const {data,error}=await invokeBackend('monitor-worker',{
+    mode:'radar_status',
+    scan_id:networkRadarScanId,
+    scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString()
+  });
+  if(error||!data?.ok){
+    radarFeedStatus(null,error||new Error(data?.error||'Radar statusu alınmadı.'));
+    const msg=String(data?.error||error?.message||'');
+    if(/RADAR_GITHUB_TOKEN/i.test(msg)){
+      networkRadarRunning=false;radarSetVisualRunning(false);stopRadarTimers();
+      toast('Radar üçün RADAR_GITHUB_TOKEN secret-i tələb olunur.','error');
+      return;
+    }
+    networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,10000);
+    return;
+  }
+
+  networkRadarRunId=Number(data.github_run_id||networkRadarRunId||0);
+  const conclusion=String(data.conclusion||'');
+  const status=String(data.status||'waiting');
+  const finished=status==='completed'||Boolean(conclusion);
+  const stateLabel=finished
+    ? (conclusion==='success'?'Tamamlandı':conclusion==='cancelled'?'Dayandırıldı':'Xəta')
+    : status==='queued'||status==='waiting'?'Növbədə':'Skan edilir';
+  const current=finished
+    ? (conclusion==='success'?'Tam internet discovery tamamlandı':conclusion==='cancelled'?'Skan dayandırıldı':'Radar bəzi işləri xəta ilə tamamladı')
+    : (data.current_job||'GitHub Actions serverində növbə gözlənilir');
+  const source=`${radarPlatformText(data.platforms||{})}${Number(data.organizations_with_new||0)?` • Yeni nəticəli təşkilat: ${Number(data.organizations_with_new||0)}`:''}`;
+  radarSetProgress(data.progress_percent||0,data.jobs_completed||0,data.jobs_total||0,data.new_mentions||0,current,source,stateLabel);
+  radarFeedStatus(data);
+
+  radarStorageWrite({
+    scan_id:networkRadarScanId,
+    scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString(),
+    github_run_id:networkRadarRunId,
+    status,
+    conclusion,
+    html_url:data.html_url||null
+  });
+
+  if(finished){
+    networkRadarRunning=false;
+    radarSetVisualRunning(false);
+    stopRadarTimers();
+    const elapsed=document.querySelector('#radar-elapsed');
+    if(elapsed)elapsed.textContent=radarTime(Date.now()-networkRadarStartedAt);
+    await renderBardaStatus();
+    if(conclusion==='success') toast(`Tam internet discovery tamamlandı. ${Number(data.new_mentions||0)} yeni nəticə aşkarlanıb.`,'success');
+    else if(conclusion==='cancelled') toast('Tam internet discovery dayandırıldı.','info');
+    else toast(`Radar tamamlandı, amma ${Number(data.jobs_failed||0)} iş paketində xəta qeydə alındı.`,'error');
+    return;
+  }
+  networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,8000);
+}
+function startRadarPolling(resume=false){
+  if(!networkRadarScanId)return;
+  networkRadarRunning=true;
+  radarSetVisualRunning(true);
+  if(!resume){
+    const feed=document.querySelector('#radar-feed');
+    if(feed)feed.innerHTML='';
+    networkRadarLastFeedSignature='';
+  }
+  if(!networkRadarTimer){
+    networkRadarTimer=setInterval(()=>{
+      const e=document.querySelector('#radar-elapsed');
+      if(e)e.textContent=radarTime(Date.now()-(networkRadarStartedAt||Date.now()));
+    },1000);
+  }
+  pollNetworkRadarStatus();
 }
 async function runNetworkRadarScan(){
   if(networkRadarRunning)return;
   const active=sortedOrganizations(orgs).filter(o=>['active','grace'].includes(o.service_status));
   if(!active.length)return toast('Skan ediləcək aktiv təşkilat yoxdur.','error');
-  const ok=await confirmDialog({title:'Tam şəbəkə skanı başlasın?',message:`${active.length} aktiv təşkilat növbə ilə YouTube və Web/RSS/q xəbər mənbələrində dərin yoxlanacaq. Bu proses uzun çəkə bilər; admin səhifəsini açıq saxla. Tapılan real nəticələr dərhal uyğun təşkilata yazılacaq.`,confirmText:'Bəli, skanı başlat',cancelText:'Xeyr'});
+  const ok=await confirmDialog({
+    title:'Tam internet discovery başlasın?',
+    message:`${active.length} aktiv təşkilat üzrə YouTube, Google News, Bing, RSS, birbaşa saytlar, sitemap və arxiv discovery GitHub serverində başladılacaq. Skan bir neçə saat çəkə bilər və admin səhifəsini bağlasan da davam edəcək.`,
+    confirmText:'Bəli, tam skanı başlat',
+    cancelText:'Xeyr'
+  });
   if(!ok)return;
-  networkRadarRunning=true;networkRadarStopRequested=false;networkRadarStartedAt=Date.now();
-  const card=document.querySelector('#network-radar-card'),start=document.querySelector('#network-radar-start'),stop=document.querySelector('#network-radar-stop'),visual=document.querySelector('#radar-visual'),feed=document.querySelector('#radar-feed');
-  card?.classList.add('is-scanning');visual?.classList.add('is-scanning');if(start)start.disabled=true;stop?.classList.remove('hidden');if(feed)feed.innerHTML='';
-  let done=0,foundTotal=0;
-  const wordBank=keywordStats[0]||{};
-  const keywordPositiveCount=Number(wordBank.positive_count||0);
-  const keywordExcludeCount=Number(wordBank.excluded_count||0);
-  networkRadarTimer=setInterval(()=>{const e=document.querySelector('#radar-elapsed');if(e)e.textContent=radarTime(Date.now()-networkRadarStartedAt)},1000);
-  try{
-    for(let i=0;i<active.length;i++){
-      if(networkRadarStopRequested)break;
-      const org=active[i];radarSetProgress(done,active.length,foundTotal,org.short_name,`Bütün söz bankı yoxlamadadır: ${keywordPositiveCount} açar söz + ${keywordExcludeCount} filtr. Baza yenidən süzülür və YouTube şərhləri dərin yoxlanır…`);
-      const refilter=await invokeBackend('monitor-worker',{organization_id:org.id,mode:'existing_refilter',refilter_limit:800});
-      const commentSweep=await invokeBackend('monitor-worker',{organization_id:org.id,mode:'scheduled',quick_youtube_comments:true,full_comment_sweep:true,browser_quick:false,refilter_existing:false,verify_existing:false,debug:false});
-      const error=refilter.error||commentSweep.error||null;
-      const data={ok:!error,keyword_positive_count:keywordPositiveCount,keyword_exclude_count:keywordExcludeCount,checked:Number(refilter.data?.checked||0)+Number(commentSweep.data?.checked||0),new_mentions:Number(commentSweep.data?.new_mentions||0),details:[...(Array.isArray(refilter.data?.details)?refilter.data.details:[]),...(Array.isArray(commentSweep.data?.details)?commentSweep.data.details:[]) ]};
-      const added=radarFeed(org.short_name,data,error);foundTotal+=Number(added||0);done++;
-      radarAddBlip(org.short_name,i,active.length,error?'error':added?'hit':'ok');radarSetProgress(done,active.length,foundTotal,org.short_name,error?'Xəta oldu, növbəti təşkilata keçilir':`Tamamlandı • yeni ${Number(added||0)}`);
-      await new Promise(r=>setTimeout(r,350));
-    }
-  }finally{
-    networkRadarRunning=false;clearInterval(networkRadarTimer);networkRadarTimer=null;card?.classList.remove('is-scanning');visual?.classList.remove('is-scanning');if(start)start.disabled=false;stop?.classList.add('hidden');
-    const elapsed=document.querySelector('#radar-elapsed');if(elapsed)elapsed.textContent=radarTime(Date.now()-networkRadarStartedAt);
-    const state=document.querySelector('#radar-state');if(state)state.textContent=networkRadarStopRequested?'Dayandırıldı':'Tamamlandı';
-    const current=document.querySelector('#radar-current-source');if(current)current.textContent=networkRadarStopRequested?'Skan istifadəçi tərəfindən dayandırıldı.':'Dərin skan tamamlandı. Worker növbəti avtomatik run-larda nəticələri yeniləməyə davam edəcək.';
-    await renderBardaStatus();
-    toast(networkRadarStopRequested?`Skan dayandırıldı. ${done}/${active.length} təşkilat yoxlanıldı.`:`Şəbəkə skanı tamamlandı. ${done} təşkilat yoxlanıldı, ${foundTotal} yeni nəticə yazıldı. Web mətn/tarix/media yenilənməsi GitHub worker növbəsində davam edir.`,networkRadarStopRequested?'info':'success');
+
+  const scanId=`radar-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+  radarSetVisualRunning(true);
+  const state=document.querySelector('#radar-state');if(state)state.textContent='Başladılır';
+  const current=document.querySelector('#radar-current-org');if(current)current.textContent='GitHub Actions workflow başladılır…';
+  const source=document.querySelector('#radar-current-source');if(source)source.textContent='Təhlükəsiz server-side dispatch hazırlanır.';
+  const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_dispatch',scan_id:scanId});
+  if(error||!data?.ok){
+    radarSetVisualRunning(false);
+    const msg=String(data?.error||error?.message||'Radar başladılmadı.');
+    if(data?.setup_required||/RADAR_GITHUB_TOKEN/i.test(msg)){
+      toast('Tam Radar kodu hazırdır, amma RADAR_GITHUB_TOKEN secret-i hələ təyin edilməyib. Secret əlavə ediləndən sonra düymə real GitHub discovery-ni başladacaq.','error');
+    }else toast(msg,'error');
+    return;
   }
+
+  networkRadarScanId=String(data.scan_id||scanId);
+  networkRadarStartedAt=new Date(data.scan_started_at||Date.now()).getTime()||Date.now();
+  networkRadarRunId=0;
+  radarStorageWrite({scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt).toISOString(),github_run_id:0,status:'queued',conclusion:''});
+  radarSetProgress(0,0,0,0,'Tam internet discovery növbəyə alındı','GitHub Actions run yaradılır…','Növbədə');
+  startRadarPolling(false);
+  toast('Tam internet discovery serverdə başladıldı. Səhifəni bağlasan da proses davam edəcək.','success');
+}
+async function cancelNetworkRadarScan(){
+  if(!networkRadarRunning)return;
+  if(!networkRadarRunId){
+    toast('GitHub run id hələ alınmayıb. Bir neçə saniyə sonra yenidən Dayandır vur.','info');
+    return;
+  }
+  const ok=await confirmDialog({title:'Tam skan dayandırılsın?',message:'GitHub serverində işləyən tam internet discovery run-u dayandırılacaq.',confirmText:'Dayandır',cancelText:'Davam et'});
+  if(!ok)return;
+  const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_cancel',github_run_id:networkRadarRunId});
+  if(error||!data?.ok)return toast(data?.error||error?.message||'Radar dayandırılmadı.','error');
+  toast('Dayandırma sorğusu GitHub-a göndərildi.','info');
+  setTimeout(pollNetworkRadarStatus,1500);
 }
 
 async function runMonitorNow() {

@@ -76,6 +76,140 @@ Deno.serve(async (req) => {
       }
     }
 
+
+    if (options.mode === 'radar_dispatch') {
+      currentStage = 'radar-dispatch';
+      const scanId = options.scan_id || `radar-${Date.now()}-${crypto.randomUUID().slice(0,8)}`;
+      const scanStartedAt = new Date().toISOString();
+      try {
+        const cfg = githubRadarConfig();
+        if (!cfg.token) {
+          return json({
+            ok:false,
+            mode:'radar_dispatch',
+            setup_required:true,
+            missing_secret:'RADAR_GITHUB_TOKEN',
+            error:'Tam internet discovery-ni admin paneldən başlatmaq üçün RADAR_GITHUB_TOKEN Supabase secret-i təyin edilməlidir.'
+          },200);
+        }
+        const response = await githubRadarRequest(
+          cfg,
+          `/repos/${cfg.repo}/actions/workflows/${encodeURIComponent(cfg.workflow)}/dispatches`,
+          {
+            method:'POST',
+            body:JSON.stringify({
+              ref:cfg.ref,
+              inputs:{scan_id:scanId,started_at:scanStartedAt}
+            })
+          }
+        );
+        if (!response.ok) {
+          const body = await response.text().catch(()=> '');
+          return json({ok:false,mode:'radar_dispatch',error:`GitHub radar workflow başladılmadı (${response.status}). ${body.slice(0,500)}`},200);
+        }
+        return json({
+          ok:true,
+          mode:'radar_dispatch',
+          scan_id:scanId,
+          scan_started_at:scanStartedAt,
+          state:'queued',
+          message:'Tam internet discovery GitHub Actions serverində növbəyə alındı.'
+        },200);
+      } catch (e) {
+        return json({ok:false,mode:'radar_dispatch',error:errorInfo(e).message},200);
+      }
+    }
+
+    if (options.mode === 'radar_status') {
+      currentStage = 'radar-status';
+      try {
+        const cfg = githubRadarConfig();
+        if (!cfg.token) {
+          return json({ok:false,mode:'radar_status',setup_required:true,missing_secret:'RADAR_GITHUB_TOKEN',error:'RADAR_GITHUB_TOKEN təyin edilməyib.'},200);
+        }
+        const scanId = options.scan_id;
+        if (!scanId) return json({ok:false,mode:'radar_status',error:'scan_id yoxdur'},200);
+        const runsResponse = await githubRadarRequest(
+          cfg,
+          `/repos/${cfg.repo}/actions/workflows/${encodeURIComponent(cfg.workflow)}/runs?event=workflow_dispatch&per_page=30`,
+          {method:'GET'}
+        );
+        if (!runsResponse.ok) {
+          const body=await runsResponse.text().catch(()=> '');
+          return json({ok:false,mode:'radar_status',error:`GitHub run siyahısı alınmadı (${runsResponse.status}). ${body.slice(0,400)}`},200);
+        }
+        const runsJson:any = await runsResponse.json();
+        const runs = Array.isArray(runsJson?.workflow_runs) ? runsJson.workflow_runs : [];
+        const run = runs.find((r:any)=>String(r?.display_title||'').includes(scanId)) || null;
+
+        let jobsTotal=0, jobsCompleted=0, jobsFailed=0, jobsRunning=0, currentJob='';
+        if (run?.id) {
+          const jobs:any[]=[];
+          for(let page=1;page<=3;page++){
+            const jobsResponse = await githubRadarRequest(cfg,`/repos/${cfg.repo}/actions/runs/${run.id}/jobs?per_page=100&page=${page}`,{method:'GET'});
+            if(!jobsResponse.ok) break;
+            const jobsJson:any=await jobsResponse.json();
+            const pageJobs=Array.isArray(jobsJson?.jobs)?jobsJson.jobs:[];
+            jobs.push(...pageJobs);
+            if(pageJobs.length<100) break;
+          }
+          jobsTotal=jobs.length;
+          jobsCompleted=jobs.filter((j:any)=>j?.status==='completed').length;
+          jobsFailed=jobs.filter((j:any)=>j?.status==='completed' && !['success','skipped','neutral'].includes(String(j?.conclusion||''))).length;
+          jobsRunning=jobs.filter((j:any)=>j?.status==='in_progress').length;
+          const current=jobs.find((j:any)=>j?.status==='in_progress') || jobs.find((j:any)=>j?.status==='queued');
+          const currentStep=Array.isArray(current?.steps)
+            ? (current.steps.find((s:any)=>s?.status==='in_progress') || current.steps.find((s:any)=>s?.status==='queued'))
+            : null;
+          currentJob=[String(current?.name||''),String(currentStep?.name||'')].filter(Boolean).join(' • ');
+        }
+
+        const started = safeIsoDate(options.scan_started_at || run?.created_at || null);
+        const radarStats = await radarMentionStats(admin, started);
+        const status = String(run?.status || (run ? 'queued' : 'waiting'));
+        const conclusion = run?.conclusion ? String(run.conclusion) : null;
+        const pct = jobsTotal ? Math.min(100,Math.round((jobsCompleted/jobsTotal)*100)) : (conclusion==='success'?100:0);
+        return json({
+          ok:true,
+          mode:'radar_status',
+          scan_id:scanId,
+          found_run:Boolean(run),
+          github_run_id:Number(run?.id||0),
+          status,
+          conclusion,
+          progress_percent:pct,
+          jobs_total:jobsTotal,
+          jobs_completed:jobsCompleted,
+          jobs_failed:jobsFailed,
+          jobs_running:jobsRunning,
+          current_job:currentJob,
+          html_url:run?.html_url||null,
+          created_at:run?.created_at||started,
+          updated_at:run?.updated_at||null,
+          ...radarStats
+        },200);
+      } catch (e) {
+        return json({ok:false,mode:'radar_status',error:errorInfo(e).message},200);
+      }
+    }
+
+    if (options.mode === 'radar_cancel') {
+      currentStage = 'radar-cancel';
+      try {
+        const cfg=githubRadarConfig();
+        if(!cfg.token) return json({ok:false,mode:'radar_cancel',setup_required:true,missing_secret:'RADAR_GITHUB_TOKEN',error:'RADAR_GITHUB_TOKEN təyin edilməyib.'},200);
+        if(!options.github_run_id) return json({ok:false,mode:'radar_cancel',error:'GitHub run id yoxdur'},200);
+        const response=await githubRadarRequest(cfg,`/repos/${cfg.repo}/actions/runs/${options.github_run_id}/cancel`,{method:'POST'});
+        if(!response.ok && response.status!==409){
+          const body=await response.text().catch(()=> '');
+          return json({ok:false,mode:'radar_cancel',error:`GitHub run dayandırılmadı (${response.status}). ${body.slice(0,400)}`},200);
+        }
+        return json({ok:true,mode:'radar_cancel',github_run_id:options.github_run_id,cancel_requested:true},200);
+      } catch(e) {
+        return json({ok:false,mode:'radar_cancel',error:errorInfo(e).message},200);
+      }
+    }
+
     currentStage = 'organizations';
     let orgQuery:any = admin.from('organizations')
       .select('id,name,short_name,district_id,districts(name),show_district_wide,organization_type,service_status');
@@ -177,6 +311,10 @@ Deno.serve(async (req) => {
           google_queries:buildGoogleNewsGatewayQueries(org),
           gdelt_queries:buildGdeltGatewayQueries(org),
           keyword_queries:buildKeywordGatewayQueries(org, positiveKeywords, villageNames, 600),
+          village_queries:buildVillageGatewayQueries(org, villageNames, 240),
+          alias_queries:buildAliasGatewayQueries(org, 80),
+          village_count:villageNames.length,
+          alias_count:Array.isArray(org.aliases)?org.aliases.length:0,
           keyword_count:positiveKeywords.length,
           rss_sources:(Array.isArray(org.sources)?org.sources:[])
             .filter((source:any)=>source?.is_active !== false)
@@ -777,6 +915,94 @@ Deno.serve(async (req) => {
     },200);
   }
 });
+
+
+type GithubRadarConfig = { token:string; repo:string; workflow:string; ref:string };
+
+function githubRadarConfig():GithubRadarConfig {
+  return {
+    token:String(Deno.env.get('RADAR_GITHUB_TOKEN') || '').trim(),
+    repo:String(Deno.env.get('GITHUB_REPOSITORY_SLUG') || 'qerib-seferli/media-monitorinq').trim(),
+    workflow:String(Deno.env.get('GITHUB_RADAR_WORKFLOW') || 'full-network-radar.yml').trim(),
+    ref:String(Deno.env.get('GITHUB_RADAR_REF') || 'main').trim()
+  };
+}
+
+async function githubRadarRequest(cfg:GithubRadarConfig,path:string,init:RequestInit):Promise<Response> {
+  return await fetch(`https://api.github.com${path}`,{
+    ...init,
+    headers:{
+      'accept':'application/vnd.github+json',
+      'authorization':`Bearer ${cfg.token}`,
+      'x-github-api-version':'2022-11-28',
+      'user-agent':'media-monitorinq-radar',
+      ...(init.headers||{})
+    }
+  });
+}
+
+function safeIsoDate(value:any):string {
+  const d=new Date(String(value||''));
+  return Number.isFinite(d.getTime()) ? d.toISOString() : new Date(Date.now()-5*60*1000).toISOString();
+}
+
+async function radarMentionStats(admin:any,startedAt:string) {
+  const result:any = await admin.from('mentions')
+    .select('id,organization_id,source_platform,relevance_score')
+    .gte('detected_at',startedAt)
+    .gt('relevance_score',0)
+    .limit(5000);
+  if(result?.error) {
+    return {new_mentions:0,organizations_with_new:0,platforms:{},stats_warning:errorInfo(result.error).message};
+  }
+  const rows=Array.isArray(result?.data)?result.data:[];
+  const orgs=new Set<string>();
+  const platforms:Record<string,number>={};
+  for(const row of rows){
+    if(row?.organization_id) orgs.add(String(row.organization_id));
+    const platform=String(row?.source_platform||'Digər');
+    platforms[platform]=(platforms[platform]||0)+1;
+  }
+  return {new_mentions:rows.length,organizations_with_new:orgs.size,platforms,stats_truncated:rows.length>=5000};
+}
+
+function buildVillageGatewayQueries(org:any,villages:string[] = [],max=240):string[] {
+  const district=String(org.districts?.name||'').trim();
+  const topicGroups=['suvarma','artezian','kanal','su problemi','fermer su','nasos'];
+  const cleaned=[...new Set(villages.map(v=>String(v||'').replace(/\s+/g,' ').trim()).filter(v=>v.length>=3))];
+  if(!cleaned.length) return [];
+  const bucket=Math.floor(Date.now()/(15*60*1000));
+  const start=(bucket*Math.max(1,Math.floor(max/2)))%cleaned.length;
+  const rotated:string[]=[];
+  for(let i=0;i<cleaned.length;i++) rotated.push(cleaned[(start+i)%cleaned.length]);
+  const out:string[]=[];
+  for(let i=0;i<rotated.length && out.length<max;i++){
+    const village=rotated[i];
+    const topic=topicGroups[i%topicGroups.length];
+    out.push(`${district ? `${district} ` : ''}${village} ${topic}`.trim());
+    if(out.length<max && i%3===0) out.push(`${village} suvarma suyu`);
+  }
+  return [...new Set(out)].slice(0,max);
+}
+
+function buildAliasGatewayQueries(org:any,max=80):string[] {
+  const district=String(org.districts?.name||'').trim();
+  const values=[
+    String(org.short_name||''),
+    String(org.name||''),
+    ...(Array.isArray(org.aliases)?org.aliases.map((a:any)=>String(a?.alias||'')):[])
+  ].map(v=>v.replace(/\s+/g,' ').trim()).filter(Boolean);
+  const seen=new Set<string>(), out:string[]=[];
+  for(const value of values){
+    const key=normalizeForMatch(value);
+    if(!key||seen.has(key)) continue;
+    seen.add(key);
+    out.push(`"${value.replace(/["“”]+/g,'')}"`);
+    if(district && !key.includes(normalizeForMatch(district))) out.push(`"${district}" "${value.replace(/["“”]+/g,'')}"`);
+    if(out.length>=max) break;
+  }
+  return out.slice(0,max);
+}
 
 function rotateOrganizationBatch(rows:any[], shardCount=1, shardIndex=0, batch=0, rotationBucket=0):any[] {
   const list=[...(Array.isArray(rows)?rows:[])].sort((a,b)=>String(a?.short_name||a?.name||'').localeCompare(String(b?.short_name||b?.name||''),'az'));
@@ -2363,6 +2589,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     raw_payload:{
       ...(item.raw || item),
       monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
+      ...(ai?.__ai_meta ? {ai_analysis:ai.__ai_meta} : {}),
       ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
       ...(String((item.raw as any)?.kind||'').includes('comment') && match.reason==='aidiyyəti-videonun-rəyi' && !(match.matches||[]).length ? {admin_review_status:'auto-ignored'} : {})
     },
@@ -2443,6 +2670,9 @@ type RunOptions = {
   screenshot_limit:number;
   refilter_before:string|null;
   refilter_limit:number;
+  scan_id:string;
+  scan_started_at:string|null;
+  github_run_id:number;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -2480,7 +2710,10 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   youtube_query_limit:4,
   screenshot_limit:8,
   refilter_before:null,
-  refilter_limit:500
+  refilter_limit:500,
+  scan_id:'',
+  scan_started_at:null,
+  github_run_id:0
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -2534,7 +2767,10 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       youtube_query_limit:Math.max(1,Math.min(4,Number(body?.youtube_query_limit || 4))),
       screenshot_limit:Math.max(1,Math.min(20,Number(body?.screenshot_limit || 8))),
       refilter_before:body?.refilter_before ? String(body.refilter_before) : null,
-      refilter_limit:Math.max(50,Math.min(800,Number(body?.refilter_limit || 500)))
+      refilter_limit:Math.max(50,Math.min(800,Number(body?.refilter_limit || 500))),
+      scan_id:String(body?.scan_id || '').replace(/[^A-Za-z0-9_-]/g,'').slice(0,80),
+      scan_started_at:body?.scan_started_at ? String(body.scan_started_at).slice(0,64) : null,
+      github_run_id:Math.max(0,Number(body?.github_run_id || 0))
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};
@@ -3285,9 +3521,18 @@ async function probeSourceUrl(url:string):Promise<{kind:'active'|'removed'|'rest
 
 async function optionalAiAnalysis(org:any,item:Item,relevance:number,sentiment:string) {
   const apiKey = Deno.env.get('GEMINI_API_KEY');
-  if (!apiKey || relevance < 60) return null;
+  if (!apiKey) {
+    console.log(`[ai-analysis] skipped organization=${String(org?.short_name||org?.name||'')} reason=missing-api-key`);
+    return null;
+  }
+  if (relevance < 60) {
+    console.log(`[ai-analysis] skipped organization=${String(org?.short_name||org?.name||'')} reason=relevance-below-60 score=${relevance}`);
+    return null;
+  }
   const model = Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash-lite';
   const prompt = `Sən Azərbaycan dilində media monitorinq analitikisən. Təşkilat: ${org.name} (${org.short_name}). Aşağıdakı materialı yalnız bu təşkilata aidiyyət baxımından qısa analiz et. JSON qaytar: {"summary":"...","topic":"...","relevance_score":0-100}. Fakt uydurma. Başlıq: ${item.title||''}\nMətn: ${(item.text||'').slice(0,4000)}`;
+  const aiStarted=Date.now();
+  console.log(`[ai-analysis] call provider=gemini model=${model} organization=${String(org?.short_name||org?.name||'')} relevance_before=${relevance}`);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(()=>controller.abort(),6500);
@@ -3295,12 +3540,36 @@ async function optionalAiAnalysis(org:any,item:Item,relevance:number,sentiment:s
       method:'POST',headers:{'content-type':'application/json'},signal:controller.signal,body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.1,responseMimeType:'application/json'}})
     });
     clearTimeout(timeout);
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const errorBody=await response.text().catch(()=> '');
+      console.error(`[ai-analysis] http-error provider=gemini model=${model} status=${response.status} organization=${String(org?.short_name||'')} body=${errorBody.slice(0,280)}`);
+      return null;
+    }
     const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return null;
-    return JSON.parse(text);
-  } catch (e) { console.error('ai-analysis',e); return null; }
+    const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!generatedText) {
+      console.error(`[ai-analysis] empty-response provider=gemini model=${model} organization=${String(org?.short_name||'')}`);
+      return null;
+    }
+    const parsed=JSON.parse(generatedText);
+    const relevanceAfter=clamp(parsed?.relevance_score ?? relevance);
+    console.log(`[ai-analysis] success provider=gemini model=${model} organization=${String(org?.short_name||'')} relevance_before=${relevance} relevance_after=${relevanceAfter} elapsed_ms=${Date.now()-aiStarted}`);
+    return {
+      ...parsed,
+      relevance_score:relevanceAfter,
+      __ai_meta:{
+        provider:'Gemini',
+        model,
+        analyzed_at:new Date().toISOString(),
+        elapsed_ms:Date.now()-aiStarted,
+        relevance_before:relevance,
+        relevance_after:relevanceAfter
+      }
+    };
+  } catch (e) {
+    console.error(`[ai-analysis] exception provider=gemini model=${model} organization=${String(org?.short_name||'')}`,e);
+    return null;
+  }
 }
 
 function parseRss(xml:string):Item[] {
