@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       scan_id:
-        description: Radar scan identifier
+        description: Radar skan identifikatoru
         required: true
         type: string
       started_at:
-        description: Radar start timestamp
+        description: Radar başlanma vaxtı
         required: true
         type: string
 
@@ -25,7 +25,7 @@ env:
 
 jobs:
   full-discovery:
-    name: Tam discovery shard ${{ matrix.org_shard }}
+    name: Tam tarama bölməsi ${{ matrix.org_shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 58
     strategy:
@@ -47,15 +47,27 @@ jobs:
             echo '{"organizations":[]}' > plan.json
             exit 0
           fi
-          curl --fail-with-body --silent --show-error \
-            --connect-timeout 15 --max-time 90 --retry 2 --retry-delay 3 --retry-all-errors \
-            -X POST -H "Content-Type: application/json" -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d "{\"mode\":\"news_plan\",\"include_archived\":false,\"organization_shard_count\":20,\"organization_shard_index\":${ORG_SHARD},\"organization_batch\":20}" \
-            "$MONITOR_URL" > plan.json
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            if curl --fail-with-body --silent --show-error \
+              --connect-timeout 15 --max-time 90 --retry 2 --retry-delay 3 --retry-all-errors \
+              -X POST -H "Content-Type: application/json" -H "x-monitor-secret: $MONITOR_SECRET" \
+              -d "{\"mode\":\"news_plan\",\"include_archived\":false,\"organization_shard_count\":20,\"organization_shard_index\":${ORG_SHARD},\"organization_batch\":20}" \
+              "$MONITOR_URL" > plan.json; then
+              ok=1
+              break
+            fi
+            echo "Təşkilat planı alınmadı; ${attempt}/5 cəhd. Yenidən yoxlanılır..."
+            sleep $((attempt * 4))
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "Bu bölmə üçün təşkilat planı müvəqqəti alınmadı; digər bölmələr davam edir."
+            echo '{"organizations":[]}' > plan.json
+          fi
           jq -r '.organizations[]?.id' plan.json > orgs.txt
           echo "Radar shard ${ORG_SHARD}: $(wc -l < orgs.txt | tr -d ' ') aktiv təşkilat"
 
-      - name: YouTube video və şərh discovery
+      - name: Video və şərh axtarışı
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
@@ -71,7 +83,7 @@ jobs:
             sleep 1
           done < orgs.txt
 
-      - name: Web 2020-indiyə — Google News, Bing, RSS, sayt və sitemap
+      - name: Yeni dövr üzrə internet axtarışı
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           NEWS_FULL_RADAR: '1'
@@ -102,7 +114,7 @@ jobs:
           NEWS_SITEMAP_PROBE_LIMIT: '60'
         run: node scripts/news-gateway.mjs
 
-      - name: Web 2000-2019 — dərin tarixi arxiv discovery
+      - name: Tarixi arxiv axtarışı
         if: always()
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
@@ -135,7 +147,7 @@ jobs:
           NEWS_SITEMAP_PROBE_LIMIT: '32'
         run: node scripts/news-gateway.mjs
 
-      - name: Shard yekunu
+      - name: Tarama bölməsi tamamlandı
         if: always()
         run: |
           echo "Tam Radar shard ${{ matrix.org_shard }} tamamlandı."
