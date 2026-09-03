@@ -113,7 +113,7 @@ Deno.serve(async (req) => {
           scan_id:scanId,
           scan_started_at:scanStartedAt,
           state:'queued',
-          message:'Tam internet discovery GitHub Actions serverində növbəyə alındı.'
+          message:'Tam internet axtarışı serverdə növbəyə alındı.'
         },200);
       } catch (e) {
         return json({ok:false,mode:'radar_dispatch',error:errorInfo(e).message},200);
@@ -389,7 +389,8 @@ Deno.serve(async (req) => {
           const media=Array.isArray(row?.mention_media)?row.mention_media:[];
           const hasShot=media.some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot' && Boolean(m?.url));
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase()) && Boolean(m?.url));
-          const needs=text.length<80 || raw?.enrichment_complete!==true || !row?.published_at || !row?.author_name || !hasShot || !hasCover;
+          const sitemapDateNeedsCheck=String(raw?.kind||'').includes('configured_site_sitemap') && raw?.published_from_page!==true;
+          const needs=text.length<80 || raw?.enrichment_complete!==true || !row?.published_at || sitemapDateNeedsCheck || !row?.author_name || !hasShot || !hasCover;
           if(!needs) continue;
           targets.push({id:row.id,title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:row.published_at||null,author:row.author_name||null,raw,has_screenshot:hasShot,has_cover:hasCover});
           if(targets.length>=limit) break;
@@ -449,6 +450,7 @@ Deno.serve(async (req) => {
           patch.summary=clean(options.news_text).slice(0,700);
         }
         if (safeMetadata && options.news_published_at) patch.published_at=options.news_published_at;
+        else if (safeMetadata && String(current.data.raw_payload?.kind||'').includes('configured_site_sitemap') && current.data.raw_payload?.published_from_page!==true) patch.published_at=null;
         if (safeMetadata && options.news_author) patch.author_name=options.news_author;
         const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,1);
         patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
@@ -948,22 +950,30 @@ function safeIsoDate(value:any):string {
 
 async function radarMentionStats(admin:any,startedAt:string) {
   const result:any = await admin.from('mentions')
-    .select('id,organization_id,source_platform,relevance_score')
+    .select('id,organization_id,source_platform,relevance_score,organizations(short_name)')
     .gte('detected_at',startedAt)
     .gt('relevance_score',0)
     .limit(5000);
   if(result?.error) {
-    return {new_mentions:0,organizations_with_new:0,platforms:{},stats_warning:errorInfo(result.error).message};
+    return {new_mentions:0,organizations_with_new:0,platforms:{},organization_hits:[],stats_warning:errorInfo(result.error).message};
   }
   const rows=Array.isArray(result?.data)?result.data:[];
   const orgs=new Set<string>();
   const platforms:Record<string,number>={};
+  const orgHits=new Map<string,{organization_id:string;short_name:string;count:number}>();
   for(const row of rows){
-    if(row?.organization_id) orgs.add(String(row.organization_id));
+    if(row?.organization_id){
+      const id=String(row.organization_id); orgs.add(id);
+      const rel=Array.isArray(row?.organizations)?row.organizations[0]:row?.organizations;
+      const shortName=String(rel?.short_name||'Təşkilat').trim()||'Təşkilat';
+      const current=orgHits.get(id)||{organization_id:id,short_name:shortName,count:0};
+      current.count++; orgHits.set(id,current);
+    }
     const platform=String(row?.source_platform||'Digər');
     platforms[platform]=(platforms[platform]||0)+1;
   }
-  return {new_mentions:rows.length,organizations_with_new:orgs.size,platforms,stats_truncated:rows.length>=5000};
+  const organization_hits=[...orgHits.values()].sort((a,b)=>b.count-a.count||a.short_name.localeCompare(b.short_name,'az')).slice(0,12);
+  return {new_mentions:rows.length,organizations_with_new:orgs.size,platforms,organization_hits,stats_truncated:rows.length>=5000};
 }
 
 function buildVillageGatewayQueries(org:any,villages:string[] = [],max=240):string[] {

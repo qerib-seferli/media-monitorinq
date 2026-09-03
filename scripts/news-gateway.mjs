@@ -604,11 +604,17 @@ async function enrichPage(item) {
       title:stripHtml(title)||item.title,
       text:String(body||item.text||'').slice(0,120000),
       image:imageUrls[0]||null,
-      published_at:pagePublished||item.published_at,
+      published_at:pagePublished||(String(item?.raw?.kind||'').includes('configured_site_sitemap')?null:item.published_at),
       author:author||item.author||null,
       raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished)}
     };
   } catch { return item; }
+}
+
+function reliablePublishedAt(enriched,target){
+  const kind=String(enriched?.raw?.kind||target?.raw?.kind||'');
+  if(kind.includes('configured_site_sitemap') && enriched?.raw?.published_from_page!==true) return null;
+  return enriched?.published_at||target?.published_at||null;
 }
 
 async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {
@@ -616,7 +622,7 @@ async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {
   const rows=dedupe((Array.isArray(items)?items:[]).filter(item=>String(item?.raw?.kind||'').includes('configured_site_sitemap')));
   if(!rows.length) return [];
   const window=archiveWindowForShard(`${org?.id||''}-probe`);
-  const preferred=rows.filter(item=>sitemapRowInArchiveWindow({url:item.url,lastmod:item.published_at},org));
+  const preferred=rows.filter(item=>sitemapRowInArchiveWindow({url:item.url,lastmod:item?.raw?.sitemap_lastmod||item.published_at},org));
   const pool=preferred.length?preferred:rows;
   const chosen=rotate(pool,Math.min(limit,pool.length),`sitemap-probe-${org?.id||''}-${window.label}-${SOURCE_SHARD_INDEX}`);
   const enriched=[];
@@ -1022,8 +1028,8 @@ async function directWebsite(source, org) {
           .slice(0,relevant.length?SITEMAP_URL_LIMIT:Math.min(SITEMAP_URL_LIMIT,RECENT_PRIORITY?420:DEEP_BACKFILL?260:80));
         for(const row of chosen) out.push({
           title:row.url.split('/').filter(Boolean).pop()?.replace(/[-_]+/g,' ')||row.url,
-          text:'',url:row.url,published_at:row.lastmod||null,image:null,author:null,
-          raw:{kind:'configured_site_sitemap',provider:source.name||'Configured Web'}
+          text:'',url:row.url,published_at:null,image:null,author:null,
+          raw:{kind:'configured_site_sitemap',provider:source.name||'Configured Web',sitemap_lastmod:row.lastmod||null}
         });
         if(out.length) break;
       } catch {}
@@ -1429,7 +1435,7 @@ for (const org of plan.organizations) {
         const refreshed=await callMonitor({
           mode:'news_enrich', organization_id:org.id, source_url:target.url,
           title:enriched.title||target.title||'', text:enriched.text||target.text||'',
-          image_url:enriched.image||'', image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[], published_at:enriched.published_at||target.published_at||null,
+          image_url:enriched.image||'', image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[], published_at:reliablePublishedAt(enriched,target),
           author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url
         });
         if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);
@@ -1466,7 +1472,7 @@ for (const org of plan.organizations) {
             mode:'news_enrich',organization_id:org.id,source_url:target.url,
             title:enriched.title||target.title||'',text:enriched.text||target.text||'',
             image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],
-            published_at:enriched.published_at||target.published_at||null,author:enriched.author||null,
+            published_at:reliablePublishedAt(enriched,target),author:enriched.author||null,
             canonical_url:enriched.raw?.canonical_url||target.url
           });
           if(refreshed?.ok) refreshedCount++;

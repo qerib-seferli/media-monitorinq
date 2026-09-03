@@ -1609,3 +1609,27 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .alias-collapsible-card .select{font-size:8px!important;padding-right:18px!important;padding-left:6px!important}
   .alias-collapsible-card .field label{font-size:8px!important}
 }
+
+
+/* Qlobal Mənbə Radarı — peşəkar, sərhəddən daşmayan canlı görüntü */
+.radar-visual{isolation:isolate;background:
+  radial-gradient(circle at 50% 50%,rgba(54,227,174,.10) 0 2%,transparent 2.3%),
+  repeating-radial-gradient(circle at 50% 50%,transparent 0 18.5%,rgba(95,203,255,.12) 18.8% 19.15%,transparent 19.45% 25%),
+  radial-gradient(circle at center,rgba(17,103,139,.16),rgba(5,22,38,.95) 72%);
+  box-shadow:inset 0 0 70px rgba(28,190,218,.11),0 0 28px rgba(34,192,194,.07)}
+.radar-visual::before{content:"";position:absolute;inset:7%;border-radius:50%;pointer-events:none;z-index:1;background:
+  linear-gradient(90deg,transparent 49.7%,rgba(103,197,239,.10) 49.9% 50.1%,transparent 50.3%),
+  linear-gradient(0deg,transparent 49.7%,rgba(103,197,239,.10) 49.9% 50.1%,transparent 50.3%);
+  box-shadow:inset 0 0 0 1px rgba(88,190,232,.08)}
+.radar-visual::after{content:"";position:absolute;inset:11%;border-radius:50%;pointer-events:none;z-index:1;border:1px dashed rgba(102,204,236,.08)}
+.radar-sweep{inset:4%;z-index:2;background:conic-gradient(from -10deg,transparent 0deg,transparent 300deg,rgba(52,226,169,.015) 314deg,rgba(52,226,169,.10) 339deg,rgba(82,214,235,.34) 357deg,rgba(112,237,207,.72) 360deg);filter:drop-shadow(0 0 8px rgba(70,227,188,.18));transform-origin:50% 50%}
+.radar-center{z-index:8;width:92px;height:92px;background:radial-gradient(circle at 45% 35%,rgba(15,48,72,.98),rgba(4,18,32,.98));border-color:rgba(93,224,220,.34);box-shadow:0 0 0 7px rgba(50,202,189,.035),0 0 34px rgba(54,202,211,.17),inset 0 0 22px rgba(64,185,230,.08)}
+.radar-center b{font-size:24px;letter-spacing:-.5px}.radar-center small{font-size:10px;letter-spacing:.15px}
+.radar-blips{inset:8%;z-index:7;overflow:visible}
+.radar-blip{max-width:112px;transform-origin:left center;filter:drop-shadow(0 2px 5px rgba(0,0,0,.26))}
+.radar-blip i{width:8px;height:8px;border:1px solid rgba(210,255,240,.55);background:#39e39d;box-shadow:0 0 0 3px rgba(57,227,157,.09),0 0 14px rgba(57,227,157,.78);animation:radarPulse 1.8s ease-in-out infinite}
+.radar-blip small{max-width:92px;padding:4px 6px;border:1px solid rgba(74,220,177,.18);background:rgba(4,20,33,.93);color:#d9fff2;font-size:8px;font-weight:700;box-shadow:0 3px 10px rgba(0,0,0,.18)}
+.radar-blip.fresh i{animation:radarFreshPulse .75s ease-out 3}
+.radar-blip.fresh small{border-color:rgba(75,238,177,.55);box-shadow:0 0 12px rgba(58,226,158,.13)}
+@keyframes radarFreshPulse{0%{transform:scale(.75);opacity:.55}45%{transform:scale(2.25);opacity:1;box-shadow:0 0 0 7px rgba(57,227,157,.10),0 0 20px rgba(57,227,157,.95)}100%{transform:scale(1);opacity:1}}
+@media(max-width:760px){.radar-blips{inset:10%}.radar-blip{max-width:96px}.radar-blip small{max-width:76px;font-size:7px;padding:3px 5px}.radar-center{width:78px;height:78px}.radar-center b{font-size:20px}}
