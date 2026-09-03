@@ -38,10 +38,12 @@ jobs:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RADAR_GITHUB_TOKEN: ${{ secrets.RADAR_GITHUB_TOKEN }}
         run: |
           if [ -n "$MONITOR_SECRET" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt MONITOR_SECRET="$MONITOR_SECRET"; fi
           if [ -n "$YOUTUBE_API_KEY" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt YOUTUBE_API_KEY="$YOUTUBE_API_KEY"; fi
           if [ -n "$GEMINI_API_KEY" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt GEMINI_API_KEY="$GEMINI_API_KEY"; fi
+          if [ -n "$RADAR_GITHUB_TOKEN" ]; then supabase secrets set --project-ref xsmahlsqdszxqordgcvt RADAR_GITHUB_TOKEN="$RADAR_GITHUB_TOKEN"; fi
       - name: Deploy functions
         if: steps.preflight.outputs.ready == 'true'
         env:
