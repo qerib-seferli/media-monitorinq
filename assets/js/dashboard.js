@@ -45,7 +45,7 @@ async function fetchDashboardData(){
   };
 }
 const isComment=m=>String(m?.raw_payload?.kind||'').includes('comment');
-function hasReliablePublishedDate(m){const raw=m?.raw_payload||{};const sitemap=String(raw?.kind||'').includes('configured_site_sitemap');return Boolean(m?.published_at)&&!(sitemap&&raw?.published_from_page!==true);}
+function hasReliablePublishedDate(m){if(!m?.published_at)return false;const platform=String(m?.source_platform||'').toLowerCase();if(platform.includes('youtube'))return true;const raw=m?.raw_payload||{};if(platform==='web'||platform.includes('google news'))return raw?.published_from_page===true||raw?.published_date_status==='verified';return true;}
 const stateBadge=m=>String(m?.source_status||'active')==='removed'?`<span class="badge danger source-removed">${isComment(m)?'Şərh silinib':'Material silinib'}</span>`:String(m?.source_status||'active')==='unavailable'?'<span class="badge warn">Əlçatan deyil</span>':'';
 async function renderDashboard(){
   const results=await fetchDashboardData();

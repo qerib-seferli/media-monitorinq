@@ -445,7 +445,7 @@ Deno.serve(async (req) => {
           const hasShot=media.some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot' && Boolean(m?.url));
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase()) && Boolean(m?.url));
           const dateNeedsCheck=webDateNeedsVerification(raw,row?.published_at,row?.detected_at);
-          const textMissing=text.length<180 || raw?.enrichment_complete!==true;
+          const textMissing=text.length<450 || raw?.enrichment_complete!==true;
           const needs=textMissing || !row?.published_at || dateNeedsCheck || !row?.author_name || !hasShot || !hasCover;
           if(!needs) continue;
           const priority=(dateNeedsCheck?40:0)+(textMissing?35:0)+(!row?.published_at?25:0)+(!row?.author_name?8:0)+(!hasShot?4:0)+(!hasCover?3:0);
@@ -1270,17 +1270,41 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   };
   const globalRows=await pageRows(()=>admin.from('keywords').select('organization_id,value,kind,is_active,created_at').is('organization_id',null).eq('is_active',true).order('created_at',{ascending:false}),Math.min(12000,maxPos+5000));
   const orgRows=organizationId?await pageRows(()=>admin.from('keywords').select('organization_id,value,kind,is_active,created_at').eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:false}),Math.min(6000,maxPos+1500)):[];
+
+  // Deaktiv/arxiv qeydləri artıq ölü baza deyil. Hamısını bir anda aktivləşdirmək əlaqəsiz
+  // nəticələri kəskin artıra bilər; buna görə pozitiv arxiv sözlərindən hər təşkilat/run
+  // üçün fərqli pəncərə götürülür. Saatlıq rotasiya ilə bütün ehtiyat bank mərhələli dolaşır.
+  const reserveLimit=Math.max(350,Math.min(1200,Math.floor(maxPos*.32)));
+  const reserveCountResult:any=await admin.from('keywords').select('id',{count:'exact',head:true}).is('organization_id',null).eq('is_active',false);
+  const reserveCount=Math.max(0,Number(reserveCountResult?.count||0));
+  let reserveRows:any[]=[];
+  if(reserveCount>0){
+    const bucket=Math.floor(Date.now()/3600000);
+    const maxStart=Math.max(0,reserveCount-reserveLimit);
+    const start=maxStart?radarTextHash(`${organizationId||'global'}:${bucket}`)%(maxStart+1):0;
+    const rr:any=await admin.from('keywords')
+      .select('organization_id,value,kind,is_active,created_at')
+      .is('organization_id',null).eq('is_active',false)
+      .order('created_at',{ascending:true}).range(start,Math.min(reserveCount-1,start+reserveLimit-1));
+    if(!rr?.error) reserveRows=Array.isArray(rr?.data)?rr.data:[];
+  }
+
   const seen=new Set<string>(); const rows:any[]=[];
   const push=(row:any)=>{
     const value=String(row?.value||'').trim(); const nk=normalizeForMatch(value); const kind=String(row?.kind||'phrase').toLowerCase();
     const key=`${kind}|${nk}`; if(!value||!nk||seen.has(key)) return; seen.add(key);
-    rows.push({organization_id:row?.organization_id||null,value,kind,is_active:true,created_at:row?.created_at||null});
+    rows.push({organization_id:row?.organization_id||null,value,kind,is_active:row?.is_active!==false,created_at:row?.created_at||null});
   };
-  // Filtrlər təhlükəsizlik üçün tam prioritetlidir; sonra ən yeni pozitivlər götürülür.
+  // Aktiv filtrlər təhlükəsizlik üçün tam prioritetlidir; sonra aktiv pozitivlər, sonda
+  // ehtiyat/arxiv pozitiv bankının rotasiya pəncərəsi işləyir.
   for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
   for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
   for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
   for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
+  for(const row of reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude')) push(row);
+  org.__reserve_exclude_candidates=reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude').map((x:any)=>String(x?.value||'').trim()).filter(Boolean);
+  org.__reserve_keyword_count=reserveCount;
+  org.__reserve_keyword_window=reserveRows.length;
   return rows;
 }
 
@@ -2438,13 +2462,14 @@ function pageItemFromHtml(url:string, fallback:string, html:string):Item {
       .replace(/<noscript[\s\S]*?<\/noscript>/gi,' ')
       .replace(/<[^>]+>/g,' ')
   ).slice(0,14000);
+  const pagePublished=meta(html,'article:published_time') || meta(html,'date') || null;
   return {
     title,
     text:`${description}\n${text}`.trim(),
     url,
     image:resolveUrl(meta(html,'og:image') || '',url),
-    published_at:meta(html,'article:published_time') || meta(html,'date') || null,
-    raw:{kind:'web_page'}
+    published_at:pagePublished,
+    raw:{kind:'web_page',published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found'}
   };
 }
 
@@ -2621,7 +2646,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
       }
     };
     if (item.author) refresh.author_name=item.author;
-    if (item.published_at) refresh.published_at=item.published_at;
+    const refreshPublished=canonicalSourcePlatform==='Web'?reliableWebPublishedDate(item):item.published_at;
+    if (refreshPublished) refresh.published_at=refreshPublished;
     if (item.text) refresh.original_text=item.text;
     if (item.title) refresh.title=item.title;
     await admin.from('mentions').update(refresh).eq('id',existing.id);
@@ -2648,7 +2674,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     sentiment,
     priority_score:priority,
     relevance_score:ai?.relevance_score ? clamp(ai.relevance_score) : relevance,
-    published_at:item.published_at || null,
+    published_at:canonicalSourcePlatform==='Web'?reliableWebPublishedDate(item):(item.published_at || null),
     content_hash:hash,
     raw_payload:{
       ...(item.raw || item),
@@ -3085,17 +3111,23 @@ async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any, al
   if((kind==='phrase' && globalPositive.has(normalizedValue)) || (kind==='exclude' && excludes.has(normalizedValue))) return null;
   try{
     const duplicateCheck:any=await admin.from('keywords')
-      .select('id,value,kind')
+      .select('id,value,kind,is_active')
       .is('organization_id',null)
-      .eq('is_active',true)
       .ilike('value',value)
       .limit(20);
     if(duplicateCheck?.error) throw duplicateCheck.error;
-    const alreadyExists=(duplicateCheck?.data||[]).some((row:any)=>
+    const same=(duplicateCheck?.data||[]).find((row:any)=>
       (String(row?.kind||'phrase')==='exclude'?'exclude':'phrase')===(kind==='exclude'?'exclude':'phrase') &&
       normalizeForMatch(String(row?.value||''))===normalizedValue
     );
-    if(alreadyExists) return null;
+    if(same?.id){
+      if(same.is_active===false){
+        const reactivate:any=await admin.from('keywords').update({is_active:true}).eq('id',same.id);
+        if(reactivate?.error) throw reactivate.error;
+        return {kind,value,reactivated:true};
+      }
+      return null;
+    }
     const insert:any=await admin.from('keywords').insert({organization_id:null,value,kind,is_active:true});
     if(insert?.error && String(insert.error?.code||'')!=='23505') throw insert.error;
     if(insert?.error && String(insert.error?.code||'')==='23505') return null;
@@ -3460,23 +3492,15 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
 function radarTextHash(value:string):number { let h=2166136261; for(const c of String(value||'')){h^=c.charCodeAt(0);h=Math.imul(h,16777619);} return h>>>0; }
 
 function webDateNeedsVerification(raw:any,publishedAt:any,detectedAt:any):boolean {
-  const kind=String(raw?.kind||'').toLowerCase();
-  const provider=String(raw?.provider||'').toLowerCase();
+  // Web tarixinin yeganə etibarlı mənbəyi məqalənin öz səhifəsidir. Discovery RSS/Google/Bing
+  // tarixi namizəd kimi faydalıdır, amma köhnə xəbərlərə yenidən indekslənmə vaxtı verə bilər.
   if(raw?.published_from_page===true || raw?.published_date_status==='verified') return false;
-  const untrusted=kind.includes('bing_web')||kind.includes('configured_site_sitemap')||kind.includes('configured_site_link')||kind.includes('configured_web')||provider.includes('bing web')||provider.includes('configured web');
-  if(untrusted) return true;
-  if(!publishedAt) return true;
-  if(detectedAt){const a=new Date(publishedAt).getTime(),b=new Date(detectedAt).getTime();if(Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<10*60*1000 && !/(google_news|bing_news|rss)/.test(kind))return true;}
-  return false;
+  return true;
 }
 
 function reliableWebPublishedDate(item:Item):string|null {
   const raw:any=item?.raw||{};
-  if(raw?.published_from_page===true && item?.published_at) return String(item.published_at);
-  const kind=String(raw?.kind||'').toLowerCase();
-  const provider=String(raw?.provider||'').toLowerCase();
-  const trusted=kind.includes('google_news')||kind.includes('bing_news')||kind.includes('rss')||provider.includes('google news')||provider.includes('bing news');
-  return trusted && item?.published_at ? String(item.published_at) : null;
+  return raw?.published_from_page===true && item?.published_at ? String(item.published_at) : null;
 }
 
 function safePositiveLearningPhrase(value:any):boolean {

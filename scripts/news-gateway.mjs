@@ -622,12 +622,10 @@ async function enrichPage(item) {
 }
 
 function reliablePublishedAt(enriched,target){
-  const kind=String(enriched?.raw?.kind||target?.raw?.kind||'').toLowerCase();
+  // Paylaşım tarixi yalnız orijinal səhifədən oxunub təsdiqlənibsə bazaya yazılır.
+  // Feed/search tarixini discovery metadatası kimi saxlayırıq, amma paylaşım tarixi etmirik.
   if(enriched?.raw?.published_from_page===true && enriched?.published_at) return normalizeDate(enriched.published_at);
-  if(kind.includes('configured_site_sitemap')||kind.includes('configured_site_link')||kind.includes('bing_web')) return null;
-  const provider=String(enriched?.raw?.provider||target?.raw?.provider||'').toLowerCase();
-  const trustedFeed=kind.includes('google_news')||kind.includes('bing_news')||kind.includes('rss')||provider.includes('google news')||provider.includes('bing news');
-  return trustedFeed?normalizeDate(target?.published_at||enriched?.published_at||''):null;
+  return null;
 }
 
 async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {

@@ -361,12 +361,14 @@ function keywordGroupSummary(stat, mode) {
   if (!count) return '';
   const orgKey = stat.organization_id || '';
   const css = mode === 'exclude' ? 'keyword-group exclusion-group' : 'keyword-group positive-group';
-  const label = mode === 'exclude' ? 'aktiv filtr' : 'açar söz';
+  const globalList=String(stat.organization_id||'')==='__all__';
+  const title=globalList?(mode==='exclude'?'Axtarılmayan sözlərin siyahısı':'Axtarılan sözlərin siyahısı'):stat.name;
+  const hint=globalList?'Siyahını aç və idarə et':`${count} ${mode==='exclude'?'aktiv filtr':'açar söz'}`;
   return `
     <details class="${css}" data-keyword-group="1" data-mode="${mode}" data-org-id="${escapeHtml(orgKey)}" data-total="${count}">
       <summary>
-        <span><strong>${escapeHtml(stat.name)}</strong><small>${count} ${label}</small></span>
-        <span class="keyword-count">${count}</span>
+        <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(hint)}</small></span>
+        <span class="keyword-list-open-mark">Aç ›</span>
       </summary>
       <div class="keyword-group-body" data-keyword-body>
         <div class="empty compact">Açdıqda ilk ${Math.min(KEYWORD_PAGE_SIZE,count)} qeyd yüklənəcək.</div>
@@ -410,10 +412,10 @@ function renderKeywords() {
   if(summary){
     summary.innerHTML=`<div class="keyword-bank-overview keyword-bank-overview-single">
       <span><small>Ümumi söz bazası</small><b>${keywordBankTotals.records_total}</b></span>
-      <span><small>Aktiv axtarılan</small><b>${keywordBankTotals.positive}</b></span>
-      <span><small>Aktiv axtarılmayan</small><b>${keywordBankTotals.exclude}</b></span>
-      <span><small>Arxiv / deaktiv</small><b>${keywordBankTotals.inactive}</b></span>
-      <div class="keyword-bank-note"><b>${keywordBankTotals.total}</b> aktiv qeyd işləyir. Qlobal aktiv: ${keywordBankTotals.global_positive} axtarılan + ${keywordBankTotals.global_exclude} filtr. Təşkilatlara aid aktiv: ${keywordBankTotals.organization_positive} + ${keywordBankTotals.organization_exclude}. <strong>Gemini AI</strong> tam radar zamanı hər təşkilat üçün avtomatik ələk və təhlükəsiz söz-bankı optimallaşdırması aparır.</div>
+      <span><small>Prioritet axtarılan</small><b>${keywordBankTotals.positive}</b></span>
+      <span><small>Prioritet filtr</small><b>${keywordBankTotals.exclude}</b></span>
+      <span><small>Ehtiyat rotasiya bankı</small><b>${keywordBankTotals.inactive}</b></span>
+      <div class="keyword-bank-note"><b>${keywordBankTotals.records_total}</b> qeyd artıq sistemdə istifadədədir: <b>${keywordBankTotals.total}</b> aktiv/prioritet qeyd hər taramada birinci işləyir, <b>${keywordBankTotals.inactive}</b> arxiv/deaktiv qeyd isə təhlükəsiz <strong>rotasiya bankı</strong> kimi mərhələli istifadə olunur. Beləliklə baza silinmir və birdən-birə bütün köhnə sözlər aktivləşdirilib əlaqəsiz nəticə yaratmır. <strong>Gemini AI</strong> radar zamanı bankı ələkdən keçirərək uyğun frazaları prioritet bankına daşıya bilər.</div>
     </div>`;
   }
   const positiveGroups = keywordStats.filter(x => x.positive_count > 0);
@@ -1290,10 +1292,20 @@ function renderNetworkRadarIdle(){
 }
 function radarHash(value=''){let h=2166136261;for(const c of String(value)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
 const RADAR_BLIP_SLOTS=(()=>{
+  // Nəticə tapılan təşkilatları bir xəttə yığmamaq üçün 3 halqalı, bucaqları
+  // bir-birindən sürüşdürülmüş sabit radar koordinatları. Etiket istiqaməti
+  // nöqtədən çölə doğrudur; buna görə həm mərkəzdə, həm də kənarda üst-üstə düşmə azalır.
   const slots=[];
-  const addRing=(radius,count,offset)=>{for(let i=0;i<count;i++){const a=(offset+(360/count)*i)*Math.PI/180;slots.push({left:50+Math.cos(a)*radius,top:50+Math.sin(a)*radius,angle:a});}};
-  addRing(28,8,-78);
-  addRing(40,10,-63);
+  const addRing=(radius,count,offset)=>{
+    for(let i=0;i<count;i++){
+      const deg=offset+(360/count)*i, a=deg*Math.PI/180;
+      const left=50+Math.cos(a)*radius, top=50+Math.sin(a)*radius;
+      slots.push({left,top,angle:a,side:Math.cos(a)<0?'left':'right',vertical:Math.sin(a)<-.55?'up':Math.sin(a)>.55?'down':'mid'});
+    }
+  };
+  addRing(23,6,-72);
+  addRing(34,8,-50);
+  addRing(43,10,-82);
   return slots;
 })();
 const RADAR_SEARCH_SLOTS=(()=>{
@@ -1316,9 +1328,9 @@ function renderRadarOrganizations(items=[]){
     const key=String(row.organization_id||row.short_name), count=Number(row.count||0), pos=radarBlipPosition(key,usedSlots);
     next[key]=count;
     const fresh=count>Number(networkRadarLastOrgCounts[key]||0);
-    const edge=pos.left<30?' edge-left':pos.left>70?' edge-right':'';
-    const vertical=pos.top<28?' edge-top':pos.top>72?' edge-bottom':'';
-    return `<span class="radar-blip hit${fresh?' fresh':''}${edge}${vertical}" style="left:${pos.left}%;top:${pos.top}%"><i></i><small>${escapeHtml(row.short_name)}${count>1?` · ${count}`:''}</small></span>`;
+    const labelSide=pos.side==='left'?' label-left':' label-right';
+    const labelVertical=pos.vertical==='up'?' label-up':pos.vertical==='down'?' label-down':' label-mid';
+    return `<span class="radar-blip hit${fresh?' fresh':''}${labelSide}${labelVertical}" style="left:${pos.left}%;top:${pos.top}%"><i></i><small>${escapeHtml(row.short_name)}${count>1?` · ${count}`:''}</small></span>`;
   }).join('');
   box.innerHTML=searchBlips+hits;
   networkRadarLastOrgCounts=next;
@@ -1404,7 +1416,7 @@ async function pollNetworkRadarStatus(){
     const msg=String(data?.error||error?.message||'');
     if(/RADAR_GITHUB_TOKEN/i.test(msg)){networkRadarRunning=false;radarSetVisualRunning(false);stopRadarTimers();toast('Radar üçün server icazəsi tamamlanmayıb.','error');return;}
     // Müvəqqəti 403/CORS/520 sorğusu serverdə gedən taramanı dayandırmır.
-    const delay=Math.min(90000,35000+networkRadarTransientErrors*10000);
+    const delay=Math.min(150000,60000+networkRadarTransientErrors*15000);
     networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,delay);return;
   }
   networkRadarTransientErrors=0;
@@ -1422,7 +1434,7 @@ async function pollNetworkRadarStatus(){
     else toast(`Tam tarama bitdi. ${Number(data.jobs_failed||0)} bölmədə texniki xəbərdarlıq qeydə alındı.`,'info');
     return;
   }
-  networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,45000);
+  networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,65000);
 }
 function startRadarPolling(resume=false){
   if(!networkRadarScanId)return;networkRadarRunning=true;radarSetVisualRunning(true);

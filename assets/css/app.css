@@ -1716,3 +1716,20 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .radar-blip.edge-left.edge-top small,.radar-blip.edge-left.edge-bottom small{translate:0 0}
 @keyframes radarSearchBlink{0%,100%{opacity:.08;transform:scale(.65)}35%{opacity:.95;transform:scale(1.35)}55%{opacity:.32;transform:scale(.9)}}
 @media(max-width:760px){.keyword-bank-overview-single{grid-template-columns:1fr 1fr}.radar-blip.hit small{max-width:82px}}
+
+
+/* 2026-09-05 — Radar etiketlərinin radial anti-overlap düzülüşü */
+.radar-blips{inset:10%!important;overflow:visible!important}
+.radar-blip{translate:-50% -50%;width:10px;height:10px;z-index:8}
+.radar-blip small{top:50%;translate:0 -50%;max-width:94px;font-size:7.4px;line-height:1.15;padding:3px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.radar-blip.label-right small{left:14px!important;right:auto!important;text-align:left}
+.radar-blip.label-left small{left:auto!important;right:14px!important;text-align:right}
+.radar-blip.label-up small{top:-5px;translate:0 -100%}
+.radar-blip.label-down small{top:15px;translate:0 0}
+.radar-blip.label-mid small{top:50%;translate:0 -50%}
+.radar-search-blip{z-index:3}
+@media(max-width:760px){.radar-blips{inset:12%!important}.radar-blip small{max-width:68px;font-size:6.6px;padding:2px 4px}}
+
+/* 2026-09-05 — Açar söz siyahılarında təkrarlanan say kartı əvəzinə sadə aç/idarə et CTA */
+.keyword-list-open-mark{font-size:8px;font-weight:800;color:#8fc9ee;white-space:nowrap}
+.keyword-group[open] .keyword-list-open-mark{color:#5ee3b2}

@@ -58,11 +58,13 @@ function hasReliablePublishedDate(m){
   const platform=String(m?.source_platform||'').toLowerCase();
   if(platform.includes('youtube'))return true;
   const raw=m?.raw_payload||{};
-  if(raw?.published_from_page===true||raw?.published_date_status==='verified')return true;
-  const kind=String(raw?.kind||'').toLowerCase(), provider=String(raw?.provider||'').toLowerCase();
-  const untrusted=kind.includes('bing_web')||kind.includes('configured_site_sitemap')||kind.includes('configured_site_link')||kind.includes('configured_web')||provider.includes('bing web')||provider.includes('configured web');
-  if(untrusted)return false;
-  return kind.includes('google_news')||kind.includes('bing_news')||kind.includes('rss')||provider.includes('google news')||provider.includes('bing news');
+  // Web/Google News tarixləri yalnız məqalənin öz səhifəsindən təsdiqlənəndə göstərilir.
+  // RSS/Google/Bing discovery vaxtı köhnə xəbərə yeni tarix verə bildiyi üçün artıq
+  // istifadəçiyə "paylaşım tarixi" kimi göstərilmir.
+  if(platform==='web'||platform.includes('google news')){
+    return raw?.published_from_page===true||raw?.published_date_status==='verified';
+  }
+  return true;
 }
 function publishedDate(m){return hasReliablePublishedDate(m)?m.published_at:null;}
 function publishedDateText(m){
