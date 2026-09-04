@@ -1633,3 +1633,12 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .radar-blip.fresh small{border-color:rgba(75,238,177,.55);box-shadow:0 0 12px rgba(58,226,158,.13)}
 @keyframes radarFreshPulse{0%{transform:scale(.75);opacity:.55}45%{transform:scale(2.25);opacity:1;box-shadow:0 0 0 7px rgba(57,227,157,.10),0 0 20px rgba(57,227,157,.95)}100%{transform:scale(1);opacity:1}}
 @media(max-width:760px){.radar-blips{inset:10%}.radar-blip{max-width:96px}.radar-blip small{max-width:76px;font-size:7px;padding:3px 5px}.radar-center{width:78px;height:78px}.radar-center b{font-size:20px}}
+
+/* Qlobal Mənbə Radarı — sabit, üst-üstə düşməyən təşkilat nişanları */
+.radar-blips{inset:8%;overflow:hidden}
+.radar-blip{translate:-50% -50%;display:block;width:10px;height:10px;max-width:none;filter:none}
+.radar-blip i{position:absolute;left:0;top:0;width:9px;height:9px}
+.radar-blip small{position:absolute;left:14px;top:50%;translate:0 -50%;max-width:96px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.radar-blip.label-left small{left:auto;right:14px;text-align:right}
+.radar-blip.label-right small{left:14px;right:auto;text-align:left}
+@media(max-width:760px){.radar-blips{inset:9%}.radar-blip small{max-width:72px;font-size:7px;padding:3px 4px}}

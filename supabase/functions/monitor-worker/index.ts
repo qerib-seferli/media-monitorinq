@@ -3001,6 +3001,18 @@ async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any, al
   if(!normalizedValue || normalizedValue.length<4) return null;
   if((kind==='phrase' && globalPositive.has(normalizedValue)) || (kind==='exclude' && excludes.has(normalizedValue))) return null;
   try{
+    const duplicateCheck:any=await admin.from('keywords')
+      .select('id,value,kind')
+      .is('organization_id',null)
+      .eq('is_active',true)
+      .ilike('value',value)
+      .limit(20);
+    if(duplicateCheck?.error) throw duplicateCheck.error;
+    const alreadyExists=(duplicateCheck?.data||[]).some((row:any)=>
+      (String(row?.kind||'phrase')==='exclude'?'exclude':'phrase')===(kind==='exclude'?'exclude':'phrase') &&
+      normalizeForMatch(String(row?.value||''))===normalizedValue
+    );
+    if(alreadyExists) return null;
     const insert:any=await admin.from('keywords').insert({organization_id:null,value,kind,is_active:true});
     if(insert?.error && String(insert.error?.code||'')!=='23505') throw insert.error;
     if(insert?.error && String(insert.error?.code||'')==='23505') return null;
