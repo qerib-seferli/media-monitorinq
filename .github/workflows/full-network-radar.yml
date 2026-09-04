@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 58
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 3
       matrix:
         org_shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
     steps:
@@ -146,6 +146,23 @@ jobs:
           NEWS_SITEMAP_URL_LIMIT: '650'
           NEWS_SITEMAP_PROBE_LIMIT: '32'
         run: node scripts/news-gateway.mjs
+
+      - name: Avtomatik AI ələk və söz bankı öyrənməsi
+        if: always()
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          set -u
+          [ -f orgs.txt ] || exit 0
+          while IFS= read -r ORG_ID; do
+            [ -z "$ORG_ID" ] && continue
+            curl --fail-with-body --silent --show-error \
+              --connect-timeout 15 --max-time 90 --retry 1 --retry-delay 4 --retry-all-errors \
+              -X POST -H "Content-Type: application/json" -H "x-monitor-secret: $MONITOR_SECRET" \
+              -d "{\"mode\":\"review_auto_sieve\",\"organization_id\":\"${ORG_ID}\",\"refilter_limit\":120}" \
+              "$MONITOR_URL" || true
+            sleep 2
+          done < orgs.txt
 
       - name: Tarama bölməsi tamamlandı
         if: always()
