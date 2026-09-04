@@ -6,6 +6,32 @@ type DiagnosticError = { stage:string; organization?:string|null; source?:string
 
 const RUN_BUDGET_MS = 42000;
 
+async function fetchDistrictPlaceNames(admin:any, districtId:string|null|undefined):Promise<string[]> {
+  if (!districtId) return [];
+  const official:any = await admin.from('place_catalog')
+    .select('name')
+    .eq('district_id', districtId)
+    .eq('is_active', true)
+    .order('name')
+    .limit(5000);
+  if (!official?.error) {
+    const names:string[] = (Array.isArray(official?.data) ? official.data : [])
+      .map((x:any)=>String(x?.name || '').trim())
+      .filter((x:string)=>Boolean(x));
+    return Array.from(new Set<string>(names));
+  }
+  const raw = `${official?.error?.code || ''} ${official?.error?.message || ''}`.toLowerCase();
+  const catalogMissing = raw.includes('42p01') || raw.includes('pgrst205') || (raw.includes('place_catalog') && (raw.includes('not found') || raw.includes('does not exist')));
+  if (!catalogMissing) throw official.error;
+  const legacy:any = await admin.from('villages').select('name').eq('district_id', districtId).order('name').limit(5000);
+  if (legacy?.error) throw legacy.error;
+  const names:string[] = (Array.isArray(legacy?.data) ? legacy.data : [])
+    .map((x:any)=>String(x?.name || '').trim())
+    .filter((x:string)=>Boolean(x));
+  return Array.from(new Set<string>(names));
+}
+
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok',{headers:corsHeaders});
 
@@ -290,18 +316,9 @@ Deno.serve(async (req) => {
           .map((k:any)=>String(k?.value || '').trim())
           .filter(Boolean);
 
-        let villageNames:string[] = [];
-        if (org.district_id) {
-          const villageResult:any = await admin.from('villages')
-            .select('name')
-            .eq('district_id', org.district_id)
-            .order('name');
-          if (!villageResult?.error) {
-            villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : [])
-              .map((x:any)=>String(x?.name || '').trim())
-              .filter(Boolean);
-          }
-        }
+        const villageNames:string[] = org.district_id
+          ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
+          : [];
 
         organizations.push({
           id:String(org.id),
@@ -434,11 +451,9 @@ Deno.serve(async (req) => {
         if (options.news_text || options.news_title) {
           const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
           const positiveKeywords = installKeywordContext(org, activeKeywordRows);
-          let villageNames:string[]=[];
-          if(org.district_id){
-            const vr:any=await admin.from('villages').select('name').eq('district_id',org.district_id).order('name');
-            if(!vr?.error) villageNames=(Array.isArray(vr?.data)?vr.data:[]).map((x:any)=>String(x?.name||'').trim()).filter(Boolean);
-          }
+          const villageNames:string[] = org.district_id
+            ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
+            : [];
           const candidate:Item={title:options.news_title||current.data.title||'',text:options.news_text||'',url:options.canonical_url||options.source_url,published_at:options.news_published_at||current.data.published_at||null,raw:{kind:'web_enrich',provider:'web'}};
           contentRelevant=evaluateMatch(org,candidate,positiveKeywords.map((x:string)=>x.toLocaleLowerCase('az-AZ')),villageNames).accepted;
         }
@@ -557,12 +572,9 @@ Deno.serve(async (req) => {
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
 
-      let villageNames:string[] = [];
-      if (org.district_id) {
-        const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
-        if (villageResult?.error) throw villageResult.error;
-        villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
-      }
+      const villageNames:string[] = org.district_id
+        ? await fetchDistrictPlaceNames(admin, String(org.district_id))
+        : [];
 
       const result = await refilterExistingWebMentions(admin,org,lowerKeywords,villageNames,300);
       return json({ok:true,run_id:runId,mode:'news_refilter',organization:org.short_name,...result},200);
@@ -574,12 +586,9 @@ Deno.serve(async (req) => {
       const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 1200);
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
-      let villageNames:string[] = [];
-      if (org.district_id) {
-        const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
-        if (villageResult?.error) throw villageResult.error;
-        villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
-      }
+      const villageNames:string[] = org.district_id
+        ? await fetchDistrictPlaceNames(admin, String(org.district_id))
+        : [];
       const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit,options.refilter_before);
       return json({ok:true,run_id:runId,mode:'existing_refilter',organization:org.short_name,...result},200);
     }
@@ -590,12 +599,9 @@ Deno.serve(async (req) => {
       const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 1200);
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
-      let villageNames:string[] = [];
-      if (org.district_id) {
-        const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
-        if (villageResult?.error) throw villageResult.error;
-        villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
-      }
+      const villageNames:string[] = org.district_id
+        ? await fetchDistrictPlaceNames(admin, String(org.district_id))
+        : [];
       const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit||800,null,true);
       return json({ok:true,run_id:runId,mode:'review_auto_sieve',organization:org.short_name,...result},200);
     }
@@ -608,12 +614,9 @@ Deno.serve(async (req) => {
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
 
-      let villageNames:string[] = [];
-      if (org.district_id) {
-        const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
-        if (villageResult?.error) throw villageResult.error;
-        villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : []).map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
-      }
+      const villageNames:string[] = org.district_id
+        ? await fetchDistrictPlaceNames(admin, String(org.district_id))
+        : [];
 
       const source = {platform:canonicalPlatform(options.source_platform || 'Web'),url:options.source_label || 'GitHub News Gateway'};
       let accepted = 0;
@@ -666,14 +669,11 @@ Deno.serve(async (req) => {
 
       let villageNames:string[] = [];
       if (org.district_id && Date.now() < stopAt) {
-        currentStage = 'villages';
+        currentStage = 'places';
         try {
-          const villageResult:any = await admin.from('villages').select('name').eq('district_id', org.district_id).order('name');
-          if (villageResult?.error) throw villageResult.error;
-          villageNames = (Array.isArray(villageResult?.data) ? villageResult.data : [])
-            .map((x:any)=>String(x?.name || '').trim()).filter(Boolean);
+          villageNames = await fetchDistrictPlaceNames(admin, String(org.district_id));
         } catch (e) {
-          fail(currentStage,e,org.short_name,'villages');
+          fail(currentStage,e,org.short_name,'place_catalog');
         }
       }
 

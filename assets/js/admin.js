@@ -11,6 +11,8 @@ let orgs = [];
 let users = [];
 let positions = [];
 let districts = [];
+let placeCatalog = [];
+let placeCatalogAvailable = false;
 let keywords = [];
 let globalKeywordRows = [];
 let keywordStats = [];
@@ -72,6 +74,66 @@ async function loadKeywordStats() {
   keywordStats=[{...target,positive_count:positive,excluded_count:excluded,error:null}];
 }
 
+function isMissingPlaceCatalogError(error) {
+  const raw = `${error?.code || ''} ${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+  return raw.includes('42p01') || raw.includes('pgrst205') || raw.includes('place_catalog') && (raw.includes('not found') || raw.includes('does not exist'));
+}
+
+async function loadPlaceCatalog() {
+  const rows = [];
+  const pageSize = 1000;
+  for (let from = 0; from < 10000; from += pageSize) {
+    const { data, error } = await supabase.from('place_catalog')
+      .select('id,district_id,official_code,name,place_type,city_district,autonomous_republic,monitoring_aliases,is_official,is_active')
+      .eq('is_active', true)
+      .order('name')
+      .range(from, from + pageSize - 1);
+    if (error) {
+      if (!isMissingPlaceCatalogError(error)) toast(error.message, 'error');
+      placeCatalogAvailable = false;
+      placeCatalog = districts.flatMap(d => (d.villages || []).map(v => ({
+        ...v,
+        district_id: d.id,
+        place_type: 'kənd',
+        is_official: false,
+        is_active: true,
+        legacy: true
+      })));
+      return;
+    }
+    const batch = data || [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  placeCatalogAvailable = true;
+  placeCatalog = rows;
+}
+
+function placeTypeLabel(value='') {
+  return ({'şəhər':'Şəhər','qəsəbə':'Qəsəbə','kənd':'Kənd','digər':'Digər'})[value] || value || 'Kənd';
+}
+
+function normalizeLocationSearch(value='') {
+  return String(value || '').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('az-AZ');
+}
+
+function bindLocationCatalogFilters() {
+  const search = document.querySelector('#location-search');
+  const type = document.querySelector('#location-type-filter');
+  if (search && search.dataset.bound !== '1') {
+    search.dataset.bound = '1';
+    let timer = null;
+    search.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(renderCatalogs, 120);
+    });
+  }
+  if (type && type.dataset.bound !== '1') {
+    type.dataset.bound = '1';
+    type.addEventListener('change', renderCatalogs);
+  }
+}
+
 async function refresh() {
   const results = await Promise.all([
     supabase.from('organizations').select('*,districts(name)').order('created_at'),
@@ -90,6 +152,7 @@ async function refresh() {
   users = u.data || [];
   positions = p.data || [];
   districts = d.data || [];
+  await loadPlaceCatalog();
   keywords = [];
   sources = [];
   auditRows = a.data || [];
@@ -221,9 +284,39 @@ function renderCatalogs() {
     p.innerHTML = visiblePositions.map(x => `<span class="chip"><i></i>${escapeHtml(x.name)}</span>`).join('') || '<div class="empty compact">Vəzifə yoxdur.</div>';
   }
   const l = document.querySelector('#location-list');
+  const stat = document.querySelector('#place-catalog-stats');
+  const source = document.querySelector('#place-catalog-source');
+  const searchValue = normalizeLocationSearch(document.querySelector('#location-search')?.value || '');
+  const typeValue = document.querySelector('#location-type-filter')?.value || '';
+  const activePlaces = placeCatalog.filter(x => x.is_active !== false);
+  const officialPlaces = activePlaces.filter(x => x.is_official === true);
+  const statRows = officialPlaces.length ? officialPlaces : activePlaces;
+  const counts = { 'şəhər':0, 'qəsəbə':0, 'kənd':0 };
+  statRows.forEach(x => { if (x.place_type in counts) counts[x.place_type] += 1; });
+  if (stat) stat.innerHTML = `<span><b>${counts['şəhər']}</b> şəhər</span><span><b>${counts['qəsəbə']}</b> qəsəbə</span><span><b>${counts['kənd']}</b> kənd</span><span><b>${statRows.length}</b> cəmi</span>`;
+  if (source) {
+    source.textContent = placeCatalogAvailable && officialPlaces.length ? `Rəsmi kataloq • ${officialPlaces.length}` : 'Köhnə coğrafiya bazası';
+    source.className = `badge ${placeCatalogAvailable && officialPlaces.length ? 'ok' : 'warn'}`;
+  }
+
   const uniqueDistricts=[...new Map(districts.map(d=>[String(d.name||'').trim().toLocaleLowerCase('az-AZ'),d])).values()];
-  if (l) l.innerHTML = uniqueDistricts.map(d => `
-    <details class="location-row location-group"><summary class="location-title"><strong>${escapeHtml(d.name)}</strong><span>${(d.villages || []).length} məntəqə</span></summary><div class="location-values location-values-grid">${(d.villages || []).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'az')).map(v => `<span>${escapeHtml(v.name)}</span>`).join('') || '<em>Kənd əlavə edilməyib</em>'}</div></details>`).join('') || '<div class="empty">Rayon yoxdur.</div>';
+  const typeOrder = {'şəhər':0,'qəsəbə':1,'kənd':2,'digər':3};
+  const districtRows = uniqueDistricts.map(d => {
+    const districtNeedle = normalizeLocationSearch(`${d.name || ''} ${d.autonomous_republic || ''}`);
+    const districtMatched = !searchValue || districtNeedle.includes(searchValue);
+    let rows = activePlaces.filter(x => x.district_id === d.id);
+    if (typeValue) rows = rows.filter(x => (x.place_type || 'kənd') === typeValue);
+    if (searchValue && !districtMatched) {
+      rows = rows.filter(x => normalizeLocationSearch(`${x.name || ''} ${x.city_district || ''} ${(x.monitoring_aliases || []).join(' ')}`).includes(searchValue));
+    }
+    rows.sort((a,b)=>(typeOrder[a.place_type]??9)-(typeOrder[b.place_type]??9) || String(a.name||'').localeCompare(String(b.name||''),'az'));
+    if (searchValue && !districtMatched && !rows.length) return '';
+    if (typeValue && !rows.length) return '';
+    const nar = d.autonomous_republic ? `<small class="location-region-note">${escapeHtml(d.autonomous_republic)}</small>` : '';
+    return `<details class="location-row location-group" ${searchValue && rows.length ? 'open' : ''}><summary class="location-title"><strong>${escapeHtml(d.name)}${nar}</strong><span>${rows.length} məntəqə</span></summary><div class="location-values location-values-grid">${rows.map(v => `<span class="location-place"><b>${escapeHtml(v.name)}</b><small class="place-type ${escapeHtml(v.place_type || 'kənd')}">${escapeHtml(placeTypeLabel(v.place_type || 'kənd'))}</small>${v.city_district ? `<small class="place-city-district">${escapeHtml(v.city_district)}</small>` : ''}</span>`).join('') || '<em>Bu filtr üzrə məntəqə yoxdur</em>'}</div></details>`;
+  }).filter(Boolean);
+  if (l) l.innerHTML = districtRows.join('') || '<div class="empty">Uyğun ərazi və ya yaşayış məntəqəsi tapılmadı.</div>';
+  bindLocationCatalogFilters();
 }
 
 function normalizeKeywordValue(value=''){
@@ -1291,8 +1384,28 @@ async function runMonitorNow() {
 }
 
 document.querySelector('#position-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('positions').insert({name:document.querySelector('#position-name').value.trim(),organization_id:document.querySelector('#position-org').value||null}); toast(error?error.message:'Vəzifə əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
-document.querySelector('#district-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('districts').insert({name:document.querySelector('#district-name').value.trim()}); toast(error?error.message:'Rayon əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
-document.querySelector('#village-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('villages').insert({district_id:document.querySelector('#village-district').value,name:document.querySelector('#village-name').value.trim()}); toast(error?error.message:'Kənd əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
+document.querySelector('#district-form').onsubmit = async e => {
+  e.preventDefault();
+  const name = document.querySelector('#district-name').value.trim();
+  if (districts.some(d => normalizeLocationSearch(d.name) === normalizeLocationSearch(name))) return toast('Bu rayon / şəhər artıq kataloqda var.', 'error');
+  const { error } = await supabase.from('districts').insert({name});
+  toast(error ? error.message : 'Ərazi əlavə edildi', error ? 'error' : 'success');
+  if (!error) { e.target.reset(); await refresh(); }
+};
+document.querySelector('#village-form').onsubmit = async e => {
+  e.preventDefault();
+  const districtId = document.querySelector('#village-district').value;
+  const name = document.querySelector('#village-name').value.trim();
+  const placeType = document.querySelector('#village-type')?.value || 'kənd';
+  const duplicate = placeCatalog.some(x => x.district_id === districtId && normalizeLocationSearch(x.name) === normalizeLocationSearch(name));
+  if (duplicate) return toast('Bu yaşayış məntəqəsi seçilən ərazidə artıq var.', 'error');
+  let result = await supabase.from('place_catalog').insert({district_id:districtId,name,place_type:placeType,is_official:false,is_active:true});
+  if (result.error && isMissingPlaceCatalogError(result.error)) {
+    result = await supabase.from('villages').insert({district_id:districtId,name});
+  }
+  toast(result.error ? result.error.message : 'Yaşayış məntəqəsi əlavə edildi', result.error ? 'error' : 'success');
+  if (!result.error) { e.target.reset(); await refresh(); }
+};
 document.querySelector('#keyword-form').onsubmit = async e => {
   e.preventDefault();
   const value=document.querySelector('#keyword-value').value.trim();
