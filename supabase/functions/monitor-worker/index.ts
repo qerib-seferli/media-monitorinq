@@ -192,6 +192,22 @@ Deno.serve(async (req) => {
 
         const started = safeIsoDate(options.scan_started_at || run?.created_at || null);
         const radarStats = await radarMentionStats(admin, started);
+        let telemetry:any[]=[];
+        try {
+          let tq:any=admin.from('audit_logs')
+            .select('created_at,organization_id,entity_id,details')
+            .eq('action','radar_scan_event')
+            .gte('created_at',started||new Date(Date.now()-86400000).toISOString())
+            .order('created_at',{ascending:false})
+            .limit(80);
+          const tr:any=await tq;
+          if(!tr?.error){
+            telemetry=(Array.isArray(tr?.data)?tr.data:[])
+              .filter((row:any)=>String(row?.details?.scan_id||'')===scanId)
+              .slice(0,30)
+              .map((row:any)=>({created_at:row.created_at,organization_id:row.organization_id||row.entity_id||null,...(row.details||{})}));
+          }
+        } catch(e) { console.error('radar-telemetry-read',errorInfo(e)); }
         const status = String(run?.status || (run ? 'queued' : 'waiting'));
         const conclusion = run?.conclusion ? String(run.conclusion) : null;
         const pct = jobsTotal ? Math.min(100,Math.round((jobsCompleted/jobsTotal)*100)) : (conclusion==='success'?100:0);
@@ -212,6 +228,7 @@ Deno.serve(async (req) => {
           html_url:run?.html_url||null,
           created_at:run?.created_at||started,
           updated_at:run?.updated_at||null,
+          telemetry,
           ...radarStats
         },200);
       } catch (e) {
@@ -263,6 +280,27 @@ Deno.serve(async (req) => {
       const sourceMode = options.mode === 'news_plan' || options.edge_news_probe ? 'all' : 'youtube';
       org.sources = await fetchOrganizationSources(admin, String(org.id), sourceMode, 3000);
       org.aliases = await fetchOrganizationAliases(admin, String(org.id), 500);
+    }
+
+    if (options.mode === 'radar_event') {
+      const org=orgs.find((x:any)=>String(x.id)===String(options.organization_id||''));
+      if(!org || !options.scan_id) return json({ok:false,run_id:runId,mode:'radar_event',error:'Təşkilat və scan_id tələb olunur'},200);
+      try {
+        const keywordRows=await fetchOrganizationMatchKeywords(admin,org,1600);
+        const positives=keywordRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').map((x:any)=>String(x?.value||'').trim()).filter(Boolean);
+        const excludes=keywordRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude').map((x:any)=>String(x?.value||'').trim()).filter(Boolean);
+        const places=org.district_id?await fetchDistrictPlaceNames(admin,String(org.district_id)).catch(()=>[]):[];
+        const seed=Math.abs(radarTextHash(`${options.scan_id}|${org.id}|${options.radar_stage}`));
+        const includeTerm=positives.length?positives[seed%positives.length]:'';
+        const excludeTerm=excludes.length?excludes[(seed*7)%excludes.length]:'';
+        const place=places.length?places[(seed*11)%places.length]:String(org.districts?.name||'');
+        const detailsRow={scan_id:options.scan_id,stage:options.radar_stage||'scan',organization:String(org.name||org.short_name||''),short_name:String(org.short_name||org.name||''),district:String(org.districts?.name||''),place,include_term:includeTerm,exclude_term:excludeTerm};
+        const ins:any=await admin.from('audit_logs').insert({actor_email:'system-radar',organization_id:org.id,action:'radar_scan_event',entity_type:'organization',entity_id:org.id,details:detailsRow});
+        if(ins?.error) console.error('radar-telemetry-write',ins.error);
+        return json({ok:true,run_id:runId,mode:'radar_event',...detailsRow},200);
+      } catch(e) {
+        return json({ok:true,run_id:runId,mode:'radar_event',warning:errorInfo(e).message},200);
+      }
     }
 
     if (options.mode === 'delete_organization') {
@@ -390,7 +428,7 @@ Deno.serve(async (req) => {
       try {
         const limit=Math.max(1,Math.min(20,options.screenshot_limit||12));
         const result:any=await admin.from('mentions')
-          .select('id,title,summary,original_text,source_url,source_platform,published_at,author_name,raw_payload,mention_media(media_type,url)')
+          .select('id,title,summary,original_text,source_url,source_platform,published_at,detected_at,author_name,raw_payload,mention_media(media_type,url)')
           .eq('organization_id',org.id)
           .in('source_platform',['Web','Google News'])
           .gt('relevance_score',0)
@@ -406,13 +444,12 @@ Deno.serve(async (req) => {
           const media=Array.isArray(row?.mention_media)?row.mention_media:[];
           const hasShot=media.some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot' && Boolean(m?.url));
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase()) && Boolean(m?.url));
-          const sitemapDateNeedsCheck=String(raw?.kind||'').includes('configured_site_sitemap') && raw?.published_from_page!==true;
-          const needs=text.length<80 || raw?.enrichment_complete!==true || !row?.published_at || sitemapDateNeedsCheck || !row?.author_name || !hasShot || !hasCover;
+          const dateNeedsCheck=webDateNeedsVerification(raw,row?.published_at,row?.detected_at);
+          const needs=text.length<80 || raw?.enrichment_complete!==true || !row?.published_at || dateNeedsCheck || !row?.author_name || !hasShot || !hasCover;
           if(!needs) continue;
-          targets.push({id:row.id,title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:row.published_at||null,author:row.author_name||null,raw,has_screenshot:hasShot,has_cover:hasCover});
-          if(targets.length>=limit) break;
+          targets.push({id:row.id,title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:dateNeedsCheck?null:(row.published_at||null),author:row.author_name||null,raw:{...raw,date_needs_verification:dateNeedsCheck},has_screenshot:hasShot,has_cover:hasCover,date_needs_verification:dateNeedsCheck});
         }
-        return json({ok:true,run_id:runId,mode:'news_enrich_backfill_targets',organization:org.short_name,targets,scanned:rows.length},200);
+        targets.sort((a:any,b:any)=>Number(Boolean(b.date_needs_verification))-Number(Boolean(a.date_needs_verification))); return json({ok:true,run_id:runId,mode:'news_enrich_backfill_targets',organization:org.short_name,targets:targets.slice(0,limit),scanned:rows.length},200);
       } catch(e) {
         return json({ok:false,run_id:runId,mode:'news_enrich_backfill_targets',error:errorInfo(e).message},200);
       }
@@ -465,10 +502,10 @@ Deno.serve(async (req) => {
           patch.summary=clean(options.news_text).slice(0,700);
         }
         if (safeMetadata && options.news_published_at) patch.published_at=options.news_published_at;
-        else if (safeMetadata && String(current.data.raw_payload?.kind||'').includes('configured_site_sitemap') && current.data.raw_payload?.published_from_page!==true) patch.published_at=null;
+        else if (safeMetadata && webDateNeedsVerification(current.data.raw_payload,current.data.published_at,null)) patch.published_at=null;
         if (safeMetadata && options.news_author) patch.author_name=options.news_author;
         const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,1);
-        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),published_from_page:Boolean(safeMetadata && options.news_published_at),published_date_status:safeMetadata?(options.news_published_at?'verified':'not-found'):'unverified',canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
         const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
         if (updated?.error) throw updated.error;
         if(safeMetadata && externalImages.length){
@@ -625,7 +662,8 @@ Deno.serve(async (req) => {
       let saved = 0;
       const samples:any[] = [];
       const acceptedItems:Item[] = [];
-      for (const item of dedupeItems(options.news_items || []).slice(0,250)) {
+      for (const incoming of dedupeItems(options.news_items || []).slice(0,250)) {
+        const item:Item={...incoming,published_at:reliableWebPublishedDate(incoming)};
         const match = evaluateMatch(org,item,lowerKeywords,villageNames);
         if (!match.accepted) await autoLearnKeywordBank(admin,org,item,match);
         if (match.accepted) accepted++; else rejected++;
@@ -2691,6 +2729,7 @@ type RunOptions = {
   scan_id:string;
   scan_started_at:string|null;
   github_run_id:number;
+  radar_stage:string;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -2731,7 +2770,8 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   refilter_limit:500,
   scan_id:'',
   scan_started_at:null,
-  github_run_id:0
+  github_run_id:0,
+  radar_stage:''
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -2788,7 +2828,8 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       refilter_limit:Math.max(50,Math.min(800,Number(body?.refilter_limit || 500))),
       scan_id:String(body?.scan_id || '').replace(/[^A-Za-z0-9_-]/g,'').slice(0,80),
       scan_started_at:body?.scan_started_at ? String(body.scan_started_at).slice(0,64) : null,
-      github_run_id:Math.max(0,Number(body?.github_run_id || 0))
+      github_run_id:Math.max(0,Number(body?.github_run_id || 0)),
+      radar_stage:String(body?.radar_stage || '').replace(/[^A-Za-z0-9_-]/g,'').slice(0,40)
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};
@@ -3030,6 +3071,7 @@ async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any, al
   const value=positiveCandidate||excludeCandidate;
   if(!value) return null;
   const kind=positiveCandidate?'phrase':'exclude';
+  if(kind==='phrase' && !safePositiveLearningPhrase(value)) return null;
   const normalizedValue=normalizeForMatch(value);
   if(!normalizedValue || normalizedValue.length<4) return null;
   if((kind==='phrase' && globalPositive.has(normalizedValue)) || (kind==='exclude' && excludes.has(normalizedValue))) return null;
@@ -3203,9 +3245,9 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     return contains(normalized,term);
   }).slice(0,12);
   const safeGlobalTopicTerm=(term:string)=>{
-    const words=String(term||'').split(/\s+/).filter(Boolean);
-    if(words.length>=2) return true;
-    return ['suvarma','meliorasiya','subartezian','artezian','drenaj','kollektor','irriqasiya','susuzluq','kanalizasiya'].includes(String(term||''));
+    const value=String(term||'');
+    const roots=['suvar','melior','subartez','artez','drenaj','kollektor','irriqas','susuz','kanaliz','nasos','su techizat','icmeli su','su xetti','su anbari','su quyusu','hidrotex'];
+    return roots.some(root=>value.includes(root));
   };
   const institutionalGlobalTerms = ['regional su meliorasiya xidmeti','rsmx','rsm','azerbaycan dovlet su ehtiyatlari agentliyi','azerbaycan dovlet su agentliyi','adsea','sularin istifadesine ve muhafizesine dovlet nezareti xidmeti','simdnx','sdnx','iri seherlerin birlesmis su techizati xidmeti','isst','su ve meliorasiya elmi tedqiqat institutu','smeti','tikilmekde olan obyektlerin mudiriyyeti','toom','su ve meliorasiya komplekslerinin layihelendirilmesi institutu','smkli'].map(normalizeForMatch);
   const globalBankKeywordHits = normalizedGlobalKeywords.filter(term=>term && term.length>=5 && safeGlobalTopicTerm(term) && !institutionalGlobalTerms.includes(term) && contains(normalized,term)).slice(0,12);
@@ -3405,6 +3447,34 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
         :locationHit?'ərazi-var-mövzu-yoxdur'
         :'ərazi-və-mövzu-uyğunluğu-yoxdur')
   };
+}
+
+function radarTextHash(value:string):number { let h=2166136261; for(const c of String(value||'')){h^=c.charCodeAt(0);h=Math.imul(h,16777619);} return h>>>0; }
+
+function webDateNeedsVerification(raw:any,publishedAt:any,detectedAt:any):boolean {
+  const kind=String(raw?.kind||'').toLowerCase();
+  const provider=String(raw?.provider||'').toLowerCase();
+  if(raw?.published_from_page===true || raw?.published_date_status==='verified') return false;
+  const untrusted=kind.includes('bing_web')||kind.includes('configured_site_sitemap')||kind.includes('configured_site_link')||kind.includes('configured_web')||provider.includes('bing web')||provider.includes('configured web');
+  if(untrusted) return true;
+  if(!publishedAt) return true;
+  if(detectedAt){const a=new Date(publishedAt).getTime(),b=new Date(detectedAt).getTime();if(Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<10*60*1000 && !/(google_news|bing_news|rss)/.test(kind))return true;}
+  return false;
+}
+
+function reliableWebPublishedDate(item:Item):string|null {
+  const raw:any=item?.raw||{};
+  if(raw?.published_from_page===true && item?.published_at) return String(item.published_at);
+  const kind=String(raw?.kind||'').toLowerCase();
+  const provider=String(raw?.provider||'').toLowerCase();
+  const trusted=kind.includes('google_news')||kind.includes('bing_news')||kind.includes('rss')||provider.includes('google news')||provider.includes('bing news');
+  return trusted && item?.published_at ? String(item.published_at) : null;
+}
+
+function safePositiveLearningPhrase(value:any):boolean {
+  const v=normalizeForMatch(String(value||''));
+  const roots=['suvar','melior','subartez','artez','drenaj','kollektor','irriqas','susuz','kanaliz','nasos','su techizat','icmeli su','su xetti','su anbari','su quyusu','hidrotex','su bolgu','su catism'];
+  return roots.some(root=>v.includes(root));
 }
 
 function normalizeForMatch(value:string):string {

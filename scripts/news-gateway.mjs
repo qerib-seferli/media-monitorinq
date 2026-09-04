@@ -1,5 +1,6 @@
 const MONITOR_URL = process.env.MONITOR_URL || 'https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker';
 const MONITOR_SECRET = process.env.MONITOR_SECRET || '';
+const RADAR_SCAN_ID = String(process.env.RADAR_SCAN_ID || '').trim();
 if (!MONITOR_SECRET) {
   console.log('MONITOR_SECRET yoxdur; Web/Xəbər gateway buraxıldı.');
   process.exit(0);
@@ -180,10 +181,12 @@ async function ingestInChunks({org, platform, label, items}) {
 }
 
 function decodeXml(s='') {
+  const named={nbsp:' ',ouml:'ö',Ouml:'Ö',uuml:'ü',Uuml:'Ü',auml:'ä',Auml:'Ä',ccedil:'ç',Ccedil:'Ç',szlig:'ß',ldquo:'“',rdquo:'”',lsquo:'‘',rsquo:'’',ndash:'–',mdash:'—',hellip:'…'};
   return String(s)
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1')
     .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
     .replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'")
+    .replace(/&([A-Za-z]+);/g,(m,n)=>Object.prototype.hasOwnProperty.call(named,n)?named[n]:m)
     .replace(/&#(\d+);/g,(_,n)=>String.fromCodePoint(Number(n)))
     .replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCodePoint(parseInt(n,16)));
 }
@@ -1150,6 +1153,11 @@ for (const org of plan.organizations) {
   if (gatewayBudgetLow()) {
     console.log(`NEWS_GATEWAY_BUDGET_STOP elapsed_ms=${Date.now()-GATEWAY_STARTED_AT} budget_ms=${GATEWAY_BUDGET_MS}`);
     break;
+  }
+  if (RADAR_SCAN_ID) {
+    const radarStage = RECENT_PRIORITY ? 'web_recent' : 'web_archive';
+    try { await callMonitor({mode:'radar_event',scan_id:RADAR_SCAN_ID,organization_id:org.id,radar_stage:radarStage},20000); }
+    catch(e) { console.log(`[${org.short_name}] Radar telemetriya yazılmadı: ${e?.message||e}`); }
   }
   // Yalnız 1-ci shard əvvəlki Web qeydlərini cari axtarılmamalı sözlərlə yenidən yoxlayır.
   // Beləliklə əvvəlki yumşaq filtrdən keçmiş uyğunsuz xəbərlər relevance_score=0 olur

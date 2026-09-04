@@ -53,9 +53,24 @@ function updateDateInputs(){
   dateFrom.classList.remove('hidden'); dateTo.classList.remove('hidden');
 }
 
-function hasReliablePublishedDate(m){const raw=m?.raw_payload||{};const sitemap=String(raw?.kind||'').includes('configured_site_sitemap');return Boolean(m?.published_at)&&!(sitemap&&raw?.published_from_page!==true);}
+function hasReliablePublishedDate(m){
+  if(!m?.published_at)return false;
+  const platform=String(m?.source_platform||'').toLowerCase();
+  if(platform.includes('youtube'))return true;
+  const raw=m?.raw_payload||{};
+  if(raw?.published_from_page===true||raw?.published_date_status==='verified')return true;
+  const kind=String(raw?.kind||'').toLowerCase(), provider=String(raw?.provider||'').toLowerCase();
+  const untrusted=kind.includes('bing_web')||kind.includes('configured_site_sitemap')||kind.includes('configured_site_link')||kind.includes('configured_web')||provider.includes('bing web')||provider.includes('configured web');
+  if(untrusted)return false;
+  return kind.includes('google_news')||kind.includes('bing_news')||kind.includes('rss')||provider.includes('google news')||provider.includes('bing news');
+}
 function publishedDate(m){return hasReliablePublishedDate(m)?m.published_at:null;}
-function publishedDateText(m){return hasReliablePublishedDate(m)?fmtDate(m.published_at):'Dəqiqləşdirilir';}
+function publishedDateText(m){
+  if(hasReliablePublishedDate(m))return fmtDate(m.published_at);
+  const raw=m?.raw_payload||{};
+  if(raw?.published_date_status==='not-found')return 'Mənbədə tarix göstərilməyib';
+  return 'Tarix yoxlanılır';
+}
 function sourceStateBadge(m){
   const state=String(m.source_status||'active');
   const comment=isComment(m);
@@ -174,7 +189,7 @@ async function openDetail(id){
   const media=displayMedia.map(x=>`<figure class="detail-media-wrap">${mediaImg(x.url)}<figcaption>${escapeHtml(String(x.media_type||'media')==='screenshot'?'Arxiv ekran görüntüsü':'Xəbərin qapaq şəkli')}</figcaption></figure>`).join('');
   const screenshotState=hasScreenshot?'':`<div class="card detail-state"><p class="muted">Arxiv ekran görüntüsü hələ hazırlanır. Yeni qəbul olunan Web materialları tam mətn və media ilə birlikdə tamamlanır; köhnə arxiv növbə ilə yenilənir.</p></div>`;
   const originalText=String(m.original_text||raw.text_original||raw.comment_text||raw.description||'').trim();
-  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Paylaşılma tarixi</strong><p>${publishedDateText(m)}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(m.author_name||raw.author_name||raw.channel_title||raw.author||raw.creator||raw.publisher||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><details class="detail-original" open><summary>Orijinal mətn ${originalText.length>1800?'— aç / bağla':''}</summary><div class="muted detail-text">${escapeHtml(originalText||'Mətn saxlanmayıb.')}</div></details>${raw.comment_id?`<div class="detail-grid comment-detail-grid"><div><strong>Şərh müəllifi</strong><p>${escapeHtml(m.author_name||raw.author_name||'—')}</p></div><div><strong>Şərhin tarixi</strong><p>${fmtDate(m.published_at)}</p></div><div><strong>Video</strong><p>${escapeHtml(raw.video_title||'—')}</p></div><div><strong>Şərhin bəyənmə sayı</strong><p>${escapeHtml(raw.like_count ?? '0')}</p></div><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Növ</strong><p>${raw.parent_id?'Cavab':'Əsas şərh'}</p></div></div>`:''}${screenshotState}${media?`<h3>Media / arxiv görüntüsü</h3><div class="detail-media-gallery">${media}</div>`:''}</div></div>`;
+  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Paylaşılma tarixi</strong><p>${publishedDateText(m)}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(m.author_name||raw.author_name||raw.channel_title||raw.author||raw.creator||raw.publisher||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><details class="detail-original" open><summary>Orijinal mətn ${originalText.length>1800?'— aç / bağla':''}</summary><div class="muted detail-text">${escapeHtml(originalText||'Mətn saxlanmayıb.')}</div></details>${raw.comment_id?`<div class="detail-grid comment-detail-grid"><div><strong>Şərh müəllifi</strong><p>${escapeHtml(m.author_name||raw.author_name||'—')}</p></div><div><strong>Şərhin tarixi</strong><p>${publishedDateText(m)}</p></div><div><strong>Video</strong><p>${escapeHtml(raw.video_title||'—')}</p></div><div><strong>Şərhin bəyənmə sayı</strong><p>${escapeHtml(raw.like_count ?? '0')}</p></div><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Növ</strong><p>${raw.parent_id?'Cavab':'Əsas şərh'}</p></div></div>`:''}${screenshotState}${media?`<h3>Media / arxiv görüntüsü</h3><div class="detail-media-gallery">${media}</div>`:''}</div></div>`;
   document.querySelector('#detail-close').onclick=()=>{window.speechSynthesis?.cancel?.();document.querySelector('#modal-root').innerHTML='';};
   document.querySelector('#detail-bg').onclick=e=>{if(e.target.id==='detail-bg')document.querySelector('#detail-close').click();};
   document.querySelector('#detail-speak').onclick=e=>speak(m,e.currentTarget);

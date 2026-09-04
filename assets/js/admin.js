@@ -15,7 +15,9 @@ let placeCatalog = [];
 let placeCatalogAvailable = false;
 let keywords = [];
 let globalKeywordRows = [];
+let allKeywordRows = [];
 let keywordStats = [];
+let keywordBankTotals = { records_total:0, total:0, positive:0, exclude:0, global_positive:0, global_exclude:0, organization_positive:0, organization_exclude:0 };
 const KEYWORD_PAGE_SIZE = 100;
 let sources = [];
 let sourceIndex = [];
@@ -59,22 +61,36 @@ route();
 hidePageLoader();
 
 async function loadKeywordStats() {
-  const target = { organization_id:null, name:'Qlobal' };
   const rows=[]; const pageSize=1000; let loadError=null;
-  for(let from=0;from<30000;from+=pageSize){
+  const totalResult=await supabase.from('keywords').select('id',{count:'exact',head:true});
+  const recordsTotal=totalResult.error?0:Number(totalResult.count||0);
+  for(let from=0;from<50000;from+=pageSize){
     const {data,error}=await supabase.from('keywords')
       .select('id,organization_id,value,kind,is_active,created_at')
-      .is('organization_id',null).eq('is_active',true)
+      .eq('is_active',true)
       .order('created_at',{ascending:true}).range(from,from+pageSize-1);
     if(error){loadError=error;break;}
     const batch=data||[]; rows.push(...batch);
     if(batch.length<pageSize)break;
   }
-  if(loadError){toast(loadError.message,'error');globalKeywordRows=[];keywordStats=[{...target,positive_count:0,excluded_count:0,error:loadError}];return;}
-  globalKeywordRows=dedupeKeywordRows(rows);
-  const positive=globalKeywordRows.filter(row=>String(row.kind||'phrase')!=='exclude').length;
-  const excluded=globalKeywordRows.filter(row=>String(row.kind||'phrase')==='exclude').length;
-  keywordStats=[{...target,positive_count:positive,excluded_count:excluded,error:null}];
+  if(loadError){
+    toast(loadError.message,'error'); allKeywordRows=[]; globalKeywordRows=[];
+    keywordStats=[{organization_id:'__all__',name:'Bütün aktiv söz bazası',positive_count:0,excluded_count:0,error:loadError}];
+    keywordBankTotals={records_total:recordsTotal,total:0,positive:0,exclude:0,global_positive:0,global_exclude:0,organization_positive:0,organization_exclude:0};
+    return;
+  }
+  allKeywordRows=rows.filter(row=>String(row?.value||'').trim());
+  globalKeywordRows=dedupeKeywordRows(allKeywordRows.filter(row=>!row.organization_id));
+  const positives=allKeywordRows.filter(row=>String(row.kind||'phrase')!=='exclude');
+  const excludes=allKeywordRows.filter(row=>String(row.kind||'phrase')==='exclude');
+  const globalPositive=positives.filter(row=>!row.organization_id).length;
+  const globalExclude=excludes.filter(row=>!row.organization_id).length;
+  keywordBankTotals={
+    records_total:recordsTotal||allKeywordRows.length, total:allKeywordRows.length, positive:positives.length, exclude:excludes.length,
+    global_positive:globalPositive, global_exclude:globalExclude,
+    organization_positive:positives.length-globalPositive, organization_exclude:excludes.length-globalExclude
+  };
+  keywordStats=[{organization_id:'__all__',name:'Bütün aktiv söz bazası',positive_count:positives.length,excluded_count:excludes.length,error:null}];
 }
 
 function isMissingPlaceCatalogError(error) {
@@ -143,7 +159,7 @@ async function refresh() {
     supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
-    supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100),
+    supabase.from('audit_logs').select('*').neq('action','radar_scan_event').order('created_at',{ascending:false}).limit(100),
     supabase.from('organization_aliases').select('*').order('alias')
   ]);
 
@@ -361,7 +377,7 @@ function keywordGroupSummary(stat, mode) {
 function renderKeywordSearchResults(target, rows, mode) {
   if (!target) return;
   if (!rows?.length) { target.innerHTML='<div class="empty compact">Uyğun söz tapılmadı.</div>'; target.classList.remove('hidden'); return; }
-  target.innerHTML=rows.map(x=>`<div class="keyword-search-hit"><span>${escapeHtml(x.value)}</span><small>${mode==='exclude'?'Axtarılmamalı':'Monitorinq açar sözü'}</small></div>`).join('');
+  target.innerHTML=rows.map(x=>{const org=x.organization_id?orgs.find(o=>o.id===x.organization_id):null;const scope=org?(org.short_name||org.name||'Təşkilat'):'Qlobal';return `<div class="keyword-search-hit"><span>${escapeHtml(x.value)}</span><small>${mode==='exclude'?'Axtarılmamalı':'Monitorinq açar sözü'} • ${escapeHtml(scope)}</small></div>`}).join('');
   target.classList.remove('hidden');
 }
 
@@ -376,7 +392,7 @@ function bindKeywordSearch(inputId, resultId, mode) {
     timer=setTimeout(()=>{
       if(current!==token)return;
       const needle=normalizeKeywordValue(value);
-      const rows=globalKeywordRows
+      const rows=allKeywordRows
         .filter(row=>keywordBucket(row)===mode&&normalizeKeywordValue(row.value).includes(needle))
         .sort((a,b)=>String(a.value||'').localeCompare(String(b.value||''),'az'))
         .slice(0,30);
@@ -390,12 +406,13 @@ function renderKeywords() {
   const excludeEl = document.querySelector('#exclude-list');
   if (!el) return;
 
+  const bankSummary=`<div class="keyword-bank-overview"><span><b>${keywordBankTotals.records_total}</b> baza cəmi</span><span><b>${keywordBankTotals.total}</b> aktiv qeyd</span><span><b>${keywordBankTotals.positive}</b> axtarılan</span><span><b>${keywordBankTotals.exclude}</b> axtarılmayan</span><small>Qlobal aktiv: ${keywordBankTotals.global_positive} / ${keywordBankTotals.global_exclude} • Təşkilatlara aid aktiv: ${keywordBankTotals.organization_positive} / ${keywordBankTotals.organization_exclude}</small></div>`;
   const positiveGroups = keywordStats.filter(x => x.positive_count > 0);
-  el.innerHTML = positiveGroups.map(x => keywordGroupSummary(x,'positive')).join('') || '<div class="empty compact">Açar söz yoxdur.</div>';
+  el.innerHTML = bankSummary + (positiveGroups.map(x => keywordGroupSummary(x,'positive')).join('') || '<div class="empty compact">Açar söz yoxdur.</div>');
 
   if (excludeEl) {
     const excludeGroups = keywordStats.filter(x => x.excluded_count > 0);
-    excludeEl.innerHTML = excludeGroups.map(x => keywordGroupSummary(x,'exclude')).join('') || '<div class="empty compact">Axtarılmamalı söz təyin edilməyib.</div>';
+    excludeEl.innerHTML = bankSummary + (excludeGroups.map(x => keywordGroupSummary(x,'exclude')).join('') || '<div class="empty compact">Axtarılmamalı söz təyin edilməyib.</div>');
   }
 
   document.querySelectorAll('[data-keyword-group]').forEach(group => {
@@ -416,21 +433,25 @@ async function loadKeywordGroup(group, offset=0, append=false) {
   if (!append) body.innerHTML = '<div class="empty compact">Yüklənir…</div>';
 
   const mode = group.dataset.mode || 'positive';
-  const allRows=globalKeywordRows
+  const allRows=allKeywordRows
     .filter(row=>keywordBucket(row)===mode)
     .sort((a,b)=>String(a.value||'').localeCompare(String(b.value||''),'az'));
   const rows=allRows.slice(offset,offset+KEYWORD_PAGE_SIZE);
   group.dataset.loading = '0';
 
-  const html = rows.map(x => mode === 'exclude' ? `
+  const html = rows.map(x => {
+    const org=x.organization_id?orgs.find(o=>o.id===x.organization_id):null;
+    const scope=org?(org.short_name||org.name||'Təşkilat'):'Qlobal';
+    return mode === 'exclude' ? `
     <div class="keyword-item exclusion-item">
-      <span>${escapeHtml(x.value)}</span>
+      <span>${escapeHtml(x.value)} <small class="keyword-scope">${escapeHtml(scope)}</small></span>
       <button class="icon-btn keyword-delete exclusion-delete" type="button" title="Filtri sil" aria-label="${escapeHtml(x.value)} filtrini sil" data-keyword-delete="${x.id}" data-keyword-delete-mode="exclude">×</button>
     </div>` : `
     <div class="keyword-item">
-      <span>${escapeHtml(x.value)}</span>
+      <span>${escapeHtml(x.value)} <small class="keyword-scope">${escapeHtml(scope)}</small></span>
       <span class="keyword-item-actions"><span class="badge info">${escapeHtml(x.kind || 'phrase')}</span><button class="icon-btn keyword-delete" type="button" title="Açar sözü sil" aria-label="${escapeHtml(x.value)} açar sözünü sil" data-keyword-delete="${x.id}" data-keyword-delete-mode="positive">×</button></span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   const total = allRows.length;
   const nextOffset = offset + rows.length;
@@ -1151,7 +1172,7 @@ async function renderBardaStatus() {
   const el = document.querySelector('#barda-status');
   const globalEl = document.querySelector('#global-status');
   if (!el && !globalEl) return;
-  const globalStats = keywordStats[0] || {positive_count:0,excluded_count:0};
+  const globalStats = {positive_count:keywordBankTotals.positive,excluded_count:keywordBankTotals.exclude};
   const activeOrgs=orgs.filter(o=>o.service_status==='active').length;
   const archivedOrgs=orgs.filter(o=>o.service_status==='archived').length;
   const activeSources=sourceIndex.filter(s=>s.is_active!==false).length;
@@ -1260,8 +1281,9 @@ function renderNetworkRadarIdle(){
 }
 function radarHash(value=''){let h=2166136261;for(const c of String(value)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
 const RADAR_BLIP_SLOTS=[
-  {left:34,top:26},{left:66,top:26},{left:74,top:42},{left:74,top:62},
-  {left:64,top:74},{left:36,top:74},{left:26,top:62},{left:26,top:42}
+  {left:34,top:22},{left:50,top:18},{left:66,top:22},{left:76,top:34},
+  {left:80,top:50},{left:74,top:66},{left:62,top:78},{left:42,top:80},
+  {left:26,top:70},{left:20,top:54},{left:22,top:38},{left:30,top:28}
 ];
 let networkRadarBlipSlots={};
 function resetRadarBlipSlots(){networkRadarBlipSlots={};}
@@ -1296,6 +1318,19 @@ function radarSetProgress(pct,jobsDone,jobsTotal,found,current='',source='',stat
   const state=document.querySelector('#radar-state');if(state)state.textContent=stateLabel||(networkRadarRunning?'Skan edilir':safePct===100?'Tamamlandı':'Hazır');
   renderRadarOrganizations(orgHits);
 }
+function radarStageLabel(stage=''){
+  return ({youtube:'YouTube video və şərhlər',web_recent:'Yeni dövr Web axtarışı',web_archive:'Tarixi arxiv Web axtarışı',ai:'AI ələk və söz bankı'})[String(stage)]||String(stage||'Monitorinq');
+}
+function renderRadarTelemetry(events=[]){
+  const box=document.querySelector('#radar-terminal'); if(!box)return;
+  const rows=Array.isArray(events)?events:[];
+  if(!rows.length)return;
+  box.innerHTML=rows.slice(0,24).map((event,i)=>{
+    const at=event.created_at?new Date(event.created_at):null;
+    const tm=at&&!Number.isNaN(at.getTime())?at.toLocaleTimeString('az-AZ',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'--:--:--';
+    return `<div class="radar-terminal-line real${i===0?' current':''}"><span class="terminal-time">${escapeHtml(tm)}</span><span class="terminal-prompt">›</span><div><strong>${escapeHtml(event.organization||'Təşkilat')}</strong><small>${escapeHtml(radarStageLabel(event.stage))} • ${escapeHtml(event.district||'Ümumi əhatə')}<br><em>+ ${escapeHtml(event.include_term||'söz bankı rotasiyası')}</em> <i>− ${escapeHtml(event.exclude_term||'filtr bankı')}</i>${event.place?` <u>⌖ ${escapeHtml(event.place)}</u>`:''}</small></div></div>`;
+  }).join('');
+}
 function radarTerminalSample(){
   const box=document.querySelector('#radar-terminal'); if(!box)return;
   const active=sortedOrganizations(orgs).filter(o=>['active','grace'].includes(o.service_status));
@@ -1303,19 +1338,19 @@ function radarTerminalSample(){
   const org=active[networkRadarTerminalIndex++%active.length];
   const district=String(org?.districts?.name||'Ümumi əhatə');
   const places=placeCatalog.filter(x=>x.is_active!==false&&x.district_id===org.district_id).map(x=>x.name).filter(Boolean);
-  const positives=globalKeywordRows.filter(x=>keywordBucket(x)==='positive');
-  const excludes=globalKeywordRows.filter(x=>keywordBucket(x)==='exclude');
+  const positives=allKeywordRows.filter(x=>keywordBucket(x)==='positive');
+  const excludes=allKeywordRows.filter(x=>keywordBucket(x)==='exclude');
   const salt=(networkRadarTerminalIndex*7)%Math.max(1,positives.length);
   const pos=positives.length?positives[salt%positives.length]?.value:'Açar söz bankı yüklənir';
   const neg=excludes.length?excludes[(salt*3)%excludes.length]?.value:'Filtr bankı yüklənir';
   const place=places.length?places[(salt*5)%places.length]:district;
   const line=document.createElement('div'); line.className='radar-terminal-line';
-  line.innerHTML=`<span class="terminal-prompt">›</span><div><strong>${escapeHtml(org.short_name||org.name)}</strong><small>${escapeHtml(district)} • məntəqə: ${escapeHtml(place||'—')}<br><em>+ ${escapeHtml(pos||'—')}</em> <i>− ${escapeHtml(neg||'—')}</i></small></div>`;
+  line.innerHTML=`<span class="terminal-prompt">›</span><div><strong>${escapeHtml(org.name||org.short_name)}</strong><small>${escapeHtml(district)} • məntəqə: ${escapeHtml(place||'—')}<br><em>+ ${escapeHtml(pos||'—')}</em> <i>− ${escapeHtml(neg||'—')}</i></small></div>`;
   box.prepend(line); while(box.children.length>18)box.lastElementChild?.remove();
 }
 function startRadarTerminal(){
   stopRadarTerminal(); networkRadarTerminalIndex=0; const box=document.querySelector('#radar-terminal'); if(box)box.innerHTML='';
-  radarTerminalSample(); networkRadarTerminalTimer=setInterval(radarTerminalSample,700);
+  radarTerminalSample(); networkRadarTerminalTimer=setInterval(radarTerminalSample,1100);
 }
 function stopRadarTerminal(){if(networkRadarTerminalTimer){clearInterval(networkRadarTerminalTimer);networkRadarTerminalTimer=null;}}
 
@@ -1361,7 +1396,7 @@ async function pollNetworkRadarStatus(){
   const stateLabel=finished?(conclusion==='success'?'Tamamlandı':conclusion==='cancelled'?'Dayandırıldı':'Yoxlama bitdi'):status==='queued'||status==='waiting'?'Növbədə':'Skan edilir';
   const current=finished?(conclusion==='success'?'Tam internet axtarışı tamamlandı':conclusion==='cancelled'?'Skan dayandırıldı':'Tarama tamamlandı, bəzi bölmələr təkrar yoxlanmalıdır'):(data.current_job||'Serverdə növbə gözlənilir');
   const source=`${radarPlatformText(data.platforms||{})}${Number(data.organizations_with_new||0)?` • Nəticə tapılan təşkilat: ${Number(data.organizations_with_new||0)}`:''}`;
-  radarSetProgress(data.progress_percent||0,data.jobs_completed||0,data.jobs_total||0,data.new_mentions||0,current,source,stateLabel,data.organization_hits||[]);radarFeedStatus(data);
+  radarSetProgress(data.progress_percent||0,data.jobs_completed||0,data.jobs_total||0,data.new_mentions||0,current,source,stateLabel,data.organization_hits||[]);radarFeedStatus(data);if(Array.isArray(data.telemetry)&&data.telemetry.length){stopRadarTerminal();renderRadarTelemetry(data.telemetry);}
   radarStorageWrite({scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString(),github_run_id:networkRadarRunId,status,conclusion,html_url:data.html_url||null,max_found:networkRadarMaxFound,progress_percent:Number(data.progress_percent||0),jobs_completed:Number(data.jobs_completed||0),jobs_total:Number(data.jobs_total||0),current_job:readableRadarStage(current),source_text:source,organization_hits:data.organization_hits||[],duration_ms:Date.now()-networkRadarStartedAt,finished_at:finished?Date.now():null});
   if(finished){
     networkRadarRunning=false;radarSetVisualRunning(false);stopRadarTimers();const elapsed=document.querySelector('#radar-elapsed');if(elapsed)elapsed.textContent=radarTime(Date.now()-networkRadarStartedAt);await renderBardaStatus();
