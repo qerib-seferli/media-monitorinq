@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 58
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 4
       matrix:
         org_shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
     steps:
@@ -70,11 +70,16 @@ jobs:
       - name: Video və şərh axtarışı
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          RADAR_SCAN_ID: ${{ inputs.scan_id }}
         run: |
           set -u
           [ -f orgs.txt ] || exit 0
           while IFS= read -r ORG_ID; do
             [ -z "$ORG_ID" ] && continue
+            curl --silent --show-error --connect-timeout 10 --max-time 25 \
+              -X POST -H "Content-Type: application/json" -H "x-monitor-secret: $MONITOR_SECRET" \
+              -d "{\"mode\":\"radar_event\",\"scan_id\":\"${RADAR_SCAN_ID}\",\"organization_id\":\"${ORG_ID}\",\"radar_stage\":\"youtube\"}" \
+              "$MONITOR_URL" >/dev/null || true
             curl --fail-with-body --silent --show-error \
               --connect-timeout 15 --max-time 105 --retry 1 --retry-delay 4 --retry-all-errors \
               -X POST -H "Content-Type: application/json" -H "x-monitor-secret: $MONITOR_SECRET" \
@@ -86,6 +91,7 @@ jobs:
       - name: Yeni dövr üzrə internet axtarışı
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          RADAR_SCAN_ID: ${{ inputs.scan_id }}
           NEWS_FULL_RADAR: '1'
           NEWS_QUERY_PASS_COUNT: '1'
           NEWS_QUERY_PASS: '0'
@@ -118,6 +124,7 @@ jobs:
         if: always()
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          RADAR_SCAN_ID: ${{ inputs.scan_id }}
           NEWS_FULL_RADAR: '1'
           NEWS_QUERY_PASS_COUNT: '1'
           NEWS_QUERY_PASS: '0'
@@ -151,15 +158,20 @@ jobs:
         if: always()
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          RADAR_SCAN_ID: ${{ inputs.scan_id }}
         run: |
           set -u
           [ -f orgs.txt ] || exit 0
           while IFS= read -r ORG_ID; do
             [ -z "$ORG_ID" ] && continue
+            curl --silent --show-error --connect-timeout 10 --max-time 25 \
+              -X POST -H "Content-Type: application/json" -H "x-monitor-secret: $MONITOR_SECRET" \
+              -d "{\"mode\":\"radar_event\",\"scan_id\":\"${RADAR_SCAN_ID}\",\"organization_id\":\"${ORG_ID}\",\"radar_stage\":\"ai\"}" \
+              "$MONITOR_URL" >/dev/null || true
             curl --fail-with-body --silent --show-error \
               --connect-timeout 15 --max-time 90 --retry 1 --retry-delay 4 --retry-all-errors \
               -X POST -H "Content-Type: application/json" -H "x-monitor-secret: $MONITOR_SECRET" \
-              -d "{\"mode\":\"review_auto_sieve\",\"organization_id\":\"${ORG_ID}\",\"refilter_limit\":120}" \
+              -d "{\"mode\":\"review_auto_sieve\",\"organization_id\":\"${ORG_ID}\",\"refilter_limit\":180}" \
               "$MONITOR_URL" || true
             sleep 2
           done < orgs.txt
