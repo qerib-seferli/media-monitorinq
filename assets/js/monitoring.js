@@ -67,6 +67,20 @@ function hasReliablePublishedDate(m){
   return true;
 }
 function publishedDate(m){return hasReliablePublishedDate(m)?m.published_at:null;}
+function publicationSortValue(m){
+  const reliable=publishedDate(m);
+  return reliable ? new Date(reliable).getTime()||0 : 0;
+}
+function detectedSortValue(m){return new Date(m?.detected_at||0).getTime()||0;}
+function sortRowsByPublication(list=[]){
+  return [...list].sort((a,b)=>{
+    const ap=publicationSortValue(a),bp=publicationSortValue(b);
+    if(ap!==bp)return bp-ap;
+    const ar=hasReliablePublishedDate(a),br=hasReliablePublishedDate(b);
+    if(ar!==br)return br-ar;
+    return detectedSortValue(b)-detectedSortValue(a);
+  });
+}
 function publishedDateText(m){
   if(hasReliablePublishedDate(m))return fmtDate(m.published_at);
   const raw=m?.raw_payload||{};
@@ -116,9 +130,11 @@ async function load({reset=false}={}){
     // (300 sətir) yüklənə bilirdi. İndi növbəti 50 yalnız istifadəçi aşağı sürüşəndə gəlir.
     const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
     let q=supabase.from('mentions').select('id,title,summary,original_text,source_platform,source_url,author_name,priority_score,relevance_score,sentiment,published_at,detected_at,source_status,raw_payload,organization_id,district_id,village_id,organizations(short_name),districts(name),villages(name),mention_media(url,media_type,captured_at)')
-      .gt('relevance_score',0)
-      .or(`and(published_at.gte.${range.from},published_at.lte.${range.to}),and(published_at.is.null,detected_at.gte.${range.from},detected_at.lte.${range.to})`)
-      .order('published_at',{ascending:false,nullsFirst:false})
+      .gt('relevance_score',0);
+    // Tarix filtri yalnız real paylaşım tarixinə tətbiq edilir. detected_at sistemin
+    // aşkarlama vaxtıdır və köhnə xəbəri "Bu ay" kimi göstərməməlidir.
+    if(period.value!=='all') q=q.gte('published_at',range.from).lte('published_at',range.to);
+    q=q.order('published_at',{ascending:false,nullsFirst:false})
       .order('detected_at',{ascending:false}).range(from,to);
     q=applyOrganizationScope(q,ctx.profile,organizationFilter?.value||'');
     if(platform.value) q=q.ilike('source_platform',platform.value);
@@ -126,8 +142,11 @@ async function load({reset=false}={}){
     if(commentOnly) q=q.ilike('raw_payload->>kind','%comment%');
     const {data,error}=await q; if(error) throw error; if(token!==requestToken)return;
     const rawBatch=data||[];
-    const batch=filterExcludedMentions(rawBatch,globalExcludes);
-    rows=mergeUnique(rows,batch);
+    // Müəyyən tarix aralığında yalnız təsdiqlənmiş paylaşım tarixi olan materiallar
+    // görünür. "Bütün tarix" rejimində tarixsiz köhnə arxiv qeydləri də saxlanılır.
+    const dateSafeBatch=period.value==='all' ? rawBatch : rawBatch.filter(hasReliablePublishedDate);
+    const batch=filterExcludedMentions(dateSafeBatch,globalExcludes);
+    rows=sortRowsByPublication(mergeUnique(rows,batch));
     done=rawBatch.length<PAGE_SIZE;
     page++;
     render(true);

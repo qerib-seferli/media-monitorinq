@@ -1733,3 +1733,7 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 /* 2026-09-05 — Açar söz siyahılarında təkrarlanan say kartı əvəzinə sadə aç/idarə et CTA */
 .keyword-list-open-mark{font-size:8px;font-weight:800;color:#8fc9ee;white-space:nowrap}
 .keyword-group[open] .keyword-list-open-mark{color:#5ee3b2}
+
+/* v34 — radar tamamlandıqda yalnız real nəticə markerləri qalır */
+.network-radar-card:not(.is-scanning) .radar-search-blip{display:none!important;animation:none!important}
+.network-radar-card.is-scanning .radar-search-blip{display:block}
