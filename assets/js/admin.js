@@ -60,15 +60,18 @@ hidePageLoader();
 
 async function loadKeywordStats() {
   const target = { organization_id:null, name:'Qlobal' };
-  const {data,error}=await supabase
-    .from('keywords')
-    .select('id,organization_id,value,kind,is_active,created_at')
-    .is('organization_id',null)
-    .eq('is_active',true)
-    .order('created_at',{ascending:true})
-    .limit(5000);
-  if(error){toast(error.message,'error');globalKeywordRows=[];keywordStats=[{...target,positive_count:0,excluded_count:0,error}];return;}
-  globalKeywordRows=dedupeKeywordRows(data||[]);
+  const rows=[]; const pageSize=1000; let loadError=null;
+  for(let from=0;from<30000;from+=pageSize){
+    const {data,error}=await supabase.from('keywords')
+      .select('id,organization_id,value,kind,is_active,created_at')
+      .is('organization_id',null).eq('is_active',true)
+      .order('created_at',{ascending:true}).range(from,from+pageSize-1);
+    if(error){loadError=error;break;}
+    const batch=data||[]; rows.push(...batch);
+    if(batch.length<pageSize)break;
+  }
+  if(loadError){toast(loadError.message,'error');globalKeywordRows=[];keywordStats=[{...target,positive_count:0,excluded_count:0,error:loadError}];return;}
+  globalKeywordRows=dedupeKeywordRows(rows);
   const positive=globalKeywordRows.filter(row=>String(row.kind||'phrase')!=='exclude').length;
   const excluded=globalKeywordRows.filter(row=>String(row.kind||'phrase')==='exclude').length;
   keywordStats=[{...target,positive_count:positive,excluded_count:excluded,error:null}];
@@ -1205,6 +1208,8 @@ let networkRadarLastFeedSignature='';
 let networkRadarMaxFound=0;
 let networkRadarTransientErrors=0;
 let networkRadarLastOrgCounts={};
+let networkRadarTerminalTimer=null;
+let networkRadarTerminalIndex=0;
 let bardaStatusRenderSeq=0;
 
 function radarTime(ms){
@@ -1291,6 +1296,29 @@ function radarSetProgress(pct,jobsDone,jobsTotal,found,current='',source='',stat
   const state=document.querySelector('#radar-state');if(state)state.textContent=stateLabel||(networkRadarRunning?'Skan edilir':safePct===100?'Tamamlandı':'Hazır');
   renderRadarOrganizations(orgHits);
 }
+function radarTerminalSample(){
+  const box=document.querySelector('#radar-terminal'); if(!box)return;
+  const active=sortedOrganizations(orgs).filter(o=>['active','grace'].includes(o.service_status));
+  if(!active.length){box.innerHTML='<div class="radar-terminal-line muted">Aktiv təşkilat yoxdur.</div>';return;}
+  const org=active[networkRadarTerminalIndex++%active.length];
+  const district=String(org?.districts?.name||'Ümumi əhatə');
+  const places=placeCatalog.filter(x=>x.is_active!==false&&x.district_id===org.district_id).map(x=>x.name).filter(Boolean);
+  const positives=globalKeywordRows.filter(x=>keywordBucket(x)==='positive');
+  const excludes=globalKeywordRows.filter(x=>keywordBucket(x)==='exclude');
+  const salt=(networkRadarTerminalIndex*7)%Math.max(1,positives.length);
+  const pos=positives.length?positives[salt%positives.length]?.value:'Açar söz bankı yüklənir';
+  const neg=excludes.length?excludes[(salt*3)%excludes.length]?.value:'Filtr bankı yüklənir';
+  const place=places.length?places[(salt*5)%places.length]:district;
+  const line=document.createElement('div'); line.className='radar-terminal-line';
+  line.innerHTML=`<span class="terminal-prompt">›</span><div><strong>${escapeHtml(org.short_name||org.name)}</strong><small>${escapeHtml(district)} • məntəqə: ${escapeHtml(place||'—')}<br><em>+ ${escapeHtml(pos||'—')}</em> <i>− ${escapeHtml(neg||'—')}</i></small></div>`;
+  box.prepend(line); while(box.children.length>18)box.lastElementChild?.remove();
+}
+function startRadarTerminal(){
+  stopRadarTerminal(); networkRadarTerminalIndex=0; const box=document.querySelector('#radar-terminal'); if(box)box.innerHTML='';
+  radarTerminalSample(); networkRadarTerminalTimer=setInterval(radarTerminalSample,700);
+}
+function stopRadarTerminal(){if(networkRadarTerminalTimer){clearInterval(networkRadarTerminalTimer);networkRadarTerminalTimer=null;}}
+
 function radarPlatformText(platforms={}){
   const label=name=>({web:'Veb',youtube:'YouTube','google news':'Google Xəbərlər',facebook:'Facebook',instagram:'Instagram',tiktok:'TikTok',linkedin:'LinkedIn',x:'X'}[String(name).toLowerCase()]||String(name));
   const entries=Object.entries(platforms||{}).filter(([,count])=>Number(count)>0);
@@ -1315,7 +1343,7 @@ function radarSetVisualRunning(running){
   const card=document.querySelector('#network-radar-card'),start=document.querySelector('#network-radar-start'),visual=document.querySelector('#radar-visual');
   card?.classList.toggle('is-scanning',running);visual?.classList.toggle('is-scanning',running);if(start)start.disabled=running;
 }
-function stopRadarTimers(){if(networkRadarTimer){clearInterval(networkRadarTimer);networkRadarTimer=null}if(networkRadarPollTimer){clearTimeout(networkRadarPollTimer);networkRadarPollTimer=null}}
+function stopRadarTimers(){if(networkRadarTimer){clearInterval(networkRadarTimer);networkRadarTimer=null}if(networkRadarPollTimer){clearTimeout(networkRadarPollTimer);networkRadarPollTimer=null}stopRadarTerminal()}
 async function pollNetworkRadarStatus(){
   if(!networkRadarScanId)return;
   const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_status',scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString()});
@@ -1324,7 +1352,7 @@ async function pollNetworkRadarStatus(){
     const msg=String(data?.error||error?.message||'');
     if(/RADAR_GITHUB_TOKEN/i.test(msg)){networkRadarRunning=false;radarSetVisualRunning(false);stopRadarTimers();toast('Radar üçün server icazəsi tamamlanmayıb.','error');return;}
     // Müvəqqəti 403/CORS/520 sorğusu serverdə gedən taramanı dayandırmır.
-    const delay=Math.min(60000,20000+networkRadarTransientErrors*5000);
+    const delay=Math.min(90000,35000+networkRadarTransientErrors*10000);
     networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,delay);return;
   }
   networkRadarTransientErrors=0;
@@ -1342,12 +1370,13 @@ async function pollNetworkRadarStatus(){
     else toast(`Tam tarama bitdi. ${Number(data.jobs_failed||0)} bölmədə texniki xəbərdarlıq qeydə alındı.`,'info');
     return;
   }
-  networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,20000);
+  networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,45000);
 }
 function startRadarPolling(resume=false){
   if(!networkRadarScanId)return;networkRadarRunning=true;radarSetVisualRunning(true);
   if(!resume){const feed=document.querySelector('#radar-feed');if(feed)feed.innerHTML='';networkRadarLastFeedSignature='';networkRadarMaxFound=0;networkRadarLastOrgCounts={};resetRadarBlipSlots();renderRadarOrganizations([])}
   if(!networkRadarTimer)networkRadarTimer=setInterval(()=>{const e=document.querySelector('#radar-elapsed');if(e)e.textContent=radarTime(Date.now()-(networkRadarStartedAt||Date.now()))},1000);
+  startRadarTerminal();
   pollNetworkRadarStatus();
 }
 async function runNetworkRadarScan(){

@@ -1667,3 +1667,16 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 @media(max-width:900px){.location-add-form{grid-template-columns:1fr 1fr!important}.location-add-form .form-actions{grid-column:1/-1}.location-add-form .form-actions .btn{width:100%}}
 @media(max-width:620px){.place-catalog-stats{grid-template-columns:1fr 1fr}.place-catalog-tools{grid-template-columns:1fr}.location-add-form{grid-template-columns:1fr 1fr!important}.location-values-grid{grid-template-columns:1fr 1fr!important}}
 @media(max-width:390px){.location-values-grid{grid-template-columns:1fr!important}.place-catalog-stats span{font-size:8px}.place-catalog-stats b{font-size:13px}}
+
+
+/* 2026-09-04 — Radar canlı telemetriya və iki sütunlu nəticə axını */
+.radar-dual-feed{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;min-height:190px}
+.radar-feed-panel,.radar-terminal-panel{min-width:0;border:1px solid rgba(112,183,229,.12);border-radius:14px;background:rgba(5,18,32,.38);overflow:hidden}
+.radar-feed-title{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;padding:9px 11px;border-bottom:1px solid rgba(112,183,229,.1);background:rgba(10,31,50,.74)}
+.radar-feed-title span{font-size:11px;font-weight:800;color:#dff7ff}.radar-feed-title small{font-size:8px;color:#79a8c6;text-align:right}
+.radar-dual-feed .radar-feed{border:0;border-radius:0;min-height:170px;max-height:220px;background:transparent}
+.radar-terminal{height:220px;overflow:hidden;padding:7px 9px;font-family:Consolas,"SFMono-Regular",monospace;background:radial-gradient(circle at 100% 0,rgba(49,226,167,.07),transparent 42%),rgba(2,15,26,.72)}
+.radar-terminal-line{display:grid;grid-template-columns:13px 1fr;gap:6px;padding:5px 2px;border-bottom:1px dashed rgba(76,224,171,.08);animation:terminalFlow .24s ease-out}
+.radar-terminal-line .terminal-prompt{color:#43e3a4;font-weight:900}.radar-terminal-line strong{display:block;color:#dffdf2;font-size:10px}.radar-terminal-line small{display:block;margin-top:2px;color:#77bfa7;font-size:8px;line-height:1.35;white-space:normal}.radar-terminal-line em{color:#62e5a7;font-style:normal}.radar-terminal-line i{color:#ffbe72;font-style:normal}
+@keyframes terminalFlow{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+@media(max-width:880px){.radar-dual-feed{grid-template-columns:1fr}.radar-terminal{height:170px}.radar-dual-feed .radar-feed{max-height:170px}}

@@ -13,7 +13,7 @@ async function fetchDistrictPlaceNames(admin:any, districtId:string|null|undefin
     .eq('district_id', districtId)
     .eq('is_active', true)
     .order('name')
-    .limit(5000);
+    .limit(1800);
   if (!official?.error) {
     const names:string[] = (Array.isArray(official?.data) ? official.data : [])
       .map((x:any)=>String(x?.name || '').trim())
@@ -449,7 +449,7 @@ Deno.serve(async (req) => {
 
         let contentRelevant=true;
         if (options.news_text || options.news_title) {
-          const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
+          const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 2400);
           const positiveKeywords = installKeywordContext(org, activeKeywordRows);
           const villageNames:string[] = org.district_id
             ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
@@ -568,7 +568,7 @@ Deno.serve(async (req) => {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_refilter',error:'Təşkilat tapılmadı'},200);
 
-      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
+      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 2400);
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
 
@@ -583,7 +583,7 @@ Deno.serve(async (req) => {
     if (options.mode === 'existing_refilter') {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'existing_refilter',error:'Təşkilat tapılmadı'},200);
-      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 1200);
+      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 3200);
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
       const villageNames:string[] = org.district_id
@@ -596,8 +596,9 @@ Deno.serve(async (req) => {
     if (options.mode === 'review_auto_sieve') {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'review_auto_sieve',error:'Təşkilat tapılmadı'},200);
-      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 1200);
+      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 3200);
       const keywords = installKeywordContext(org, activeKeywordRows);
+      org.__ai_learning_budget=1;
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
       const villageNames:string[] = org.district_id
         ? await fetchDistrictPlaceNames(admin, String(org.district_id))
@@ -610,7 +611,7 @@ Deno.serve(async (req) => {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_ingest',error:'Təşkilat tapılmadı'},200);
 
-      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 900);
+      const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 2400);
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
 
@@ -972,7 +973,7 @@ async function radarMentionStats(admin:any,startedAt:string) {
     const platform=String(row?.source_platform||'Digər');
     platforms[platform]=(platforms[platform]||0)+1;
   }
-  const organization_hits=[...orgHits.values()].sort((a,b)=>b.count-a.count||a.short_name.localeCompare(b.short_name,'az')).slice(0,12);
+  const organization_hits=[...orgHits.values()].sort((a,b)=>b.count-a.count||a.short_name.localeCompare(b.short_name,'az')).slice(0,24);
   return {new_mentions:rows.length,organizations_with_new:orgs.size,platforms,organization_hits,stats_truncated:rows.length>=5000};
 }
 
@@ -1186,47 +1187,54 @@ async function fetchOrganizationAliases(admin:any, organizationId:string, maxRow
 }
 
 async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRows=12000):Promise<any[]> {
-  // Global bank + varsa təşkilata xüsusi istisnalar. Yeni modeldə əsas bank organization_id=NULL-dır.
   const rows:any[]=[]; const seen=new Set<string>();
   const push=(row:any)=>{
     const value=String(row?.value||'').trim(); const key=`${String(row?.kind||'phrase').toLowerCase()}|${normalizeForMatch(value)}`;
     if(!value||seen.has(key)) return; seen.add(key); rows.push(row);
   };
-  const globalResult:any=await admin.from('keywords')
-    .select('id,organization_id,value,kind,is_active,created_at')
-    .is('organization_id',null).eq('is_active',true).order('created_at',{ascending:true}).limit(Math.min(maxRows,5000));
-  if(globalResult?.error) throw globalResult.error;
-  for(const row of (globalResult?.data||[])) push(row);
-  if(organizationId){
-    const orgResult:any=await admin.from('keywords')
-      .select('id,organization_id,value,kind,is_active,created_at')
-      .eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:true}).limit(Math.min(maxRows,5000));
-    if(orgResult?.error) throw orgResult.error;
-    for(const row of (orgResult?.data||[])) push(row);
+  const fetchPaged=async(queryFactory:any, limit:number)=>{
+    const pageSize=1000;
+    for(let from=0;from<limit;from+=pageSize){
+      const result:any=await queryFactory().range(from,Math.min(limit-1,from+pageSize-1));
+      if(result?.error) throw result.error;
+      const batch=Array.isArray(result?.data)?result.data:[];
+      for(const row of batch) push(row);
+      if(batch.length<pageSize)break;
+    }
+  };
+  await fetchPaged(()=>admin.from('keywords').select('id,organization_id,value,kind,is_active,created_at').is('organization_id',null).eq('is_active',true).order('created_at',{ascending:true}),maxRows);
+  if(organizationId && rows.length<maxRows){
+    await fetchPaged(()=>admin.from('keywords').select('id,organization_id,value,kind,is_active,created_at').eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:true}),Math.max(0,maxRows-rows.length));
   }
   return rows.slice(0,maxRows);
 }
 
-async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=900):Promise<any[]> {
+async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=3200):Promise<any[]> {
   const organizationId=String(org?.id || '');
-  const maxPos=Math.max(120,Math.min(1200,Number(maxPositive||900)));
-  const [globalResult,orgResult]=await Promise.all([
-    admin.from('keywords').select('organization_id,value,kind,is_active,created_at').is('organization_id',null).eq('is_active',true).order('created_at',{ascending:false}).limit(maxPos+700),
-    organizationId ? admin.from('keywords').select('organization_id,value,kind,is_active,created_at').eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:false}).limit(maxPos) : Promise.resolve({data:[],error:null})
-  ]);
-  if(globalResult?.error) throw globalResult.error;
-  if(orgResult?.error) throw orgResult.error;
+  const maxPos=Math.max(300,Math.min(6000,Number(maxPositive||3200)));
+  const pageRows=async(base:any, limit:number)=>{
+    const out:any[]=[]; const pageSize=1000;
+    for(let from=0;from<limit;from+=pageSize){
+      const result:any=await base().range(from,Math.min(limit-1,from+pageSize-1));
+      if(result?.error)throw result.error;
+      const batch=Array.isArray(result?.data)?result.data:[]; out.push(...batch);
+      if(batch.length<pageSize)break;
+    }
+    return out;
+  };
+  const globalRows=await pageRows(()=>admin.from('keywords').select('organization_id,value,kind,is_active,created_at').is('organization_id',null).eq('is_active',true).order('created_at',{ascending:false}),Math.min(12000,maxPos+5000));
+  const orgRows=organizationId?await pageRows(()=>admin.from('keywords').select('organization_id,value,kind,is_active,created_at').eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:false}),Math.min(6000,maxPos+1500)):[];
   const seen=new Set<string>(); const rows:any[]=[];
   const push=(row:any)=>{
     const value=String(row?.value||'').trim(); const nk=normalizeForMatch(value); const kind=String(row?.kind||'phrase').toLowerCase();
     const key=`${kind}|${nk}`; if(!value||!nk||seen.has(key)) return; seen.add(key);
     rows.push({organization_id:row?.organization_id||null,value,kind,is_active:true,created_at:row?.created_at||null});
   };
-  // Exclude-lar əvvəl, sonra pozitiv bank. Beləliklə limit altında filtr qaydaları itməz.
-  for(const row of (globalResult?.data||[]).filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
-  for(const row of (orgResult?.data||[]).filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
-  for(const row of (globalResult?.data||[]).filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
-  for(const row of (orgResult?.data||[]).filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
+  // Filtrlər təhlükəsizlik üçün tam prioritetlidir; sonra ən yeni pozitivlər götürülür.
+  for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
+  for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
+  for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
+  for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
   return rows;
 }
 
@@ -2979,6 +2987,26 @@ function adaptiveLearningCandidate(org:any,item:Item,match:any,kind:'phrase'|'ex
   return '';
 }
 
+async function geminiKeywordLearningCandidate(org:any,item:Item,match:any):Promise<{kind:'phrase'|'exclude';value:string}|null>{
+  const budget=Number(org?.__ai_learning_budget||0); if(budget<=0)return null;
+  const apiKey=Deno.env.get('GEMINI_API_KEY'); if(!apiKey)return null;
+  org.__ai_learning_budget=budget-1;
+  const model=Deno.env.get('GEMINI_MODEL')||'gemini-2.5-flash-lite';
+  const accepted=Boolean(match?.accepted);
+  const prompt=`Media monitorinq söz bankı üçün yalnız bir qısa Azərbaycan dilində fraza seç. Təşkilat: ${org?.name||org?.short_name||''}. Material aidiyyəti: ${accepted?'uyğundur':'uyğun deyil'}. ${accepted?'Mövzunu gələcək axtarışlarda tapmağa kömək edən 2-5 sözlük dəqiq fraza seç.':'Bu tip əlaqəsiz nəticəni təhlükəsiz bloklayan 1-4 sözlük konkret fraza seç.'} Təşkilat/rayon/kənd adını təkbaşına qaytarma. JSON qaytar: {"value":"..."}. Başlıq: ${String(item?.title||'').slice(0,500)}\nMətn: ${String(item?.text||'').slice(0,1800)}`;
+  try{
+    const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),5000);
+    const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,{method:'POST',headers:{'content-type':'application/json'},signal:controller.signal,body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.05,responseMimeType:'application/json'}})});
+    clearTimeout(timeout); if(!res.ok)return null;
+    const data=await res.json(); const text=data?.candidates?.[0]?.content?.parts?.[0]?.text; if(!text)return null;
+    const parsed=JSON.parse(text); const value=String(parsed?.value||'').replace(/\s+/g,' ').trim();
+    const nk=normalizeForMatch(value); if(!nk||nk.length<4||nk.length>90||value.split(/\s+/).length>5)return null;
+    const protectedNames=[org?.short_name,org?.name,org?.districts?.name].map((x:any)=>normalizeForMatch(String(x||''))).filter(Boolean);
+    if(protectedNames.some((x:string)=>x===nk))return null;
+    return {kind:accepted?'phrase':'exclude',value};
+  }catch{return null;}
+}
+
 async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any, allowAdaptive=false) {
   const normalized=String(match?.normalized||normalizeForMatch(`${item?.title||''} ${item?.text||''}`));
   if(!normalized) return null;
@@ -2993,6 +3021,11 @@ async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any, al
   if(allowAdaptive){
     if(match?.accepted && (!positiveCandidate || globalPositive.has(normalizeForMatch(positiveCandidate)))) positiveCandidate=adaptiveLearningCandidate(org,item,match,'phrase')||positiveCandidate;
     if(!match?.accepted && (!excludeCandidate || excludes.has(normalizeForMatch(excludeCandidate)))) excludeCandidate=adaptiveLearningCandidate(org,item,match,'exclude')||excludeCandidate;
+    if((match?.accepted&&!positiveCandidate)||(!match?.accepted&&!excludeCandidate)){
+      const aiCandidate=await geminiKeywordLearningCandidate(org,item,match);
+      if(aiCandidate?.kind==='phrase')positiveCandidate=aiCandidate.value;
+      if(aiCandidate?.kind==='exclude')excludeCandidate=aiCandidate.value;
+    }
   }
   const value=positiveCandidate||excludeCandidate;
   if(!value) return null;
