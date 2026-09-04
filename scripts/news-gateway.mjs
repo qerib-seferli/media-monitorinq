@@ -592,7 +592,10 @@ async function enrichPage(item) {
     const structuredBody=cleanArticleText(articleLd?.articleBody || '');
     const paragraphBody=paragraphText(html);
     const anchoredBody=titleAnchoredArticleText(html, stripHtml(title)||item.title||'');
-    const body = structuredBody || (anchoredBody.length>=180?anchoredBody:'') || paragraphBody || stripHtml(desc) || item.text || '';
+    // Bəzi saytların JSON-LD articleBody sahəsi yalnız 1-2 cümlə olur, amma səhifədə
+    // tam məqalə var. Ən uzun etibarlı mətn namizədini götürürük.
+    const bodyCandidates=[structuredBody,anchoredBody,paragraphBody].filter(x=>String(x||'').length>=80).sort((a,b)=>b.length-a.length);
+    const body = bodyCandidates[0] || stripHtml(desc) || item.text || '';
     let structuredImage = '';
     if(typeof articleLd?.image==='string') structuredImage=articleLd.image;
     else if(Array.isArray(articleLd?.image)) structuredImage=typeof articleLd.image[0]==='string'?articleLd.image[0]:(articleLd.image[0]?.url||'');
@@ -1451,7 +1454,7 @@ for (const org of plan.organizations) {
           mode:'news_enrich', organization_id:org.id, source_url:target.url,
           title:enriched.title||target.title||'', text:enriched.text||target.text||'',
           image_url:enriched.image||'', image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[], published_at:reliablePublishedAt(enriched,target),
-          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url
+          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true
         });
         if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);
       } catch(e) { console.log(`[${org.short_name}] Tam mətn yeniləmə xətası: ${e?.message||e}`); }
@@ -1476,7 +1479,7 @@ for (const org of plan.organizations) {
   // "Mətn saxlanmayıb" və discovery vaxtının səhvən paylaşım tarixi kimi qalmasını düzəldir.
   if(!gatewayBudgetLow()) {
     try {
-      const backlog=await callMonitor({mode:'news_enrich_backfill_targets',organization_id:org.id,screenshot_limit:20},45000);
+      const backlog=await callMonitor({mode:'news_enrich_backfill_targets',organization_id:org.id,screenshot_limit:30},45000);
       const refreshTargets=Array.isArray(backlog?.targets)?backlog.targets:[];
       let refreshedCount=0;
       for(const target of refreshTargets){
@@ -1488,7 +1491,7 @@ for (const org of plan.organizations) {
             title:enriched.title||target.title||'',text:enriched.text||target.text||'',
             image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],
             published_at:reliablePublishedAt(enriched,target),author:enriched.author||null,
-            canonical_url:enriched.raw?.canonical_url||target.url
+            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true
           });
           if(refreshed?.ok) refreshedCount++;
           if(!target.has_screenshot) screenshotQueue.push({title:enriched.title||target.title||'',url:target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});

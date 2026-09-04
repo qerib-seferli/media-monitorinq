@@ -17,7 +17,7 @@ let keywords = [];
 let globalKeywordRows = [];
 let allKeywordRows = [];
 let keywordStats = [];
-let keywordBankTotals = { records_total:0, total:0, positive:0, exclude:0, global_positive:0, global_exclude:0, organization_positive:0, organization_exclude:0 };
+let keywordBankTotals = { records_total:0, total:0, inactive:0, positive:0, exclude:0, global_positive:0, global_exclude:0, organization_positive:0, organization_exclude:0 };
 const KEYWORD_PAGE_SIZE = 100;
 let sources = [];
 let sourceIndex = [];
@@ -76,7 +76,7 @@ async function loadKeywordStats() {
   if(loadError){
     toast(loadError.message,'error'); allKeywordRows=[]; globalKeywordRows=[];
     keywordStats=[{organization_id:'__all__',name:'Bütün aktiv söz bazası',positive_count:0,excluded_count:0,error:loadError}];
-    keywordBankTotals={records_total:recordsTotal,total:0,positive:0,exclude:0,global_positive:0,global_exclude:0,organization_positive:0,organization_exclude:0};
+    keywordBankTotals={records_total:recordsTotal,total:0,inactive:recordsTotal,positive:0,exclude:0,global_positive:0,global_exclude:0,organization_positive:0,organization_exclude:0};
     return;
   }
   allKeywordRows=rows.filter(row=>String(row?.value||'').trim());
@@ -86,7 +86,7 @@ async function loadKeywordStats() {
   const globalPositive=positives.filter(row=>!row.organization_id).length;
   const globalExclude=excludes.filter(row=>!row.organization_id).length;
   keywordBankTotals={
-    records_total:recordsTotal||allKeywordRows.length, total:allKeywordRows.length, positive:positives.length, exclude:excludes.length,
+    records_total:recordsTotal||allKeywordRows.length, total:allKeywordRows.length, inactive:Math.max(0,(recordsTotal||allKeywordRows.length)-allKeywordRows.length), positive:positives.length, exclude:excludes.length,
     global_positive:globalPositive, global_exclude:globalExclude,
     organization_positive:positives.length-globalPositive, organization_exclude:excludes.length-globalExclude
   };
@@ -406,13 +406,22 @@ function renderKeywords() {
   const excludeEl = document.querySelector('#exclude-list');
   if (!el) return;
 
-  const bankSummary=`<div class="keyword-bank-overview"><span><b>${keywordBankTotals.records_total}</b> baza cəmi</span><span><b>${keywordBankTotals.total}</b> aktiv qeyd</span><span><b>${keywordBankTotals.positive}</b> axtarılan</span><span><b>${keywordBankTotals.exclude}</b> axtarılmayan</span><small>Qlobal aktiv: ${keywordBankTotals.global_positive} / ${keywordBankTotals.global_exclude} • Təşkilatlara aid aktiv: ${keywordBankTotals.organization_positive} / ${keywordBankTotals.organization_exclude}</small></div>`;
+  const summary=document.querySelector('#keyword-bank-summary');
+  if(summary){
+    summary.innerHTML=`<div class="keyword-bank-overview keyword-bank-overview-single">
+      <span><small>Ümumi söz bazası</small><b>${keywordBankTotals.records_total}</b></span>
+      <span><small>Aktiv axtarılan</small><b>${keywordBankTotals.positive}</b></span>
+      <span><small>Aktiv axtarılmayan</small><b>${keywordBankTotals.exclude}</b></span>
+      <span><small>Arxiv / deaktiv</small><b>${keywordBankTotals.inactive}</b></span>
+      <div class="keyword-bank-note"><b>${keywordBankTotals.total}</b> aktiv qeyd işləyir. Qlobal aktiv: ${keywordBankTotals.global_positive} axtarılan + ${keywordBankTotals.global_exclude} filtr. Təşkilatlara aid aktiv: ${keywordBankTotals.organization_positive} + ${keywordBankTotals.organization_exclude}. <strong>Gemini AI</strong> tam radar zamanı hər təşkilat üçün avtomatik ələk və təhlükəsiz söz-bankı optimallaşdırması aparır.</div>
+    </div>`;
+  }
   const positiveGroups = keywordStats.filter(x => x.positive_count > 0);
-  el.innerHTML = bankSummary + (positiveGroups.map(x => keywordGroupSummary(x,'positive')).join('') || '<div class="empty compact">Açar söz yoxdur.</div>');
+  el.innerHTML = (positiveGroups.map(x => keywordGroupSummary(x,'positive')).join('') || '<div class="empty compact">Açar söz yoxdur.</div>');
 
   if (excludeEl) {
     const excludeGroups = keywordStats.filter(x => x.excluded_count > 0);
-    excludeEl.innerHTML = bankSummary + (excludeGroups.map(x => keywordGroupSummary(x,'exclude')).join('') || '<div class="empty compact">Axtarılmamalı söz təyin edilməyib.</div>');
+    excludeEl.innerHTML = (excludeGroups.map(x => keywordGroupSummary(x,'exclude')).join('') || '<div class="empty compact">Axtarılmamalı söz təyin edilməyib.</div>');
   }
 
   document.querySelectorAll('[data-keyword-group]').forEach(group => {
@@ -1280,11 +1289,16 @@ function renderNetworkRadarIdle(){
   }
 }
 function radarHash(value=''){let h=2166136261;for(const c of String(value)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
-const RADAR_BLIP_SLOTS=[
-  {left:34,top:22},{left:50,top:18},{left:66,top:22},{left:76,top:34},
-  {left:80,top:50},{left:74,top:66},{left:62,top:78},{left:42,top:80},
-  {left:26,top:70},{left:20,top:54},{left:22,top:38},{left:30,top:28}
-];
+const RADAR_BLIP_SLOTS=(()=>{
+  const slots=[];
+  const addRing=(radius,count,offset)=>{for(let i=0;i<count;i++){const a=(offset+(360/count)*i)*Math.PI/180;slots.push({left:50+Math.cos(a)*radius,top:50+Math.sin(a)*radius,angle:a});}};
+  addRing(28,8,-78);
+  addRing(40,10,-63);
+  return slots;
+})();
+const RADAR_SEARCH_SLOTS=(()=>{
+  const slots=[];for(let i=0;i<12;i++){const a=(-90+i*30)*Math.PI/180;const r=i%2?34:42;slots.push({left:50+Math.cos(a)*r,top:50+Math.sin(a)*r,delay:(i*.17).toFixed(2)});}return slots;
+})();
 let networkRadarBlipSlots={};
 function resetRadarBlipSlots(){networkRadarBlipSlots={};}
 function radarBlipPosition(key,usedSlots){
@@ -1297,13 +1311,16 @@ function renderRadarOrganizations(items=[]){
   const box=document.querySelector('#radar-blips');if(!box)return;
   const rows=(Array.isArray(items)?items:[]).filter(x=>x?.short_name).slice(0,RADAR_BLIP_SLOTS.length);
   const next={},usedSlots=new Set();
-  box.innerHTML=rows.map(row=>{
+  const searchBlips=RADAR_SEARCH_SLOTS.map((pos,i)=>`<span class="radar-search-blip" style="left:${pos.left}%;top:${pos.top}%;--blink-delay:${pos.delay}s;--blink-index:${i}"><i></i></span>`).join('');
+  const hits=rows.map(row=>{
     const key=String(row.organization_id||row.short_name), count=Number(row.count||0), pos=radarBlipPosition(key,usedSlots);
     next[key]=count;
     const fresh=count>Number(networkRadarLastOrgCounts[key]||0);
-    const side=pos.left>=50?' label-right':' label-left';
-    return `<span class="radar-blip hit${fresh?' fresh':''}${side}" style="left:${pos.left}%;top:${pos.top}%"><i></i><small>${escapeHtml(row.short_name)}${count>1?` · ${count}`:''}</small></span>`;
+    const edge=pos.left<30?' edge-left':pos.left>70?' edge-right':'';
+    const vertical=pos.top<28?' edge-top':pos.top>72?' edge-bottom':'';
+    return `<span class="radar-blip hit${fresh?' fresh':''}${edge}${vertical}" style="left:${pos.left}%;top:${pos.top}%"><i></i><small>${escapeHtml(row.short_name)}${count>1?` · ${count}`:''}</small></span>`;
   }).join('');
+  box.innerHTML=searchBlips+hits;
   networkRadarLastOrgCounts=next;
 }
 

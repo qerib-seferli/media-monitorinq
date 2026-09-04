@@ -1693,3 +1693,26 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 @keyframes radarOrbit{to{transform:rotate(360deg)}}
 @media(max-width:760px){.keyword-bank-overview{grid-template-columns:1fr 1fr}.keyword-bank-overview span:last-of-type{grid-column:1/-1}.radar-terminal-line.real{grid-template-columns:40px 9px 1fr}.terminal-time{font-size:7px}}
 .keyword-scope{display:inline-block;margin-left:6px;color:#6fa4c6;font-size:8px;font-weight:600}
+
+
+/* v32 — söz bankı və hərbi radar stabilliyi */
+.keyword-bank-overview-single{grid-template-columns:repeat(4,minmax(0,1fr));margin:0 0 14px}
+.keyword-bank-overview-single span{display:grid;gap:2px;align-content:center;min-height:58px}
+.keyword-bank-overview-single span>small{grid-column:auto;padding:0;color:#78a8c6;font-size:9px;line-height:1.15}
+.keyword-bank-overview-single span>b{font-size:20px;line-height:1}
+.keyword-bank-note{grid-column:1/-1;padding:8px 9px;border-radius:9px;background:rgba(5,20,34,.55);color:#91b8cf;font-size:9px;line-height:1.45}
+.keyword-bank-note>b{color:#e9f9ff}.keyword-bank-note strong{color:#58e5ae}
+.radar-blips{overflow:visible!important}
+.radar-search-blip{position:absolute;translate:-50% -50%;width:8px;height:8px;z-index:1;opacity:.15;animation:radarSearchBlink 2.25s ease-in-out infinite;animation-delay:var(--blink-delay)}
+.radar-search-blip i{display:block;width:7px;height:7px;border-radius:50%;background:#ffb21a;box-shadow:0 0 0 2px rgba(255,178,26,.08),0 0 13px rgba(255,178,26,.85)}
+.network-radar-card.is-scanning .radar-search-blip{opacity:.25}
+.radar-blip.hit{z-index:4}
+.radar-blip.hit small{max-width:118px;overflow:visible;text-overflow:clip}
+.radar-blip.edge-right small{left:auto;right:14px;text-align:right}
+.radar-blip.edge-left small{left:14px;right:auto;text-align:left}
+.radar-blip.edge-top small{top:12px;translate:-45% 0}
+.radar-blip.edge-bottom small{top:auto;bottom:12px;translate:-45% 0}
+.radar-blip.edge-right.edge-top small,.radar-blip.edge-right.edge-bottom small{translate:0 0}
+.radar-blip.edge-left.edge-top small,.radar-blip.edge-left.edge-bottom small{translate:0 0}
+@keyframes radarSearchBlink{0%,100%{opacity:.08;transform:scale(.65)}35%{opacity:.95;transform:scale(1.35)}55%{opacity:.32;transform:scale(.9)}}
+@media(max-width:760px){.keyword-bank-overview-single{grid-template-columns:1fr 1fr}.radar-blip.hit small{max-width:82px}}
