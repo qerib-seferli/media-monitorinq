@@ -151,28 +151,77 @@ async function ingestInChunks({org, platform, label, items}) {
     received: 0, accepted: 0, rejected: 0, inserted: 0,
     sample_results: [], screenshot_targets: [], accepted_targets: [], errors: [], chunk_failures: 0
   };
+
+  const mergeResult = (result) => {
+    aggregate.received += Number(result?.received || 0);
+    aggregate.accepted += Number(result?.accepted || 0);
+    aggregate.rejected += Number(result?.rejected || 0);
+    aggregate.inserted += Number(result?.inserted || 0);
+    if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
+    if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
+    if (Array.isArray(result?.accepted_targets)) aggregate.accepted_targets.push(...result.accepted_targets);
+    if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
+  };
+
+  const sendPart = async (part, tag, timeoutMs = 35000, retries = 2) => {
+    const result = await callMonitor({
+      mode:'news_ingest', organization_id:org.id, source_platform:platform,
+      source_label:label, items:part
+    }, timeoutMs, retries);
+    mergeResult(result);
+    console.log(`[${org.short_name}] ${label}: ${tag} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
+    return result;
+  };
+
+  const recoverPart = async (part, parentTag) => {
+    // Edge Function compute/network xətası konkret bir materialdan və ya anlıq Supabase
+    // sıxlığından gələ bilər. Böyük paketi dərhal itmiş saymaq əvəzinə əvvəl 2-lik,
+    // sonra yalnız lazım olan hissəni tək-tək yoxlayırıq. Duplicate qorumasına görə
+    // əvvəlki cəhddə yazılmış materialın yenidən göndərilməsi təhlükəsizdir.
+    const smallParts = chunks(part, 2);
+    let finalFailures = 0;
+    for (let i = 0; i < smallParts.length; i++) {
+      const small = smallParts[i];
+      const smallTag = `${parentTag} bərpa ${i+1}/${smallParts.length}`;
+      try {
+        await sleep(700);
+        await sendPart(small, smallTag, 45000, 3);
+        continue;
+      } catch (e) {
+        console.log(`[${org.short_name}] ${label}: ${smallTag} yenə alınmadı — ${e?.message||e}`);
+      }
+
+      for (let j = 0; j < small.length; j++) {
+        try {
+          await sleep(900);
+          await sendPart([small[j]], `${smallTag} tək ${j+1}/${small.length}`, 50000, 4);
+        } catch (e) {
+          finalFailures++;
+          aggregate.errors.push({
+            message:`${parentTag}: ingest elementi bütün bərpa cəhdlərindən sonra alınmadı — ${e?.message||e}`,
+            url:String(small[j]?.url||'')
+          });
+          console.log(`[${org.short_name}] ${label}: ${smallTag} tək ${j+1}/${small.length} SON XƏTA — ${e?.message||e}`);
+        }
+      }
+    }
+    return finalFailures;
+  };
+
   for (let i = 0; i < pieces.length; i++) {
     const part = pieces[i];
+    const tag = `paket ${i+1}/${pieces.length}`;
     try {
-      const result = await callMonitor({
-        mode:'news_ingest', organization_id:org.id, source_platform:platform,
-        source_label:label, items:part
-      });
-      aggregate.received += Number(result?.received || 0);
-      aggregate.accepted += Number(result?.accepted || 0);
-      aggregate.rejected += Number(result?.rejected || 0);
-      aggregate.inserted += Number(result?.inserted || 0);
-      if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
-      if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
-      if (Array.isArray(result?.accepted_targets)) aggregate.accepted_targets.push(...result.accepted_targets);
-      if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
-      console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
+      await sendPart(part, tag);
     } catch (e) {
-      aggregate.chunk_failures++;
-      console.log(`[${org.short_name}] ${label}: paket ${i+1}/${pieces.length} ingest xəta — ${e?.message||e}`);
-      // Bir paket Edge resource limit/timeout alsa bütün GitHub job dayanmasın.
-      // Növbəti run eyni discovery nəticələrini yenidən görəcək və duplicate qoruması var.
-      await sleep(900);
+      console.log(`[${org.short_name}] ${label}: ${tag} ingest xəta — ${e?.message||e}`);
+      const finalFailures = await recoverPart(part, tag);
+      if (finalFailures > 0) {
+        aggregate.chunk_failures += finalFailures;
+        console.log(`[${org.short_name}] ${label}: ${tag} bərpa natamam — son uğursuz element=${finalFailures}`);
+      } else {
+        console.log(`[${org.short_name}] ${label}: ${tag} bərpa edildi — shard qırmızı olmayacaq.`);
+      }
     }
   }
   aggregate.screenshot_targets = dedupe(aggregate.screenshot_targets.map(x=>({ ...x, url:String(x?.url||'') }))).filter(x=>x.url);
