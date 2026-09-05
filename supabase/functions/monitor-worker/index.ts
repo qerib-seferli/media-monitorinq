@@ -509,11 +509,13 @@ Deno.serve(async (req) => {
           patch.original_text=options.news_text;
           patch.summary=clean(options.news_text).slice(0,700);
         }
-        if (safeMetadata && options.news_published_at) patch.published_at=options.news_published_at;
+        if (safeMetadata && options.news_published_at && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(options.published_date_source)) patch.published_at=options.news_published_at;
         else if (safeMetadata && oldDateSuspect) patch.published_at=null;
         if (safeMetadata && options.news_author) patch.author_name=options.news_author;
         const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,1);
-        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:Boolean(safeMetadata && options.news_published_at),published_date_status:safeMetadata?(options.news_published_at?'verified':'not-found'):'unverified',canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
+        const trustedIncomingDate=Boolean(safeMetadata && options.news_published_at && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(options.published_date_source));
+        if(!trustedIncomingDate && safeMetadata && oldDateSuspect) patch.published_at=null;
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:trustedIncomingDate,published_date_status:safeMetadata?(trustedIncomingDate?'verified':'not-found'):'unverified',published_date_source:trustedIncomingDate?options.published_date_source:null,date_parser_version:trustedIncomingDate?options.date_parser_version:2,canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
         const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
         if (updated?.error) throw updated.error;
         if(safeMetadata && externalImages.length){
@@ -2452,6 +2454,26 @@ async function webSourceItems(url:string, fallback:string):Promise<{items:Item[]
   };
 }
 
+function extractJsonLdDatePublished(html:string):string|null {
+  const scripts=[...String(html||'').matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for(const m of scripts){
+    try{
+      const parsed=JSON.parse(m[1]);
+      const queue:any[]=Array.isArray(parsed)?[...parsed]:[parsed];
+      while(queue.length){
+        const x=queue.shift(); if(!x||typeof x!=='object') continue;
+        if(Array.isArray(x['@graph'])) queue.push(...x['@graph']);
+        const type=String(x['@type']||'').toLowerCase();
+        if((type.includes('article')||type.includes('news')) && x.datePublished){
+          const d=new Date(String(x.datePublished));
+          if(!Number.isNaN(d.getTime()) && d.getUTCFullYear()>=1995 && d.getTime()<=Date.now()+3*86400000) return d.toISOString();
+        }
+      }
+    }catch{}
+  }
+  return null;
+}
+
 function pageItemFromHtml(url:string, fallback:string, html:string):Item {
   const title = clean(meta(html,'og:title') || html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || fallback);
   const description = clean(meta(html,'og:description') || meta(html,'description') || '');
@@ -2462,14 +2484,17 @@ function pageItemFromHtml(url:string, fallback:string, html:string):Item {
       .replace(/<noscript[\s\S]*?<\/noscript>/gi,' ')
       .replace(/<[^>]+>/g,' ')
   ).slice(0,14000);
-  const pagePublished=meta(html,'article:published_time') || meta(html,'date') || null;
+  const ldPublished=extractJsonLdDatePublished(html);
+  const articleMeta=meta(html,'article:published_time') || null;
+  const pagePublished=ldPublished || articleMeta || null;
+  const dateSource=ldPublished?'structured:datePublished':articleMeta?'meta:article:published_time':null;
   return {
     title,
     text:`${description}\n${text}`.trim(),
     url,
     image:resolveUrl(meta(html,'og:image') || '',url),
     published_at:pagePublished,
-    raw:{kind:'web_page',published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found'}
+    raw:{kind:'web_page',published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:dateSource,date_parser_version:2}
   };
 }
 
@@ -2571,6 +2596,17 @@ async function pageItem(url:string, fallback:string):Promise<Item> {
   return pageItemFromHtml(url,fallback,html);
 }
 
+function canonicalStoryUrl(item:Item):string {
+  const raw:any=item?.raw||{};
+  const candidate=String(raw?.canonical_url||item?.url||'').trim();
+  if(!candidate) return '';
+  try{
+    const u=new URL(candidate); u.hash='';
+    for(const key of [...u.searchParams.keys()]) if(/^utm_|^(fbclid|gclid|ref|source)$/i.test(key)) u.searchParams.delete(key);
+    return u.toString().replace(/\/$/,'');
+  }catch{return candidate.replace(/\/$/,'');}
+}
+
 async function save(admin:any, org:any, source:any, item:Item, keywords:string[], villages:string[] = []) {
   if (!item.url) return 0;
   const match = evaluateMatch(org, item, keywords, villages);
@@ -2592,38 +2628,38 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   const canonicalSourcePlatform = canonicalPlatform(source.platform || inferPlatform(item.url || '') || 'Web');
   const isWebNews = canonicalSourcePlatform === 'Web';
   const storyTitleKey = normalizeForMatch(item.title || '');
-  const storyDay = item.published_at ? String(item.published_at).slice(0,10) : '';
-  // Web xəbərlərində eyni məqalə Google News, Bing, RSS və birbaşa sayt URL-i ilə
-  // fərqli linklərdən gələ bilər. URL əsaslı hash bu səbəbdən dublikat yaradırdı.
-  // Xəbər üçün stabil başlıq+tarix fingerprint-i, digər platformalarda əvvəlki URL hash-i işləyir.
-  const hash = await sha256(isWebNews && storyTitleKey
-    ? `${org.id}|web-story|${storyTitleKey}|${storyDay}`
+  const canonicalUrl=isWebNews?canonicalStoryUrl(item):'';
+  const hash = await sha256(isWebNews
+    ? `${org.id}|web-canonical|${canonicalUrl||storyTitleKey}`
     : `${org.id}|${item.url}|${item.title||''}`);
 
   // Eyni material hər run-da yenidən aşkarlana bilər. Əvvəlcə yeni content_hash ilə yoxla.
   let { data:existing, error:existingError } = await admin.from('mentions')
-    .select('id,raw_payload')
+    .select('id,raw_payload,published_at,source_url')
     .eq('organization_id',org.id)
     .eq('content_hash',hash)
     .maybeSingle();
   if (existingError) throw existingError;
 
-  // Köhnə Web qeydləri URL+başlıq hash-i ilə saxlanıb. Yeni fingerprint sisteminə keçiddə
-  // həmin köhnə materialı bir dəfə də insert etməmək üçün başlıq+tarix üzrə fallback axtarış edilir.
+  if (!existing?.id && isWebNews && canonicalUrl) {
+    const canonicalResult:any = await admin.from('mentions')
+      .select('id,raw_payload,published_at,source_url')
+      .eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0)
+      .eq('raw_payload->>canonical_url',canonicalUrl).order('detected_at',{ascending:true}).limit(1).maybeSingle();
+    if (!canonicalResult?.error && canonicalResult?.data?.id) existing=canonicalResult.data;
+  }
+  if (!existing?.id && isWebNews && canonicalUrl) {
+    const sourceResult:any = await admin.from('mentions')
+      .select('id,raw_payload,published_at,source_url')
+      .eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0)
+      .eq('source_url',canonicalUrl).order('detected_at',{ascending:true}).limit(1).maybeSingle();
+    if (!sourceResult?.error && sourceResult?.data?.id) existing=sourceResult.data;
+  }
   if (!existing?.id && isWebNews && item.title) {
-    let legacyQuery:any = admin.from('mentions')
-      .select('id,raw_payload')
-      .eq('organization_id',org.id)
-      .in('source_platform',['Web','Google News'])
-      .eq('title',item.title)
-      .order('detected_at',{ascending:false})
-      .limit(1);
-    if (storyDay) {
-      legacyQuery = legacyQuery
-        .gte('published_at',`${storyDay}T00:00:00.000Z`)
-        .lt('published_at',new Date(new Date(`${storyDay}T00:00:00.000Z`).getTime()+86400000).toISOString());
-    }
-    const legacyResult:any = await legacyQuery.maybeSingle();
+    const legacyResult:any = await admin.from('mentions')
+      .select('id,raw_payload,published_at,source_url')
+      .eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0)
+      .eq('title',item.title).order('detected_at',{ascending:true}).limit(1).maybeSingle();
     if (!legacyResult?.error && legacyResult?.data?.id) existing = legacyResult.data;
   }
   if (existing?.id) {
@@ -2639,7 +2675,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
       consecutive_misses:0,
       raw_payload:{
         ...((existing as any)?.raw_payload || {}),
-        ...(item.raw || item),
+        ...((item.raw as any) || item),
+        ...(isWebNews&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
         monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
         ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
         ...(String((item.raw as any)?.kind||'').includes('comment') && match.reason==='aidiyyəti-videonun-rəyi' && !(match.matches||[]).length ? {admin_review_status:'auto-ignored'} : {})
@@ -2677,7 +2714,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     published_at:canonicalSourcePlatform==='Web'?reliableWebPublishedDate(item):(item.published_at || null),
     content_hash:hash,
     raw_payload:{
-      ...(item.raw || item),
+      ...((item.raw as any) || item),
+      ...(isWebNews&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
       monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
       ...(ai?.__ai_meta ? {ai_analysis:ai.__ai_meta} : {}),
       ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
@@ -2751,6 +2789,9 @@ type RunOptions = {
   image_url:string;
   image_urls:string[];
   canonical_url:string;
+  published_date_source:string;
+  date_parser_version:number;
+  page_enriched:boolean;
   include_archived:boolean;
   organization_shard_count:number;
   organization_shard_index:number;
@@ -2793,6 +2834,9 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   image_url:'',
   image_urls:[],
   canonical_url:'',
+  published_date_source:'',
+  date_parser_version:0,
+  page_enriched:false,
   include_archived:false,
   organization_shard_count:1,
   organization_shard_index:0,
@@ -2851,6 +2895,9 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       image_url:String(body?.image_url || '').slice(0,2000),
       image_urls:[...new Set((Array.isArray(body?.image_urls)?body.image_urls:[]).map((x:any)=>String(x||'').slice(0,2000)).filter((x:string)=>/^https?:\/\//i.test(x)))].slice(0,12),
       canonical_url:String(body?.canonical_url || '').slice(0,2000),
+      published_date_source:String(body?.published_date_source || '').slice(0,80),
+      date_parser_version:Math.max(0,Number(body?.date_parser_version||0)),
+      page_enriched:body?.page_enriched === true,
       include_archived:body?.include_archived === true,
       organization_shard_count:Math.max(1,Math.min(20,Number(body?.organization_shard_count || 1))),
       organization_shard_index:Math.max(0,Math.min(19,Number(body?.organization_shard_index || 0))),
@@ -3491,16 +3538,18 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
 
 function radarTextHash(value:string):number { let h=2166136261; for(const c of String(value||'')){h^=c.charCodeAt(0);h=Math.imul(h,16777619);} return h>>>0; }
 
+function trustedWebDateRaw(raw:any):boolean {
+  const source=String(raw?.published_date_source||'');
+  return raw?.published_from_page===true && raw?.published_date_status==='verified' && Number(raw?.date_parser_version||0)>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);
+}
 function webDateNeedsVerification(raw:any,publishedAt:any,detectedAt:any):boolean {
-  // Web tarixinin yeganə etibarlı mənbəyi məqalənin öz səhifəsidir. Discovery RSS/Google/Bing
-  // tarixi namizəd kimi faydalıdır, amma köhnə xəbərlərə yenidən indekslənmə vaxtı verə bilər.
-  if(raw?.published_from_page===true || raw?.published_date_status==='verified') return false;
-  return true;
+  if(!publishedAt) return true;
+  return !trustedWebDateRaw(raw);
 }
 
 function reliableWebPublishedDate(item:Item):string|null {
   const raw:any=item?.raw||{};
-  return raw?.published_from_page===true && item?.published_at ? String(item.published_at) : null;
+  return trustedWebDateRaw(raw) && item?.published_at ? String(item.published_at) : null;
 }
 
 function safePositiveLearningPhrase(value:any):boolean {

@@ -215,46 +215,84 @@ function normalizeDate(value='') {
   const year=d.getUTCFullYear(); if(year<1995||year>new Date().getUTCFullYear()+1)return null;
   return d.toISOString();
 }
-function extractVisiblePublishedDate(html='', title='') {
-  const page=cleanArticleText(String(html||'')
-    .replace(/<script\b[\s\S]*?<\/script>/gi,' ')
-    .replace(/<style\b[\s\S]*?<\/style>/gi,' ')
-    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi,' '));
-  if(!page) return null;
-  const patterns=[
+function datePatterns(){
+  return [
     /(?:tarix|date|paylasim|paylaşım)?\s*[:\-]?\s*(\d{1,2}\s+(?:yanvar|fevral|mart|aprel|may|iyun|iyul|avqust|sentyabr|oktyabr|noyabr|dekabr|january|february|march|april|june|july|august|september|october|november|december)[,\s]+(?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/gi,
     /((?:19|20)\d{2}[.\/-]\d{1,2}[.\/-]\d{1,2}(?:[T\s]+\d{1,2}:\d{2}(?::\d{2})?)?)/g,
     /(\d{1,2}[.\/-]\d{1,2}[.\/-](?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/g
   ];
-  const anchors=[];
-  const t=cleanArticleText(title||'');
-  if(t){
-    const hay=page.toLocaleLowerCase('az-AZ'), needle=t.toLocaleLowerCase('az-AZ');
-    let at=hay.indexOf(needle);
-    while(at>=0){anchors.push(at);at=hay.indexOf(needle,at+Math.max(8,needle.length));if(anchors.length>=8)break;}
-  }
+}
+function extractDateFromScopedText(scope=''){
+  const page=cleanArticleText(String(scope||'')
+    .replace(/<script\b[\s\S]*?<\/script>/gi,' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi,' ')
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi,' ')
+    .replace(/<nav\b[\s\S]*?<\/nav>/gi,' ')
+    .replace(/<footer\b[\s\S]*?<\/footer>/gi,' '));
+  if(!page) return null;
   const candidates=[];
-  for(const re of patterns){
+  for(const re of datePatterns()){
     re.lastIndex=0; let m;
     while((m=re.exec(page))){
       const iso=normalizeDate(m[1]||''); if(!iso) continue;
-      const ms=new Date(iso).getTime();
-      if(!Number.isFinite(ms) || ms>Date.now()+3*86400000) continue;
-      const year=new Date(ms).getUTCFullYear(); if(year<1995) continue;
       const pos=m.index;
-      let distance=anchors.length?Math.min(...anchors.map(a=>Math.abs(pos-a))):999999;
+      const context=page.slice(Math.max(0,pos-90),Math.min(page.length,pos+100));
       let score=0;
-      if(distance<250) score+=160; else if(distance<900) score+=120; else if(distance<2500) score+=75; else if(distance<6000) score+=25;
-      const context=page.slice(Math.max(0,pos-80),Math.min(page.length,pos+80));
-      if(/tarix|date|paylaş|sosial|oxunma|saat/i.test(context)) score+=35;
-      // Xəbərin başlığına yaxın tarix, səhifənin sağ/alt hissəsindəki başqa xəbərlərin
-      // tarixindən daha etibarlıdır. Eyni balda daha yaxın olan tarix seçilir.
-      candidates.push({iso,score,distance,pos});
-      if(candidates.length>=120) break;
+      if(/tarix|date|paylaş|saat|vaxt/i.test(context)) score+=40;
+      if(/son xəbərlər|digər xəbərlər|related|xəbər lenti|gündəm/i.test(context)) score-=120;
+      candidates.push({iso,score,pos});
+      if(candidates.length>=40) break;
     }
   }
-  candidates.sort((a,b)=>b.score-a.score || a.distance-b.distance || a.pos-b.pos);
-  return candidates[0]?.iso || null;
+  candidates.sort((a,b)=>b.score-a.score || a.pos-b.pos);
+  return candidates[0]?.iso||null;
+}
+function extractVisiblePublishedDate(html='', title='') {
+  const raw=String(html||'');
+  const wanted=cleanArticleText(title||'').toLocaleLowerCase('az-AZ');
+  const scopes=[];
+  // 1) Ən güclü qayda: xəbərin H1/H2 başlığını tap və yalnız onun yaxın HTML hissəsində tarix axtar.
+  if(wanted){
+    for(const m of raw.matchAll(/<h([1-3])\b[^>]*>([\s\S]*?)<\/h\1>/gi)){
+      const heading=cleanArticleText(m[2]||'').toLocaleLowerCase('az-AZ');
+      if(!heading) continue;
+      const tokens=wanted.split(/\s+/).filter(x=>x.length>=5);
+      const hit=tokens.filter(x=>heading.includes(x)).length;
+      if(hit<Math.min(3,Math.max(1,tokens.length))) continue;
+      const start=Math.max(0,(m.index||0)-2600), end=Math.min(raw.length,(m.index||0)+String(m[0]||'').length+3200);
+      scopes.push(raw.slice(start,end));
+    }
+  }
+  // 2) article/main daxilində başlıq varsa həmin blok. Sidebar/son xəbərlər bu scope-a düşmür.
+  for(const m of raw.matchAll(/<(article|main)\b[^>]*>([\s\S]*?)<\/\1>/gi)){
+    const block=m[2]||'';
+    if(!wanted || cleanArticleText(block).toLocaleLowerCase('az-AZ').includes(wanted.slice(0,Math.min(70,wanted.length)))) scopes.push(block);
+  }
+  for(const scope of scopes){const iso=extractDateFromScopedText(scope); if(iso) return iso;}
+  // Başlıq məlumdursa bütün səhifədən tarix götürmürük: sağ paneldəki cari tarix köhnə xəbəri korlaya bilər.
+  if(wanted) return null;
+  return extractDateFromScopedText(raw);
+}
+function archiveWindowFromRaw(raw={}){
+  const slice=String(raw?.archive_slice||'').trim();
+  let start=null,end=null;
+  if(/^\d{4}-\d{2}$/.test(slice)){
+    const [y,m]=slice.split('-').map(Number); start=new Date(Date.UTC(y,m-1,1)); end=new Date(Date.UTC(m===12?y+1:y,m===12?0:m,1));
+  }else if(/^\d{4}$/.test(slice)){
+    const y=Number(slice); start=new Date(Date.UTC(y,0,1)); end=new Date(Date.UTC(y+1,0,1));
+  }else if(Number(raw?.archive_year_start)&&Number(raw?.archive_year_end)){
+    start=new Date(Date.UTC(Number(raw.archive_year_start),0,1)); end=new Date(Date.UTC(Number(raw.archive_year_end)+1,0,1));
+  }
+  return start&&end?{start,end}:null;
+}
+function validatePublishedForTarget(iso,target={}){
+  const normalized=normalizeDate(iso||''); if(!normalized) return null;
+  const raw=target?.raw||{};
+  if(raw?.historical_backfill===true){
+    const w=archiveWindowFromRaw(raw); const ts=new Date(normalized).getTime();
+    if(w && (ts<w.start.getTime() || ts>=w.end.getTime())) return null;
+  }
+  return normalized;
 }
 function unwrapSearchUrl(value='') {
   let current=String(value||'').trim();
@@ -601,9 +639,12 @@ async function enrichPage(item) {
     else if(Array.isArray(articleLd?.image)) structuredImage=typeof articleLd.image[0]==='string'?articleLd.image[0]:(articleLd.image[0]?.url||'');
     else if(articleLd?.image?.url) structuredImage=articleLd.image.url;
     const metaImage=firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i]);
-    const published = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
+    const structuredRaw = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
+    const structuredPublished=validatePublishedForTarget(normalizeDate(structuredRaw),item);
+    const visiblePublished=structuredPublished?null:validatePublishedForTarget(extractVisiblePublishedDate(html,stripHtml(title)||item.title||''),item);
+    const pagePublished=structuredPublished||visiblePublished||null;
+    const publishedDateSource=structuredPublished?'structured:datePublished':visiblePublished?'visible:article-heading':null;
     const author = extractAuthorFromHtml(html, articleLd, item.author||'');
-    const pagePublished=normalizeDate(published)||extractVisiblePublishedDate(html,stripHtml(title)||item.title||'');
     const articleScope=[...html.matchAll(/<(?:article|main)\b[^>]*>([\s\S]*?)<\/(?:article|main)>/gi)].map(m=>m[1]).join('\n');
     const hasArticleImage=/<img\b/i.test(articleScope);
     const primaryCandidate=structuredImage || (hasArticleImage?metaImage:'') || '';
@@ -616,16 +657,15 @@ async function enrichPage(item) {
       image:imageUrls[0]||null,
       published_at:pagePublished||(String(item?.raw?.kind||'').includes('configured_site_sitemap')?null:item.published_at),
       author:author||item.author||null,
-      raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished)}
+      raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
     };
   } catch { return item; }
 }
 
 function reliablePublishedAt(enriched,target){
-  // Paylaşım tarixi yalnız orijinal səhifədən oxunub təsdiqlənibsə bazaya yazılır.
-  // Feed/search tarixini discovery metadatası kimi saxlayırıq, amma paylaşım tarixi etmirik.
-  if(enriched?.raw?.published_from_page===true && enriched?.published_at) return normalizeDate(enriched.published_at);
-  return null;
+  // Yalnız v2 parserin məqalənin öz scope-undan təsdiqlədiyi tarix bazaya yazılır.
+  if(enriched?.raw?.published_from_page!==true || Number(enriched?.raw?.date_parser_version||0)<2) return null;
+  return validatePublishedForTarget(enriched?.published_at,target||enriched);
 }
 
 async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {
@@ -1452,7 +1492,7 @@ for (const org of plan.organizations) {
           mode:'news_enrich', organization_id:org.id, source_url:target.url,
           title:enriched.title||target.title||'', text:enriched.text||target.text||'',
           image_url:enriched.image||'', image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[], published_at:reliablePublishedAt(enriched,target),
-          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true
+          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true, published_date_source:enriched.raw?.published_date_source||'', date_parser_version:Number(enriched.raw?.date_parser_version||0)
         });
         if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);
       } catch(e) { console.log(`[${org.short_name}] Tam mətn yeniləmə xətası: ${e?.message||e}`); }
@@ -1489,7 +1529,7 @@ for (const org of plan.organizations) {
             title:enriched.title||target.title||'',text:enriched.text||target.text||'',
             image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],
             published_at:reliablePublishedAt(enriched,target),author:enriched.author||null,
-            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true
+            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0)
           });
           if(refreshed?.ok) refreshedCount++;
           if(!target.has_screenshot) screenshotQueue.push({title:enriched.title||target.title||'',url:target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});

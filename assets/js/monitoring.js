@@ -62,7 +62,8 @@ function hasReliablePublishedDate(m){
   // RSS/Google/Bing discovery vaxtı köhnə xəbərə yeni tarix verə bildiyi üçün artıq
   // istifadəçiyə "paylaşım tarixi" kimi göstərilmir.
   if(platform==='web'||platform.includes('google news')){
-    return raw?.published_from_page===true||raw?.published_date_status==='verified';
+    const source=String(raw?.published_date_source||'');
+    return raw?.published_from_page===true && raw?.published_date_status==='verified' && Number(raw?.date_parser_version||0)>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);
   }
   return true;
 }
