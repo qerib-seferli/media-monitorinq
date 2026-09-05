@@ -1781,3 +1781,16 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
     white-space:nowrap;
   }
 }
+
+/* 2026-09-05 — canlı xəritə radar sinxronu və seçilən rayon sərhədləri */
+.az-live-svg{position:relative;z-index:2}
+.az-map-scan-beam{position:absolute;z-index:3;top:0;bottom:0;left:-22%;width:18%;pointer-events:none;opacity:0;background:linear-gradient(90deg,transparent,rgba(88,255,221,.05) 22%,rgba(106,255,225,.5) 70%,rgba(221,255,247,.9) 98%,transparent);filter:blur(.2px);box-shadow:14px 0 28px rgba(65,255,215,.15);transform:skewX(-7deg)}
+.is-radar-scanning .az-map-scan-beam{opacity:.78;animation:azMapSweep 3.4s linear infinite}
+@keyframes azMapSweep{0%{left:-24%}100%{left:108%}}
+.az-region{stroke-width:1.15}
+.az-region.has-results{stroke:#79efc3;stroke-width:1.25}
+.az-region.radar-hit{stroke:#c7ffe7;stroke-width:1.55;filter:drop-shadow(0 0 6px rgba(54,233,154,.58))}
+.az-region:hover,.az-region:focus,.az-region.selected{stroke:#e2ffff;stroke-width:2.2;filter:drop-shadow(0 0 7px rgba(111,244,235,.72))}
+.az-region.is-current-scan{fill:#22ba82;stroke:#e9fff7;stroke-width:2;animation:azCurrentDistrictPulse .9s ease-in-out infinite;filter:drop-shadow(0 0 10px rgba(72,255,184,.82))}
+@keyframes azCurrentDistrictPulse{0%,100%{fill:#14805f;filter:drop-shadow(0 0 3px rgba(72,255,184,.35))}50%{fill:#2bd895;filter:drop-shadow(0 0 12px rgba(72,255,184,.95))}}
+@media(max-width:640px){.is-radar-scanning .az-map-scan-beam{animation-duration:2.9s}.az-region{stroke-width:1.05}.az-region.selected{stroke-width:1.8}}

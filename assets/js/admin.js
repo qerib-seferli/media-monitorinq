@@ -1293,6 +1293,8 @@ function renderNetworkRadarIdle(){
       radarSetProgress(saved?.progress_percent??(conclusion==='success'?100:0),saved?.jobs_completed||0,saved?.jobs_total||0,networkRadarMaxFound,saved?.current_job||'Son tam internet axtarışı tamamlanıb',saved?.source_text||'',state,saved?.organization_hits||[]);
       const elapsed=document.querySelector('#radar-elapsed');
       if(elapsed)elapsed.textContent=radarTime(Number(saved?.duration_ms||0)||Math.max(0,Number(saved?.finished_at||Date.now())-networkRadarStartedAt));
+      // Ctrl+F5-dən sonra tamamlanmış skanın real telemetriyasını serverdən bir dəfə bərpa et.
+      setTimeout(()=>refreshCompletedRadarSnapshot(),0);
     }
   }
 }
@@ -1415,6 +1417,18 @@ function radarSetVisualRunning(running){
   card?.classList.toggle('is-scanning',running);visual?.classList.toggle('is-scanning',running);if(start)start.disabled=running;
 }
 function stopRadarTimers(){if(networkRadarTimer){clearInterval(networkRadarTimer);networkRadarTimer=null}if(networkRadarPollTimer){clearTimeout(networkRadarPollTimer);networkRadarPollTimer=null}stopRadarTerminal()}
+async function refreshCompletedRadarSnapshot(){
+  if(!networkRadarScanId)return;
+  const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_status',scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString()});
+  if(error||!data?.ok)return;
+  networkRadarMaxFound=Math.max(networkRadarMaxFound,Number(data.new_mentions||0));
+  if(Array.isArray(data.telemetry)&&data.telemetry.length)renderRadarTelemetry(data.telemetry);
+  radarFeedStatus(data);
+  const currentEvent=Array.isArray(data.telemetry)&&data.telemetry.length?data.telemetry[0]:null;
+  const saved=radarStorageRead()||{};
+  radarStorageWrite({...saved,scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString(),github_run_id:Number(data.github_run_id||networkRadarRunId||0),status:String(data.status||saved.status||''),conclusion:String(data.conclusion||saved.conclusion||''),max_found:networkRadarMaxFound,progress_percent:Number(data.progress_percent||saved.progress_percent||0),jobs_completed:Number(data.jobs_completed||saved.jobs_completed||0),jobs_total:Number(data.jobs_total||saved.jobs_total||0),organization_hits:data.organization_hits||saved.organization_hits||[],current_organization_id:currentEvent?.organization_id||saved.current_organization_id||null,current_organization:currentEvent?.organization||saved.current_organization||'',telemetry:data.telemetry||saved.telemetry||[]});
+}
+
 async function pollNetworkRadarStatus(){
   if(!networkRadarScanId)return;
   const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_status',scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString()});
@@ -1433,7 +1447,8 @@ async function pollNetworkRadarStatus(){
   const current=finished?(conclusion==='success'?'Tam internet axtarışı tamamlandı':conclusion==='cancelled'?'Skan dayandırıldı':'Tarama tamamlandı, bəzi bölmələr təkrar yoxlanmalıdır'):(data.current_job||'Serverdə növbə gözlənilir');
   const source=`${radarPlatformText(data.platforms||{})}${Number(data.organizations_with_new||0)?` • Nəticə tapılan təşkilat: ${Number(data.organizations_with_new||0)}`:''}`;
   radarSetProgress(data.progress_percent||0,data.jobs_completed||0,data.jobs_total||0,data.new_mentions||0,current,source,stateLabel,data.organization_hits||[]);radarFeedStatus(data);if(Array.isArray(data.telemetry)&&data.telemetry.length){stopRadarTerminal();renderRadarTelemetry(data.telemetry);}
-  radarStorageWrite({scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString(),github_run_id:networkRadarRunId,status,conclusion,html_url:data.html_url||null,max_found:networkRadarMaxFound,progress_percent:Number(data.progress_percent||0),jobs_completed:Number(data.jobs_completed||0),jobs_total:Number(data.jobs_total||0),current_job:readableRadarStage(current),source_text:source,organization_hits:data.organization_hits||[],duration_ms:Date.now()-networkRadarStartedAt,finished_at:finished?Date.now():null});
+  const currentEvent=Array.isArray(data.telemetry)&&data.telemetry.length?data.telemetry[0]:null;
+  radarStorageWrite({scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString(),github_run_id:networkRadarRunId,status,conclusion,html_url:data.html_url||null,max_found:networkRadarMaxFound,progress_percent:Number(data.progress_percent||0),jobs_completed:Number(data.jobs_completed||0),jobs_total:Number(data.jobs_total||0),current_job:readableRadarStage(current),current_organization_id:currentEvent?.organization_id||null,current_organization:currentEvent?.organization||'',source_text:source,organization_hits:data.organization_hits||[],telemetry:data.telemetry||[],duration_ms:Date.now()-networkRadarStartedAt,finished_at:finished?Date.now():null});
   if(finished){
     networkRadarRunning=false;radarSetVisualRunning(false);stopRadarTimers();const elapsed=document.querySelector('#radar-elapsed');if(elapsed)elapsed.textContent=radarTime(Date.now()-networkRadarStartedAt);await renderBardaStatus();
     if(conclusion==='success')toast(`Tam internet axtarışı tamamlandı. ${networkRadarMaxFound} yeni nəticə aşkarlanıb.`,'success');

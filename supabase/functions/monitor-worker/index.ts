@@ -146,6 +146,41 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (options.mode === 'radar_latest') {
+      currentStage = 'radar-latest';
+      try {
+        const cfg = githubRadarConfig();
+        if (!cfg.token) {
+          return json({ok:false,mode:'radar_latest',setup_required:true,missing_secret:'RADAR_GITHUB_TOKEN',error:'RADAR_GITHUB_TOKEN təyin edilməyib.'},200);
+        }
+        const runsResponse = await githubRadarRequest(
+          cfg,
+          `/repos/${cfg.repo}/actions/workflows/${encodeURIComponent(cfg.workflow)}/runs?event=workflow_dispatch&per_page=12`,
+          {method:'GET'}
+        );
+        if (!runsResponse.ok) {
+          const body=await runsResponse.text().catch(()=> '');
+          return json({ok:false,mode:'radar_latest',error:`GitHub run siyahısı alınmadı (${runsResponse.status}). ${body.slice(0,400)}`},200);
+        }
+        const runsJson:any=await runsResponse.json();
+        const runs=Array.isArray(runsJson?.workflow_runs)?runsJson.workflow_runs:[];
+        const latest=runs.find((r:any)=>String(r?.display_title||'').includes('radar-')) || runs[0] || null;
+        if(!latest) return json({ok:true,mode:'radar_latest',found:false},200);
+        const title=String(latest?.display_title||'');
+        const match=title.match(/(?:Tam\s+Radar\s*[•·-]\s*)?(radar-[A-Za-z0-9_-]+)/i);
+        const scanId=String(match?.[1]||'').trim();
+        return json({
+          ok:true,mode:'radar_latest',found:Boolean(scanId),scan_id:scanId||null,
+          github_run_id:Number(latest?.id||0),status:String(latest?.status||''),
+          conclusion:latest?.conclusion?String(latest.conclusion):null,
+          scan_started_at:latest?.created_at||null,updated_at:latest?.updated_at||null,
+          html_url:latest?.html_url||null
+        },200);
+      } catch (e) {
+        return json({ok:false,mode:'radar_latest',error:errorInfo(e).message},200);
+      }
+    }
+
     if (options.mode === 'radar_status') {
       currentStage = 'radar-status';
       try {

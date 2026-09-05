@@ -26,14 +26,20 @@ function platformLabel(v=''){
   return String(v||'Digər').trim()||'Digər';
 }
 async function invokeBackend(body){
-  let session=(await supabase.auth.getSession()).data?.session||null;
-  if(session?.expires_at && session.expires_at*1000-Date.now()<120000) session=(await supabase.auth.refreshSession()).data?.session||session;
-  const headers=session?.access_token?{Authorization:`Bearer ${session.access_token}`}:{ };
-  let result=await supabase.functions.invoke('monitor-worker',{body,headers});
-  const status=Number(result.error?.context?.status||result.error?.status||0);
+  const call=async(refresh=false)=>{
+    let session=(await supabase.auth.getSession()).data?.session||null;
+    if(refresh || (session?.expires_at && session.expires_at*1000-Date.now()<120000)) session=(await supabase.auth.refreshSession()).data?.session||session;
+    return supabase.functions.invoke('monitor-worker',{body,headers:session?.access_token?{Authorization:`Bearer ${session.access_token}`}:{}});
+  };
+  let result=await call(false).catch(error=>({data:null,error}));
+  let status=Number(result.error?.context?.status||result.error?.status||0);
   if(result.error&&(status===401||status===403||/jwt|unauthorized|forbidden/i.test(String(result.error?.message||'')))){
-    session=(await supabase.auth.refreshSession()).data?.session||null;
-    result=await supabase.functions.invoke('monitor-worker',{body,headers:session?.access_token?{Authorization:`Bearer ${session.access_token}`}:{}});
+    result=await call(true).catch(error=>({data:null,error}));
+  }
+  if(result.error && /failed to fetch|failed to send|network|cors|load failed/i.test(String(result.error?.message||''))){
+    await new Promise(r=>setTimeout(r,900));
+    result=await call(false).catch(error=>({data:null,error}));
+    if(result.error){await new Promise(r=>setTimeout(r,1500));result=await call(false).catch(error=>({data:null,error}));}
   }
   return result;
 }
@@ -130,11 +136,11 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   const orgsByDistrict=new Map();
   for(const o of orgs){const districtId=organizationMapDistrictId(o);if(!districtId)continue;const key=String(districtId);if(!orgsByDistrict.has(key))orgsByDistrict.set(key,[]);orgsByDistrict.get(key).push(o);}
 
-  root.innerHTML=`<div class="az-map-layout"><div class="az-map-stage"><div class="az-map-toolbar"><div><span class="eyebrow">Azərbaycan üzrə canlı monitorinq</span><h2>Ərazi Aktivlik Xəritəsi</h2><p>Rayonun üzərinə gəl və ya toxun — təşkilatlar və mənbə nəticələri açılacaq.</p></div>${allowScan?'<button class="btn az-map-scan" type="button" data-map-scan>Tam şəbəkəni skan et</button>':''}</div><div class="az-map-kpis" data-map-kpis></div><div class="az-map-svg-wrap">${createSvg(geo)}<div class="az-map-tooltip" data-map-tooltip hidden></div></div><div class="az-map-legend"><span><i class="idle"></i>Nəticə yoxdur</span><span><i class="has"></i>Nəticə var</span><span><i class="live"></i>Son skanda yeni nəticə</span></div><small class="az-map-credit">İnzibati sərhəd məlumatı: GADM 3.6 xəritə datası (GitHub mirror).</small></div><aside class="az-map-detail" data-map-detail><div class="az-map-detail-empty"><strong>Rayon seçin</strong><span>Təşkilatların tam adları və mənbə sayları burada göstəriləcək.</span></div></aside></div>`;
+  root.innerHTML=`<div class="az-map-layout"><div class="az-map-stage"><div class="az-map-toolbar"><div><span class="eyebrow">Azərbaycan üzrə canlı monitorinq</span><h2>Ərazi Aktivlik Xəritəsi</h2><p>Rayonun üzərinə gəl və ya toxun — təşkilatlar və mənbə nəticələri açılacaq.</p></div>${allowScan?'<button class="btn az-map-scan" type="button" data-map-scan>Tam şəbəkəni skan et</button>':''}</div><div class="az-map-kpis" data-map-kpis></div><div class="az-map-svg-wrap"><div class="az-map-scan-beam" aria-hidden="true"></div>${createSvg(geo)}<div class="az-map-tooltip" data-map-tooltip hidden></div></div><div class="az-map-legend"><span><i class="idle"></i>Nəticə yoxdur</span><span><i class="has"></i>Nəticə var</span><span><i class="live"></i>Son skanda yeni nəticə</span></div><small class="az-map-credit">İnzibati sərhəd məlumatı: GADM 3.6 xəritə datası (GitHub mirror).</small></div><aside class="az-map-detail" data-map-detail><div class="az-map-detail-empty"><strong>Rayon seçin</strong><span>Təşkilatların tam adları və mənbə sayları burada göstəriləcək.</span></div></aside></div>`;
 
   const paths=[...root.querySelectorAll('.az-region')];
   const tooltip=root.querySelector('[data-map-tooltip]'),detail=root.querySelector('[data-map-detail]'),kpis=root.querySelector('[data-map-kpis]'),scanBtn=root.querySelector('[data-map-scan]');
-  let selectedPath=null,pollTimer=null;
+  let selectedPath=null,pollTimer=null,serverSyncTimer=null;
 
   function districtInfo(path){
     const mapName=path?.dataset?.mapName||'';const district=districtByNorm.get(normName(mapName));
@@ -160,12 +166,16 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   }
   function refreshVisuals(){
     const saved=radarRead();const hits=radarHitsByDistrict(saved,orgs);const running=Boolean(saved?.scan_id&&!radarFinished(saved));
+    const currentOrgId=String(saved?.current_organization_id||'');
+    const currentOrg=currentOrgId?orgs.find(o=>String(o.id)===currentOrgId):null;
+    const currentDistrictId=currentOrg?String(organizationMapDistrictId(currentOrg)||''):'';
+    root.classList.toggle('is-radar-scanning',running);
     let activeDistricts=0;
     const allResults=orgs.reduce((sum,o)=>sum+orgSources(o).reduce((s,[,n])=>s+n,0),0);
     const unlocated=orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status)&&!organizationMapDistrictId(o)).length;
     for(const path of paths){
       const {district,rows}=districtInfo(path);const total=rows.reduce((sum,o)=>sum+orgSources(o).reduce((s,[,n])=>s+n,0),0);
-      const hit=district?Number(hits.get(String(district.id))||0):0;path.classList.toggle('has-results',total>0);path.classList.toggle('radar-hit',hit>0);path.classList.toggle('is-scanning',running&&hit>0);if(total>0)activeDistricts++;
+      const hit=district?Number(hits.get(String(district.id))||0):0;path.classList.toggle('has-results',total>0);path.classList.toggle('radar-hit',hit>0);path.classList.toggle('is-scanning',running&&hit>0);path.classList.toggle('is-current-scan',running&&district&&String(district.id)===currentDistrictId);if(total>0)activeDistricts++;
     }
     if(kpis)kpis.innerHTML=`<span><b>${districts.length}</b><small>Ərazi</small></span><span><b>${orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status)).length}</b><small>Aktiv təşkilat</small></span><span><b>${activeDistricts}</b><small>Nəticəli ərazi</small></span><span><b>${allResults}</b><small>Yüklənən nəticə</small></span><span class="${unlocated?'needs-location':''}"><b>${unlocated}</b><small>Yerləşməsi yoxdur</small></span>`;
     if(scanBtn){scanBtn.disabled=running;scanBtn.textContent=running?`Şəbəkə skan edilir${saved?.progress_percent!=null?` · ${Math.round(Number(saved.progress_percent)||0)}%`:''}`:'Tam şəbəkəni skan et';}
@@ -182,14 +192,40 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
     const {data:status,error}=await invokeBackend({mode:'radar_status',scan_id:saved.scan_id,scan_started_at:saved.scan_started_at});
     if(!error&&status){
       const conclusion=String(status.conclusion||'');const finished=String(status.status||'')==='completed'||['success','failure','cancelled'].includes(conclusion);
-      radarWrite({...saved,github_run_id:Number(status.github_run_id||saved.github_run_id||0),status:String(status.status||saved.status||''),conclusion,progress_percent:Number(status.progress_percent||0),jobs_completed:Number(status.jobs_completed||0),jobs_total:Number(status.jobs_total||0),max_found:Math.max(Number(saved.max_found||0),Number(status.new_mentions||0)),organization_hits:status.organization_hits||saved.organization_hits||[],current_job:status.current_job||saved.current_job||'',source_text:saved.source_text||'',finished_at:finished?Date.now():null});
+      const currentEvent=Array.isArray(status.telemetry)&&status.telemetry.length?status.telemetry[0]:null;
+      radarWrite({...saved,github_run_id:Number(status.github_run_id||saved.github_run_id||0),status:String(status.status||saved.status||''),conclusion,progress_percent:Number(status.progress_percent||0),jobs_completed:Number(status.jobs_completed||0),jobs_total:Number(status.jobs_total||0),max_found:Math.max(Number(saved.max_found||0),Number(status.new_mentions||0)),organization_hits:status.organization_hits||saved.organization_hits||[],current_job:status.current_job||saved.current_job||'',current_organization_id:currentEvent?.organization_id||saved.current_organization_id||null,current_organization:currentEvent?.organization||saved.current_organization||'',source_text:saved.source_text||'',finished_at:finished?Date.now():null});
       refreshVisuals();
     }
-    if(!radarFinished(radarRead()))pollTimer=setTimeout(pollRadar,65000);
+    if(!radarFinished(radarRead())){if(pollTimer)clearTimeout(pollTimer);pollTimer=setTimeout(pollRadar,65000);}
+  }
+
+  async function syncLatestRadar({announce=false}={}){
+    const {data:latest,error}=await invokeBackend({mode:'radar_latest'});
+    if(error||!latest?.ok||!latest?.found||!latest?.scan_id)return {active:false,error:error||null};
+    const local=radarRead();
+    const latestStarted=new Date(latest.scan_started_at||0).getTime()||0;
+    const localStarted=new Date(local?.scan_started_at||0).getTime()||0;
+    const latestActive=!['completed'].includes(String(latest.status||''))&&!['success','failure','cancelled'].includes(String(latest.conclusion||''));
+    if(!local?.scan_id || String(local.scan_id)!==String(latest.scan_id) || latestStarted>=localStarted){
+      radarWrite({...(String(local?.scan_id)===String(latest.scan_id)?local:{}),scan_id:String(latest.scan_id),scan_started_at:latest.scan_started_at||new Date().toISOString(),github_run_id:Number(latest.github_run_id||0),status:String(latest.status||'waiting'),conclusion:String(latest.conclusion||''),max_found:String(local?.scan_id)===String(latest.scan_id)?Number(local?.max_found||0):0,progress_percent:String(local?.scan_id)===String(latest.scan_id)?Number(local?.progress_percent||0):0,organization_hits:String(local?.scan_id)===String(latest.scan_id)?(local?.organization_hits||[]):[]});
+      refreshVisuals();
+      const {data:status}=await invokeBackend({mode:'radar_status',scan_id:String(latest.scan_id),scan_started_at:latest.scan_started_at||new Date().toISOString()});
+      if(status?.ok){
+        const currentSaved=radarRead()||{};const conclusion=String(status.conclusion||latest.conclusion||'');
+        const finished=String(status.status||latest.status||'')==='completed'||['success','failure','cancelled'].includes(conclusion);
+        const currentEvent=Array.isArray(status.telemetry)&&status.telemetry.length?status.telemetry[0]:null;
+        radarWrite({...currentSaved,status:String(status.status||latest.status||currentSaved.status||''),conclusion,progress_percent:Number(status.progress_percent||0),jobs_completed:Number(status.jobs_completed||0),jobs_total:Number(status.jobs_total||0),max_found:Math.max(Number(currentSaved.max_found||0),Number(status.new_mentions||0)),organization_hits:status.organization_hits||currentSaved.organization_hits||[],current_job:status.current_job||currentSaved.current_job||'',current_organization_id:currentEvent?.organization_id||currentSaved.current_organization_id||null,current_organization:currentEvent?.organization||currentSaved.current_organization||'',finished_at:finished?(currentSaved.finished_at||Date.now()):null});
+        refreshVisuals();
+      }
+      if(latestActive&&!radarFinished(radarRead())){if(pollTimer)clearTimeout(pollTimer);pollTimer=setTimeout(pollRadar,65000);}
+    }
+    if(announce&&latestActive)toast('Tam şəbəkə skanı artıq sistemdə işləyir. Cari skanın vəziyyəti xəritədə göstərilir.','info');
+    return {active:latestActive,latest};
   }
 
   if(scanBtn){scanBtn.addEventListener('click',async()=>{
-    const current=radarRead();if(current?.scan_id&&!radarFinished(current))return pollRadar();
+    const current=radarRead();if(current?.scan_id&&!radarFinished(current)){toast('Tam şəbəkə skanı artıq işləyir. Cari skanın vəziyyəti xəritədə göstərilir.','info');return pollRadar();}
+    const shared=await syncLatestRadar({announce:true});if(shared.active)return;
     const active=orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status));
     const ok=await confirmDialog({title:'Tam internet axtarışı başlasın?',message:`${active.length} aktiv təşkilat üzrə qlobal radar skanı başladılacaq. Proses səhifə bağlansa da serverdə davam edəcək.`,confirmText:'Bəli, tam skanı başlat',cancelText:'Xeyr'});if(!ok)return;
     scanBtn.disabled=true;scanBtn.textContent='Skan başladılır…';const scanId=`radar-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
@@ -201,6 +237,8 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
 
   refreshVisuals();
   const saved=radarRead();if(saved?.scan_id&&!radarFinished(saved))pollRadar();
+  syncLatestRadar().catch(()=>{});
+  serverSyncTimer=setInterval(()=>syncLatestRadar().catch(()=>{}),60000);
   window.addEventListener('storage',e=>{if(e.key===RADAR_KEY)refreshVisuals();});
-  return {refreshRadar:refreshVisuals,refreshData:()=>initAzerbaijanMonitoringMap({rootId,profile,allowScan})};
+  return {refreshRadar:refreshVisuals,refreshData:()=>initAzerbaijanMonitoringMap({rootId,profile,allowScan}),destroy:()=>{if(pollTimer)clearTimeout(pollTimer);if(serverSyncTimer)clearInterval(serverSyncTimer);}};
 }
