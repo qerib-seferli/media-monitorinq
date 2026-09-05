@@ -1859,3 +1859,45 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 @media(max-width:880px){
   .radar-terminal-panel>.radar-terminal{height:190px;max-height:190px;min-height:0}
 }
+
+/* 2026-09-05 — faktiki söz bankı paneli: boşluğu məzmunla doldur, ümumi hündürlüyü böyütmə */
+.radar-feed-panel{
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+.radar-feed-panel>.radar-feed-title{
+  flex:0 0 auto;
+}
+.radar-feed-panel>.radar-feed-compact{
+  flex:0 0 auto;
+}
+.radar-feed-panel>.radar-keyword-flow{
+  flex:1 1 auto;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
+.radar-keyword-flow>.radar-keyword-head{
+  flex:0 0 auto;
+}
+.radar-keyword-flow>.radar-keyword-columns{
+  flex:1 1 auto;
+  min-height:0;
+}
+.radar-keyword-columns>section{
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+.radar-keyword-list{
+  flex:1 1 auto;
+  height:auto;
+  min-height:116px;
+}
+@media(max-width:880px){
+  .radar-keyword-list{min-height:106px}
+}
+@media(max-width:430px){
+  .radar-keyword-list{min-height:86px}
+}
