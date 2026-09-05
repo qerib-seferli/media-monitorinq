@@ -86,7 +86,7 @@ function createSvg(geo){
 
 async function loadMapData(){
   const [orgRes,distRes]=await Promise.all([
-    supabase.from('organizations').select('id,name,short_name,service_status,district_id,districts(name)').order('name'),
+    supabase.from('organizations').select('*').order('name'),
     supabase.from('districts').select('id,name').order('name')
   ]);
   if(orgRes.error)throw orgRes.error;if(distRes.error)throw distRes.error;
@@ -105,12 +105,16 @@ async function loadMapData(){
   return {orgs,districts,counts,latest};
 }
 
+function organizationMapDistrictId(org){
+  return org?.location_district_id || org?.district_id || null;
+}
+
 function radarHitsByDistrict(saved,orgs){
   const out=new Map();
   const byId=new Map(orgs.map(o=>[String(o.id),o]));
   for(const hit of saved?.organization_hits||[]){
-    const org=byId.get(String(hit.organization_id));if(!org?.district_id)continue;
-    out.set(String(org.district_id),(out.get(String(org.district_id))||0)+Number(hit.count||0));
+    const org=byId.get(String(hit.organization_id));const districtId=organizationMapDistrictId(org);if(!districtId)continue;
+    out.set(String(districtId),(out.get(String(districtId))||0)+Number(hit.count||0));
   }
   return out;
 }
@@ -124,7 +128,7 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   const {orgs,districts,counts,latest}=data;
   const districtByNorm=new Map(districts.map(d=>[normName(d.name),d]));
   const orgsByDistrict=new Map();
-  for(const o of orgs){if(!o.district_id)continue;const key=String(o.district_id);if(!orgsByDistrict.has(key))orgsByDistrict.set(key,[]);orgsByDistrict.get(key).push(o);}
+  for(const o of orgs){const districtId=organizationMapDistrictId(o);if(!districtId)continue;const key=String(districtId);if(!orgsByDistrict.has(key))orgsByDistrict.set(key,[]);orgsByDistrict.get(key).push(o);}
 
   root.innerHTML=`<div class="az-map-layout"><div class="az-map-stage"><div class="az-map-toolbar"><div><span class="eyebrow">Azərbaycan üzrə canlı monitorinq</span><h2>Ərazi Aktivlik Xəritəsi</h2><p>Rayonun üzərinə gəl və ya toxun — təşkilatlar və mənbə nəticələri açılacaq.</p></div>${allowScan?'<button class="btn az-map-scan" type="button" data-map-scan>Tam şəbəkəni skan et</button>':''}</div><div class="az-map-kpis" data-map-kpis></div><div class="az-map-svg-wrap">${createSvg(geo)}<div class="az-map-tooltip" data-map-tooltip hidden></div></div><div class="az-map-legend"><span><i class="idle"></i>Nəticə yoxdur</span><span><i class="has"></i>Nəticə var</span><span><i class="live"></i>Son skanda yeni nəticə</span></div><small class="az-map-credit">İnzibati sərhəd məlumatı: GADM 3.6 xəritə datası (GitHub mirror).</small></div><aside class="az-map-detail" data-map-detail><div class="az-map-detail-empty"><strong>Rayon seçin</strong><span>Təşkilatların tam adları və mənbə sayları burada göstəriləcək.</span></div></aside></div>`;
 
@@ -146,7 +150,7 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
     const {mapName,district,rows}=districtInfo(path);if(!detail)return;
     const saved=radarRead(),hitMap=radarHitsByDistrict(saved,orgs),hit=district?Number(hitMap.get(String(district.id))||0):0;
     const total=rows.reduce((sum,o)=>sum+orgSources(o).reduce((s,[,n])=>s+n,0),0);
-    detail.innerHTML=`<div class="az-map-detail-head"><div><span class="eyebrow">Seçilən ərazi</span><h3>${escapeHtml(district?.name||mapName||'Ərazi')}</h3><p>${rows.length} təşkilat · ${total} məlumat${hit?` · <b>son skanda +${hit}</b>`:''}</p></div></div><div class="az-org-list">${rows.length?rows.map(o=>`<article class="az-org-row"><div class="az-org-title"><strong>${escapeHtml(o.name||o.short_name||'Təşkilat')}</strong>${o.service_status&&!ACTIVE_STATUSES.has(o.service_status)?`<small>${escapeHtml(o.service_status)}</small>`:''}</div><div class="az-source-chips">${orgSources(o).map(([name,n])=>`<span class="az-source-chip${n?' has-result':''}">${escapeHtml(name)} · ${n}</span>`).join('')}</div><small class="az-org-last">Son aşkarlanma: ${escapeHtml(fmtDate(latest.get(o.id)))}</small></article>`).join(''):'<div class="empty compact">Bu əraziyə bazada təşkilat bağlanmayıb.</div>'}</div>`;
+    detail.innerHTML=`<div class="az-map-detail-head"><div><span class="eyebrow">Seçilən ərazi</span><h3>${escapeHtml(district?.name||mapName||'Ərazi')}</h3><p>${rows.length} təşkilat · ${total} məlumat${hit?` · <b>son skanda +${hit}</b>`:''}</p></div></div><div class="az-org-list">${rows.length?rows.map(o=>`<article class="az-org-row"><div class="az-org-title"><strong>${escapeHtml(o.name||o.short_name||'Təşkilat')}</strong>${o.service_status&&!ACTIVE_STATUSES.has(o.service_status)?`<small>${escapeHtml(o.service_status)}</small>`:''}</div><small class="az-org-address">${escapeHtml(o.address_text || 'Rəsmi ünvan bazaya daxil edilməyib')}</small><div class="az-source-chips">${orgSources(o).map(([name,n])=>`<span class="az-source-chip${n?' has-result':''}">${escapeHtml(name)} · ${n}</span>`).join('')}</div><small class="az-org-last">Son aşkarlanma: ${escapeHtml(fmtDate(latest.get(o.id)))}</small></article>`).join(''):'<div class="empty compact">Bu əraziyə bazada təşkilat bağlanmayıb.</div>'}</div>`;
   }
   function showTooltip(path,event){
     if(!tooltip)return;const {mapName,district,rows}=districtInfo(path);const saved=radarRead(),hits=radarHitsByDistrict(saved,orgs),hit=district?hits.get(String(district.id))||0:0;
@@ -156,12 +160,14 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   }
   function refreshVisuals(){
     const saved=radarRead();const hits=radarHitsByDistrict(saved,orgs);const running=Boolean(saved?.scan_id&&!radarFinished(saved));
-    let activeDistricts=0,totalResults=0;
+    let activeDistricts=0;
+    const allResults=orgs.reduce((sum,o)=>sum+orgSources(o).reduce((s,[,n])=>s+n,0),0);
+    const unlocated=orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status)&&!organizationMapDistrictId(o)).length;
     for(const path of paths){
-      const {district,rows}=districtInfo(path);const total=rows.reduce((sum,o)=>sum+orgSources(o).reduce((s,[,n])=>s+n,0),0);totalResults+=total;
+      const {district,rows}=districtInfo(path);const total=rows.reduce((sum,o)=>sum+orgSources(o).reduce((s,[,n])=>s+n,0),0);
       const hit=district?Number(hits.get(String(district.id))||0):0;path.classList.toggle('has-results',total>0);path.classList.toggle('radar-hit',hit>0);path.classList.toggle('is-scanning',running&&hit>0);if(total>0)activeDistricts++;
     }
-    if(kpis)kpis.innerHTML=`<span><b>${districts.length}</b><small>Ərazi</small></span><span><b>${orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status)).length}</b><small>Aktiv təşkilat</small></span><span><b>${activeDistricts}</b><small>Nəticəli ərazi</small></span><span><b>${totalResults}</b><small>Yüklənən nəticə</small></span>`;
+    if(kpis)kpis.innerHTML=`<span><b>${districts.length}</b><small>Ərazi</small></span><span><b>${orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status)).length}</b><small>Aktiv təşkilat</small></span><span><b>${activeDistricts}</b><small>Nəticəli ərazi</small></span><span><b>${allResults}</b><small>Yüklənən nəticə</small></span><span class="${unlocated?'needs-location':''}"><b>${unlocated}</b><small>Yerləşməsi yoxdur</small></span>`;
     if(scanBtn){scanBtn.disabled=running;scanBtn.textContent=running?`Şəbəkə skan edilir${saved?.progress_percent!=null?` · ${Math.round(Number(saved.progress_percent)||0)}%`:''}`:'Tam şəbəkəni skan et';}
     if(selectedPath)renderDetail(selectedPath);
   }
