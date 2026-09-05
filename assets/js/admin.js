@@ -1247,6 +1247,7 @@ let networkRadarTransientErrors=0;
 let networkRadarLastOrgCounts={};
 let networkRadarTerminalTimer=null;
 let networkRadarTerminalIndex=0;
+let networkRadarLastTelemetryAt=0;
 let bardaStatusRenderSeq=0;
 let adminAzerbaijanMap=null;
 
@@ -1317,7 +1318,7 @@ const RADAR_BLIP_SLOTS=(()=>{
   return slots;
 })();
 const RADAR_SEARCH_SLOTS=(()=>{
-  const slots=[];for(let i=0;i<12;i++){const a=(-90+i*30)*Math.PI/180;const r=i%2?34:42;slots.push({left:50+Math.cos(a)*r,top:50+Math.sin(a)*r,delay:(i*.17).toFixed(2)});}return slots;
+  const slots=[];for(let i=0;i<7;i++){const a=(-90+i*(360/7))*Math.PI/180;const r=i%2?33:41;slots.push({left:50+Math.cos(a)*r,top:50+Math.sin(a)*r,delay:(i*.24).toFixed(2)});}return slots;
 })();
 let networkRadarBlipSlots={};
 function resetRadarBlipSlots(){networkRadarBlipSlots={};}
@@ -1363,6 +1364,7 @@ function renderRadarTelemetry(events=[]){
   const box=document.querySelector('#radar-terminal'); if(!box)return;
   const rows=Array.isArray(events)?events:[];
   if(!rows.length)return;
+  networkRadarLastTelemetryAt=Date.now();
   box.innerHTML=rows.slice(0,24).map((event,i)=>{
     const at=event.created_at?new Date(event.created_at):null;
     const tm=at&&!Number.isNaN(at.getTime())?at.toLocaleTimeString('az-AZ',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'--:--:--';
@@ -1387,8 +1389,19 @@ function radarTerminalSample(){
   box.prepend(line); while(box.children.length>18)box.lastElementChild?.remove();
 }
 function startRadarTerminal(){
-  stopRadarTerminal(); networkRadarTerminalIndex=0; const box=document.querySelector('#radar-terminal'); if(box)box.innerHTML='';
-  radarTerminalSample(); networkRadarTerminalTimer=setInterval(radarTerminalSample,1100);
+  stopRadarTerminal(); networkRadarTerminalIndex=0; networkRadarLastTelemetryAt=Date.now(); const box=document.querySelector('#radar-terminal'); if(box)box.innerHTML='';
+  radarTerminalSample();
+  networkRadarTerminalTimer=setInterval(()=>{
+    if(!networkRadarRunning)return;
+    const box=document.querySelector('#radar-terminal');if(!box)return;
+    const age=Date.now()-networkRadarLastTelemetryAt;
+    if(age<12000)return;
+    const now=new Date().toLocaleTimeString('az-AZ',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const line=document.createElement('div');line.className='radar-terminal-line muted live-heartbeat';
+    line.innerHTML=`<span class="terminal-time">${escapeHtml(now)}</span><span class="terminal-prompt">›</span><div><strong>Canlı server bağlantısı aktivdir</strong><small>Radar prosesi davam edir • yeni əməliyyat hadisəsi gözlənilir.</small></div>`;
+    box.prepend(line);while(box.children.length>24)box.lastElementChild?.remove();
+    networkRadarLastTelemetryAt=Date.now()-7000;
+  },5000);
 }
 function stopRadarTerminal(){if(networkRadarTerminalTimer){clearInterval(networkRadarTerminalTimer);networkRadarTerminalTimer=null;}}
 
@@ -1437,7 +1450,7 @@ async function pollNetworkRadarStatus(){
     const msg=String(data?.error||error?.message||'');
     if(/RADAR_GITHUB_TOKEN/i.test(msg)){networkRadarRunning=false;radarSetVisualRunning(false);stopRadarTimers();toast('Radar üçün server icazəsi tamamlanmayıb.','error');return;}
     // Müvəqqəti 403/CORS/520 sorğusu serverdə gedən taramanı dayandırmır.
-    const delay=Math.min(150000,60000+networkRadarTransientErrors*15000);
+    const delay=Math.min(90000,30000+networkRadarTransientErrors*12000);
     networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,delay);return;
   }
   networkRadarTransientErrors=0;
@@ -1446,7 +1459,7 @@ async function pollNetworkRadarStatus(){
   const stateLabel=finished?(conclusion==='success'?'Tamamlandı':conclusion==='cancelled'?'Dayandırıldı':'Yoxlama bitdi'):status==='queued'||status==='waiting'?'Növbədə':'Skan edilir';
   const current=finished?(conclusion==='success'?'Tam internet axtarışı tamamlandı':conclusion==='cancelled'?'Skan dayandırıldı':'Tarama tamamlandı, bəzi bölmələr təkrar yoxlanmalıdır'):(data.current_job||'Serverdə növbə gözlənilir');
   const source=`${radarPlatformText(data.platforms||{})}${Number(data.organizations_with_new||0)?` • Nəticə tapılan təşkilat: ${Number(data.organizations_with_new||0)}`:''}`;
-  radarSetProgress(data.progress_percent||0,data.jobs_completed||0,data.jobs_total||0,data.new_mentions||0,current,source,stateLabel,data.organization_hits||[]);radarFeedStatus(data);if(Array.isArray(data.telemetry)&&data.telemetry.length){stopRadarTerminal();renderRadarTelemetry(data.telemetry);}
+  radarSetProgress(data.progress_percent||0,data.jobs_completed||0,data.jobs_total||0,data.new_mentions||0,current,source,stateLabel,data.organization_hits||[]);radarFeedStatus(data);if(Array.isArray(data.telemetry)&&data.telemetry.length){renderRadarTelemetry(data.telemetry);}
   const currentEvent=Array.isArray(data.telemetry)&&data.telemetry.length?data.telemetry[0]:null;
   radarStorageWrite({scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString(),github_run_id:networkRadarRunId,status,conclusion,html_url:data.html_url||null,max_found:networkRadarMaxFound,progress_percent:Number(data.progress_percent||0),jobs_completed:Number(data.jobs_completed||0),jobs_total:Number(data.jobs_total||0),current_job:readableRadarStage(current),current_organization_id:currentEvent?.organization_id||null,current_organization:currentEvent?.organization||'',source_text:source,organization_hits:data.organization_hits||[],telemetry:data.telemetry||[],duration_ms:Date.now()-networkRadarStartedAt,finished_at:finished?Date.now():null});
   if(finished){
@@ -1456,7 +1469,7 @@ async function pollNetworkRadarStatus(){
     else toast(`Tam tarama bitdi. ${Number(data.jobs_failed||0)} bölmədə texniki xəbərdarlıq qeydə alındı.`,'info');
     return;
   }
-  networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,65000);
+  networkRadarPollTimer=setTimeout(pollNetworkRadarStatus,35000);
 }
 function startRadarPolling(resume=false){
   if(!networkRadarScanId)return;networkRadarRunning=true;radarSetVisualRunning(true);
@@ -1465,8 +1478,22 @@ function startRadarPolling(resume=false){
   startRadarTerminal();
   pollNetworkRadarStatus();
 }
+async function syncLatestNetworkRadar({announce=false}={}){
+  const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_latest'});
+  if(error||!data?.ok||!data?.found||!data?.scan_id)return {active:false,error:error||null};
+  const status=String(data.status||''),conclusion=String(data.conclusion||'');
+  const active=status!=='completed'&&!['success','failure','cancelled'].includes(conclusion);
+  if(active){
+    networkRadarScanId=String(data.scan_id);networkRadarRunId=Number(data.github_run_id||0);networkRadarStartedAt=new Date(data.scan_started_at||Date.now()).getTime()||Date.now();
+    radarStorageWrite({...(radarStorageRead()||{}),scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt).toISOString(),github_run_id:networkRadarRunId,status:status||'queued',conclusion:''});
+    if(!networkRadarRunning)startRadarPolling(true);else radarSetVisualRunning(true);
+    if(announce)toast('Tam şəbəkə skanı artıq sistemdə işləyir. Cari skan tamamlandıqdan sonra düymə yenidən aktiv olacaq.','info');
+  }
+  return {active,data,error:null};
+}
 async function runNetworkRadarScan(){
   if(networkRadarRunning)return;
+  const shared=await syncLatestNetworkRadar({announce:true});if(shared.active)return;
   const active=sortedOrganizations(orgs).filter(o=>['active','grace'].includes(o.service_status));if(!active.length)return toast('Skan ediləcək aktiv təşkilat yoxdur.','error');
   const ok=await confirmDialog({title:'Tam internet axtarışı başlasın?',message:`${active.length} aktiv təşkilat üzrə video platformaları, xəbər mənbələri, RSS, birbaşa saytlar və tarixi arxiv mərhələli şəkildə yoxlanacaq. Proses bir neçə saat çəkə bilər və səhifəni bağlasanız da serverdə davam edəcək.`,confirmText:'Bəli, tam skanı başlat',cancelText:'Xeyr'});if(!ok)return;
   const scanId=`radar-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;radarSetVisualRunning(true);
@@ -1570,4 +1597,5 @@ document.querySelector('#run-monitor').onclick = runMonitorNow;
 
 await refresh();
 adminAzerbaijanMap=await initAzerbaijanMonitoringMap({rootId:'admin-azerbaijan-live-map',profile:ctx.profile,allowScan:false});
+await syncLatestNetworkRadar().catch(()=>({active:false}));
 route();

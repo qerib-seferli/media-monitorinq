@@ -77,15 +77,19 @@ Deno.serve(async (req) => {
       const user = authResult?.data?.user || null;
       if (!user) return json({ok:false,run_id:runId,stage:currentStage,error:'İcazəsiz monitor sorğusu'},403);
 
-      const profileResult:any = await admin.from('profiles').select('system_role,is_active,organization_id').or(`auth_user_id.eq.${user.id},id.eq.${user.id}`).limit(1).maybeSingle();
+      const profileResult:any = await admin.from('profiles').select('system_role,is_active,organization_id,access_scope').or(`auth_user_id.eq.${user.id},id.eq.${user.id}`).limit(1).maybeSingle();
       if (profileResult?.error) return json({ok:false,run_id:runId,stage:currentStage,error:errorInfo(profileResult.error).message},403);
       const profile = profileResult?.data || null;
       if (!profile?.is_active) return json({ok:false,run_id:runId,stage:currentStage,error:'Hesab aktiv deyil'},403);
       if (profile.system_role !== 'super_admin') {
-        if (!options.quick_youtube_comments || !profile.organization_id) {
-          return json({ok:false,run_id:runId,stage:currentStage,error:'Bu monitor sorğusu üçün icazə yoxdur'},403);
+        const radarMode = ['radar_dispatch','radar_latest','radar_status','radar_cancel'].includes(String(options.mode||''));
+        const centralRadarAccess = profile.access_scope === 'all' && radarMode;
+        if (!centralRadarAccess) {
+          if (!options.quick_youtube_comments || !profile.organization_id) {
+            return json({ok:false,run_id:runId,stage:currentStage,error:'Bu monitor sorğusu üçün icazə yoxdur'},403);
+          }
+          callerOrganizationId = String(profile.organization_id);
         }
-        callerOrganizationId = String(profile.organization_id);
       }
     }
 
