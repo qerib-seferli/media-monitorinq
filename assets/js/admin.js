@@ -1249,6 +1249,9 @@ let networkRadarTerminalTimer=null;
 let networkRadarTerminalIndex=0;
 let networkRadarLastTelemetryAt=0;
 let networkRadarTelemetryPollTimer=null;
+let networkRadarKeywordFlowTimer=null;
+let networkRadarKeywordFlowOffset=0;
+let networkRadarKeywordFlowEvents=[];
 let bardaStatusRenderSeq=0;
 let adminAzerbaijanMap=null;
 
@@ -1361,11 +1364,74 @@ function radarSetProgress(pct,jobsDone,jobsTotal,found,current='',source='',stat
 function radarStageLabel(stage=''){
   return ({youtube:'YouTube video və şərhlər',web_recent:'Yeni dövr Web axtarışı',web_archive:'Tarixi arxiv Web axtarışı',ai:'AI ələk və söz bankı'})[String(stage)]||String(stage||'Monitorinq');
 }
+function radarKeywordFlowOrgId(event={}){
+  const direct=String(event?.organization_id||'').trim();
+  if(direct)return direct;
+  const name=String(event?.organization||'').trim().toLocaleLowerCase('az-AZ');
+  if(!name)return '';
+  const found=orgs.find(o=>[o?.name,o?.short_name].some(v=>String(v||'').trim().toLocaleLowerCase('az-AZ')===name));
+  return String(found?.id||'');
+}
+function radarKeywordFlowRows(kind='positive',event={}){
+  const orgId=radarKeywordFlowOrgId(event);
+  const seen=new Set();
+  const rows=[];
+  for(const row of allKeywordRows){
+    if(keywordBucket(row)!==kind)continue;
+    const rowOrg=String(row?.organization_id||'');
+    if(rowOrg && rowOrg!==orgId)continue;
+    const value=String(row?.value||'').trim(); if(!value)continue;
+    const key=value.toLocaleLowerCase('az-AZ'); if(seen.has(key))continue;
+    seen.add(key); rows.push({value,scope:rowOrg?'Təşkilat':'Qlobal'});
+  }
+  return rows;
+}
+function renderRadarKeywordFlow(events=networkRadarKeywordFlowEvents){
+  const positiveBox=document.querySelector('#radar-keyword-positive');
+  const excludeBox=document.querySelector('#radar-keyword-exclude');
+  if(!positiveBox||!excludeBox)return;
+  const list=Array.isArray(events)?events:[];
+  const current=list[0]||{};
+  const currentOrgId=radarKeywordFlowOrgId(current);
+  const sameOrg=list.filter(e=>!currentOrgId||radarKeywordFlowOrgId(e)===currentOrgId);
+  const checkedPositive=new Set(sameOrg.map(e=>String(e?.include_term||'').trim().toLocaleLowerCase('az-AZ')).filter(Boolean));
+  const checkedExclude=new Set(sameOrg.map(e=>String(e?.exclude_term||'').trim().toLocaleLowerCase('az-AZ')).filter(Boolean));
+  const positives=radarKeywordFlowRows('positive',current);
+  const excludes=radarKeywordFlowRows('exclude',current);
+  const pc=document.querySelector('#radar-keyword-positive-count'); if(pc)pc.textContent=String(positives.length);
+  const ec=document.querySelector('#radar-keyword-exclude-count'); if(ec)ec.textContent=String(excludes.length);
+  const draw=(box,rows,checked,type)=>{
+    if(!rows.length){box.innerHTML='<div class="empty compact">Uyğun söz yoxdur.</div>';return;}
+    const take=Math.min(5,rows.length), start=networkRadarKeywordFlowOffset%rows.length;
+    const visible=[]; for(let i=0;i<take;i++)visible.push(rows[(start+i)%rows.length]);
+    box.innerHTML=visible.map((row,i)=>{
+      const done=checked.has(row.value.toLocaleLowerCase('az-AZ'));
+      return `<div class="radar-keyword-row ${type}${done?' checked':''}${i===0?' current':''}"><span>${done?'✅':'•'}</span><strong>${escapeHtml(row.value)}</strong><small>${escapeHtml(row.scope)}</small></div>`;
+    }).join('');
+  };
+  draw(positiveBox,positives,checkedPositive,'positive');
+  draw(excludeBox,excludes,checkedExclude,'exclude');
+}
+function startRadarKeywordFlow(events=[]){
+  networkRadarKeywordFlowEvents=Array.isArray(events)?events:[];
+  renderRadarKeywordFlow(networkRadarKeywordFlowEvents);
+  if(networkRadarKeywordFlowTimer)return;
+  networkRadarKeywordFlowTimer=setInterval(()=>{
+    if(!networkRadarRunning)return;
+    networkRadarKeywordFlowOffset++;
+    renderRadarKeywordFlow(networkRadarKeywordFlowEvents);
+  },1700);
+}
+function stopRadarKeywordFlow(){
+  if(networkRadarKeywordFlowTimer){clearInterval(networkRadarKeywordFlowTimer);networkRadarKeywordFlowTimer=null;}
+}
 function renderRadarTelemetry(events=[]){
   const box=document.querySelector('#radar-terminal'); if(!box)return;
   const rows=Array.isArray(events)?events:[];
   if(!rows.length)return;
   networkRadarLastTelemetryAt=Date.now();
+  networkRadarKeywordFlowEvents=rows;
+  startRadarKeywordFlow(rows);
   box.innerHTML=rows.slice(0,24).map((event,i)=>{
     const at=event.created_at?new Date(event.created_at):null;
     const tm=at&&!Number.isNaN(at.getTime())?at.toLocaleTimeString('az-AZ',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'--:--:--';
@@ -1414,7 +1480,7 @@ function startRadarTelemetryPolling(){
   loadRadarTelemetryDirect();
   networkRadarTelemetryPollTimer=setInterval(()=>{if(networkRadarRunning)loadRadarTelemetryDirect();},8000);
 }
-function stopRadarTelemetryPolling(){if(networkRadarTelemetryPollTimer){clearInterval(networkRadarTelemetryPollTimer);networkRadarTelemetryPollTimer=null;}}
+function stopRadarTelemetryPolling(){if(networkRadarTelemetryPollTimer){clearInterval(networkRadarTelemetryPollTimer);networkRadarTelemetryPollTimer=null;}stopRadarKeywordFlow();}
 function startRadarTerminal(){
   stopRadarTerminal(); networkRadarTerminalIndex=0; networkRadarLastTelemetryAt=Date.now(); const box=document.querySelector('#radar-terminal'); if(box)box.innerHTML='';
   radarTerminalSample();
@@ -1500,7 +1566,7 @@ async function pollNetworkRadarStatus(){
 }
 function startRadarPolling(resume=false){
   if(!networkRadarScanId)return;networkRadarRunning=true;radarSetVisualRunning(true);
-  if(!resume){const feed=document.querySelector('#radar-feed');if(feed)feed.innerHTML='';networkRadarLastFeedSignature='';networkRadarMaxFound=0;networkRadarLastOrgCounts={};resetRadarBlipSlots();renderRadarOrganizations([])}
+  if(!resume){const feed=document.querySelector('#radar-feed');if(feed)feed.innerHTML='';networkRadarLastFeedSignature='';networkRadarMaxFound=0;networkRadarLastOrgCounts={};networkRadarKeywordFlowOffset=0;networkRadarKeywordFlowEvents=[];renderRadarKeywordFlow([]);resetRadarBlipSlots();renderRadarOrganizations([])}
   if(!networkRadarTimer)networkRadarTimer=setInterval(()=>{const e=document.querySelector('#radar-elapsed');if(e)e.textContent=radarTime(Date.now()-(networkRadarStartedAt||Date.now()))},1000);
   startRadarTerminal();
   startRadarTelemetryPolling();

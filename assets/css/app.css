@@ -1811,3 +1811,25 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .radar-terminal-line.live-heartbeat>div{min-width:0}
 .record-grid-wide{grid-column:1/-1}
 @media(max-width:640px){.radar-terminal-line.live-heartbeat{grid-template-columns:40px 9px minmax(0,1fr)}}
+
+
+/* Radar: son real nəticə + faktiki söz bankı axını */
+.radar-feed-compact{min-height:72px!important;max-height:82px!important;overflow-y:auto!important;scrollbar-width:thin}
+.radar-feed-compact .radar-feed-row{min-height:56px}
+.radar-keyword-flow{border-top:1px solid rgba(112,183,229,.1);background:rgba(4,16,29,.46)}
+.radar-keyword-head{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;padding:9px 11px 7px}
+.radar-keyword-head strong{font-size:11px;color:#dff7ff}.radar-keyword-head small{font-size:8px;color:#79a8c6;text-align:right}
+.radar-keyword-columns{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:rgba(112,183,229,.1);border-top:1px solid rgba(112,183,229,.08)}
+.radar-keyword-columns>section{min-width:0;background:rgba(5,18,32,.92);padding:7px}
+.radar-keyword-col-title{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:2px 3px 6px;font-size:9px;font-weight:800}
+.radar-keyword-col-title b{font-size:9px;padding:2px 6px;border-radius:999px;background:rgba(255,255,255,.05)}
+.radar-keyword-col-title.positive{color:#4de0a1}.radar-keyword-col-title.exclude{color:#ff7587}
+.radar-keyword-list{height:116px;overflow:hidden;display:grid;align-content:start;gap:3px}
+.radar-keyword-row{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:5px;min-height:20px;padding:3px 4px;border-radius:7px;border:1px solid transparent;transition:opacity .2s ease,transform .2s ease,background .2s ease}
+.radar-keyword-row>span{font-size:9px;text-align:center}.radar-keyword-row strong{font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.radar-keyword-row small{font-size:7px;opacity:.58}
+.radar-keyword-row.positive{color:#82e9ba}.radar-keyword-row.exclude{color:#ff8998}
+.radar-keyword-row.current{background:rgba(98,207,255,.045);transform:translateX(1px)}
+.radar-keyword-row.checked{border-color:rgba(77,224,161,.28);background:rgba(77,224,161,.07)}
+.radar-keyword-row.exclude.checked{border-color:rgba(255,117,135,.28);background:rgba(255,117,135,.06)}
+@media(max-width:880px){.radar-keyword-head{align-items:flex-start;flex-direction:column}.radar-keyword-columns{grid-template-columns:1fr 1fr}.radar-keyword-row strong{font-size:8px}.radar-keyword-list{height:106px}}
+@media(max-width:430px){.radar-keyword-columns{grid-template-columns:1fr}.radar-keyword-list{height:86px}.radar-keyword-head small{text-align:left}}
