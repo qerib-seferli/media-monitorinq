@@ -1,4 +1,4 @@
-const CACHE='media-monitorinq-v50-active-org-filter';
+const CACHE='media-monitorinq-v51-relevance-and-current-orgs';
 const SHELL=['./','./index.html','./admin.html','./blocked.html','./app.html','./monitorinq.html','./bildirisler.html','./hesabat.html','./profile.html','./assets/css/app.css','./assets/img/icon.svg','./assets/img/icon-192.png','./assets/img/icon-512.png','./assets/img/icon-maskable-192.png','./assets/img/icon-maskable-512.png','./assets/img/state-emblem.svg','./assets/img/loading.gif','./assets/js/core.js','./assets/js/guard.js','./assets/js/scope.js','./assets/js/live-monitor.js','./assets/js/shell.js','./assets/js/dashboard.js','./assets/js/monitoring.js','./assets/js/notifications.js','./assets/js/reports.js','./assets/js/profile.js','./assets/js/admin.js','./assets/js/azerbaijan-map.js','./assets/js/login.js'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));

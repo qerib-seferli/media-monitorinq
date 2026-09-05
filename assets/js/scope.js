@@ -32,7 +32,10 @@ const BUILTIN_NOISE=[
   'dj remix','remix song','new song','romantic song','love song','haryanvi','bhojpuri','punjabi song','official song',
   'stock market','cryptocurrency','forex trading','casino','betting','unboxing','smartphone review','car review','recipe video','cooking recipe',
   'football','soccer','cup match','kuboku','vlog','shorts','viral','rock music','concert hall',
-  'narkotik vasitə','narkotik maddə','marşrutun hərəkət sxemi','nəqliyyat vasitələrinin hərəkəti','ayna nəqliyyat'
+  'narkotik vasitə','narkotik maddə','marşrutun hərəkət sxemi','nəqliyyat vasitələrinin hərəkəti','ayna nəqliyyat',
+  'kanal 7 televiziyası','kanal 7 televiziyasi','televiziya kanalı','televiziya kanali','tv kanalı','tv kanali',
+  'regional mədəniyyət idarəsi','regional medeniyyet idaresi','dağlıq şirvan regional mədəniyyət','dagliq sirvan regional medeniyyet',
+  'turizm reportajı','turizm reportaji','dünyayı geziyorum','dunyayi geziyorum','dünyanın tadı','dunyanin tadi'
 ].map(fold);
 const WATER_SIGNAL_RE=/(?:suvar|melior|subartez|artez|drenaj|kollektor|irriq|sukanal|su təchiz|su techiz|içməli su|icmeli su|kanalizasiya|nasos stans|su anbar|su xətti|su xetti|quyu təmir|quyu temir)/i;
 const HARD_FOREIGN_SCRIPT_RE=/[\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u;

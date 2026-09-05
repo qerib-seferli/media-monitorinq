@@ -40,7 +40,6 @@ const SITEMAP_URL_LIMIT = Math.max(40, Math.min(1200, Number(process.env.NEWS_SI
 const SITEMAP_PROBE_LIMIT = Math.max(0, Math.min(120, Number(process.env.NEWS_SITEMAP_PROBE_LIMIT || (RECENT_PRIORITY ? 50 : DEEP_BACKFILL ? 30 : 0))));
 const SOURCE_SHARD_COUNT = Math.max(1, Math.min(20, Number(process.env.NEWS_SOURCE_SHARD_COUNT || 1)));
 const SOURCE_SHARD_INDEX = Math.max(0, Math.min(SOURCE_SHARD_COUNT - 1, Number(process.env.NEWS_SOURCE_SHARD_INDEX || 0)));
-const GLOBAL_ORGS = ['1','true','yes'].includes(String(process.env.NEWS_GLOBAL_ORGS || '').toLowerCase());
 const ORG_SHARD_COUNT = Math.max(1, Math.min(20, Number(process.env.NEWS_ORG_SHARD_COUNT || SOURCE_SHARD_COUNT || 1)));
 const ORG_SHARD_INDEX = Math.max(0, Math.min(ORG_SHARD_COUNT - 1, Number(process.env.NEWS_ORG_SHARD_INDEX ?? SOURCE_SHARD_INDEX ?? 0)));
 const ORG_BATCH = Math.max(0, Math.min(20, Number(process.env.NEWS_ORG_BATCH || 0)));
@@ -1226,7 +1225,7 @@ function logIngestSamples(orgName, label, result) {
 
 let plan;
 try {
-  plan = await callMonitor({mode:'news_plan', include_archived:GLOBAL_ORGS, organization_shard_count:ORG_SHARD_COUNT, organization_shard_index:ORG_SHARD_INDEX, organization_batch:ORG_BATCH, organization_rotation_bucket:ORG_ROTATION_BUCKET}, 60000);
+  plan = await callMonitor({mode:'news_plan', include_archived:false, organization_shard_count:ORG_SHARD_COUNT, organization_shard_index:ORG_SHARD_INDEX, organization_batch:ORG_BATCH, organization_rotation_bucket:ORG_ROTATION_BUCKET}, 60000);
 } catch (e) {
   if (e?.name === 'AbortError') {
     throw new Error('news_plan timeout: Supabase plan cavabı 60 saniyəni keçdi');

@@ -3528,7 +3528,29 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const fishingContext = webLike && /baliq/.test(normalized) && /(?:ov|brakonyer|tor|qadagan olunmus alet)/.test(normalized)
     && !/(?:suvarma|meliorasiya|subartez|artez|drenaj|kollektor|nasos stansiyasi|su teminati)/.test(normalized);
 
-  const excludedByRule = (webLike || isComment) && (exclusionHits.length > 0 || nonInfrastructureWellIncident || nonInfrastructureHumanIncident || fishingContext);
+  // Eyni sözlərin başqa sahələrdə işlənməsi false-positive yaradırdı:
+  // “Kanal 7” televiziya kanalı, “Dağlıq Şirvan Regional Mədəniyyət İdarəsi”,
+  // AYNA/nəqliyyat və turizm-mədəniyyət xəbərləri rayon + ümumi bank sözünə görə
+  // su monitorinqinə düşməməlidir. Real su/meliorasiya siqnalı varsa veto tətbiq edilmir.
+  const mediaChannelNoise = webLike
+    && /(?:kanal\s*7|televiziya kanali|tv kanali|youtube kanali|telekanal|verilis|serial|efire veril)/.test(normalized)
+    && !coreTopicHit
+    && directMatches.length===0;
+  const cultureTourismNoise = webLike
+    && /(?:medeniyyet|mədəniyyət|turizm|muzey|filarmoniya|teatr|ziyarətgah|ziyarətgah|reportaj|dunyayi geziyorum|dunyanin tadi)/.test(normalized)
+    && !coreTopicHit
+    && directMatches.length===0;
+  const transportNoise = webLike
+    && /(?:yerustu neqliyyat|nəqliyyat|neqliyyat|avtomobil dasima|sernisin dasin|ayna informasiya|ayna agentliyi)/.test(normalized)
+    && !coreTopicHit
+    && directMatches.length===0;
+  const unrelatedRegionalOfficeNoise = webLike
+    && /(?:regional medeniyyet idaresi|regional mədəniyyət idarəsi|dagliq sirvan regional medeniyyet|quba xacmaz regional medeniyyet)/.test(normalized)
+    && !coreTopicHit
+    && directMatches.length===0;
+  const contextualNoise = mediaChannelNoise || cultureTourismNoise || transportNoise || unrelatedRegionalOfficeNoise;
+
+  const excludedByRule = (webLike || isComment) && (exclusionHits.length > 0 || nonInfrastructureWellIncident || nonInfrastructureHumanIncident || fishingContext || contextualNoise);
   const negativeOnly = !webLike && exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
 
   const foreignDistricts = [
@@ -3617,6 +3639,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
       : (nonInfrastructureWellIncident?'quyu-hadisəsi-infrastruktur-deyil'
         :nonInfrastructureHumanIncident?'kanal-quyu-insan-hadisəsi-infrastruktur-deyil'
         :fishingContext?'balıqçılıq-mövzusu-infrastruktur-deyil'
+        :mediaChannelNoise?'media-kanalı-su-kanalı-deyil'
+        :cultureTourismNoise?'mədəniyyət-turizm-mövzusu'
+        :transportNoise?'nəqliyyat-mövzusu'
+        :unrelatedRegionalOfficeNoise?'başqa-regional-idarə'
         :excludedByRule?'axtarılmamalı-mövzu-elastik-filtr'
         :negativeOnly?'axtarılmamalı-mövzu'
         :foreignHit?'başqa-rayon-məlumatıdır'

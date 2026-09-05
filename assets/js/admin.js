@@ -1263,6 +1263,25 @@ function radarTime(ms){
 function radarStorageRead(){try{const raw=localStorage.getItem(NETWORK_RADAR_STORAGE_KEY);return raw?JSON.parse(raw):null}catch{return null}}
 function radarStorageWrite(value){try{localStorage.setItem(NETWORK_RADAR_STORAGE_KEY,JSON.stringify(value||{}));adminAzerbaijanMap?.refreshRadar?.()}catch{}}
 function radarStorageClear(){try{localStorage.removeItem(NETWORK_RADAR_STORAGE_KEY)}catch{}}
+const LEGACY_RADAR_ORG_LABELS=new Map([
+  ['bərdə su meliorasiya və kanalizasiya sahəsi','Bərdə SMSİİ'],
+  ['bərdə smks','Bərdə SMSİİ'],
+  ['bərdə melioservis və texniki xidmət idarəsi','Bərdə SMSİİ'],
+  ['bərdə mstxi','Bərdə SMSİİ'],
+  ['yuxarı qarabağ kanalının istismarı idarəsi','Qarabağ SKİİ'],
+  ['yqkii','Qarabağ SKİİ'],
+  ['yuxarı şirvan kanalının istismarı idarəsi','Şirvan SKİİ'],
+  ['yşkii','Şirvan SKİİ'],
+  ['işbstx','İSST'],
+  ['şuşa smsii','Qarabağ SMSİİ'],
+  ['babək smsii','Naxçıvan SMSİİ']
+]);
+function canonicalRadarOrganizationLabel(value=''){
+  const raw=String(value||'').trim();
+  if(!raw)return '';
+  return LEGACY_RADAR_ORG_LABELS.get(raw.toLocaleLowerCase('az-AZ'))||raw;
+}
+
 function readableRadarStage(value=''){
   return String(value||'')
     .replace(/Tam discovery shard\s*\d+/gi,'Tam tarama bölməsi')
@@ -1367,7 +1386,7 @@ function radarStageLabel(stage=''){
 function radarKeywordFlowOrgId(event={}){
   const direct=String(event?.organization_id||'').trim();
   if(direct)return direct;
-  const name=String(event?.organization||'').trim().toLocaleLowerCase('az-AZ');
+  const name=canonicalRadarOrganizationLabel(event?.organization||'').trim().toLocaleLowerCase('az-AZ');
   if(!name)return '';
   const found=orgs.find(o=>[o?.name,o?.short_name].some(v=>String(v||'').trim().toLocaleLowerCase('az-AZ')===name));
   return String(found?.id||'');
@@ -1435,7 +1454,7 @@ function renderRadarTelemetry(events=[]){
   box.innerHTML=rows.slice(0,24).map((event,i)=>{
     const at=event.created_at?new Date(event.created_at):null;
     const tm=at&&!Number.isNaN(at.getTime())?at.toLocaleTimeString('az-AZ',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'--:--:--';
-    return `<div class="radar-terminal-line real${i===0?' current':''}"><span class="terminal-time">${escapeHtml(tm)}</span><span class="terminal-prompt">›</span><div><strong>${escapeHtml(event.organization||'Təşkilat')}</strong><small>${escapeHtml(radarStageLabel(event.stage))} • ${escapeHtml(event.district||'Ümumi əhatə')}<br><em>+ ${escapeHtml(event.include_term||'söz bankı rotasiyası')}</em> <i>− ${escapeHtml(event.exclude_term||'filtr bankı')}</i>${event.place?` <u>⌖ ${escapeHtml(event.place)}</u>`:''}</small></div></div>`;
+    return `<div class="radar-terminal-line real${i===0?' current':''}"><span class="terminal-time">${escapeHtml(tm)}</span><span class="terminal-prompt">›</span><div><strong>${escapeHtml(canonicalRadarOrganizationLabel(event.organization)||'Təşkilat')}</strong><small>${escapeHtml(radarStageLabel(event.stage))} • ${escapeHtml(event.district||'Ümumi əhatə')}<br><em>+ ${escapeHtml(event.include_term||'söz bankı rotasiyası')}</em> <i>− ${escapeHtml(event.exclude_term||'filtr bankı')}</i>${event.place?` <u>⌖ ${escapeHtml(event.place)}</u>`:''}</small></div></div>`;
   }).join('');
 }
 function radarTerminalSample(){
