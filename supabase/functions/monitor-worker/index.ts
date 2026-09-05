@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
       const profile = profileResult?.data || null;
       if (!profile?.is_active) return json({ok:false,run_id:runId,stage:currentStage,error:'Hesab aktiv deyil'},403);
       if (profile.system_role !== 'super_admin') {
-        const radarMode = ['radar_dispatch','radar_latest','radar_status','radar_cancel'].includes(String(options.mode||''));
+        const radarMode = ['radar_dispatch','radar_latest','radar_status','radar_cancel','radar_telemetry'].includes(String(options.mode||''));
         const centralRadarAccess = profile.access_scope === 'all' && radarMode;
         if (!centralRadarAccess) {
           if (!options.quick_youtube_comments || !profile.organization_id) {
@@ -185,6 +185,30 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (options.mode === 'radar_telemetry') {
+      currentStage = 'radar-telemetry';
+      try {
+        const scanId = String(options.scan_id || '').trim();
+        if (!scanId) return json({ok:false,mode:'radar_telemetry',error:'scan_id yoxdur'},200);
+        const started = safeIsoDate(options.scan_started_at || null) || new Date(Date.now()-86400000).toISOString();
+        const requestedLimit = Number(options.telemetry_limit || 24);
+        const limit = Math.max(1, Math.min(40, Number.isFinite(requestedLimit) ? requestedLimit : 24));
+        const tr:any = await admin.from('audit_logs')
+          .select('created_at,organization_id,entity_id,details')
+          .eq('action','radar_scan_event')
+          .contains('details',{scan_id:scanId})
+          .gte('created_at',started)
+          .order('created_at',{ascending:false})
+          .limit(limit);
+        if (tr?.error) return json({ok:false,mode:'radar_telemetry',error:errorInfo(tr.error).message,telemetry:[]},200);
+        const telemetry=(Array.isArray(tr?.data)?tr.data:[])
+          .map((row:any)=>({created_at:row.created_at,organization_id:row.organization_id||row.entity_id||null,...(row.details||{})}));
+        return json({ok:true,mode:'radar_telemetry',scan_id:scanId,telemetry},200);
+      } catch (e) {
+        return json({ok:false,mode:'radar_telemetry',error:errorInfo(e).message,telemetry:[]},200);
+      }
+    }
+
     if (options.mode === 'radar_status') {
       currentStage = 'radar-status';
       try {
@@ -232,20 +256,22 @@ Deno.serve(async (req) => {
         const started = safeIsoDate(options.scan_started_at || run?.created_at || null);
         const radarStats = await radarMentionStats(admin, started);
         let telemetry:any[]=[];
-        try {
-          let tq:any=admin.from('audit_logs')
-            .select('created_at,organization_id,entity_id,details')
-            .eq('action','radar_scan_event')
-            .contains('details',{scan_id:scanId})
-            .gte('created_at',started||new Date(Date.now()-86400000).toISOString())
-            .order('created_at',{ascending:false})
-            .limit(24);
-          const tr:any=await tq;
-          if(!tr?.error){
-            telemetry=(Array.isArray(tr?.data)?tr.data:[])
-              .map((row:any)=>({created_at:row.created_at,organization_id:row.organization_id||row.entity_id||null,...(row.details||{})}));
-          }
-        } catch(e) { console.error('radar-telemetry-read',errorInfo(e)); }
+        if (options.include_telemetry !== false) {
+          try {
+            let tq:any=admin.from('audit_logs')
+              .select('created_at,organization_id,entity_id,details')
+              .eq('action','radar_scan_event')
+              .contains('details',{scan_id:scanId})
+              .gte('created_at',started||new Date(Date.now()-86400000).toISOString())
+              .order('created_at',{ascending:false})
+              .limit(24);
+            const tr:any=await tq;
+            if(!tr?.error){
+              telemetry=(Array.isArray(tr?.data)?tr.data:[])
+                .map((row:any)=>({created_at:row.created_at,organization_id:row.organization_id||row.entity_id||null,...(row.details||{})}));
+            }
+          } catch(e) { console.error('radar-telemetry-read',errorInfo(e)); }
+        }
         const status = String(run?.status || (run ? 'queued' : 'waiting'));
         const conclusion = run?.conclusion ? String(run.conclusion) : null;
         const pct = jobsTotal ? Math.min(100,Math.round((jobsCompleted/jobsTotal)*100)) : (conclusion==='success'?100:0);

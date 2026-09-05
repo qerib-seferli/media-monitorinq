@@ -1392,18 +1392,14 @@ function radarTerminalSample(){
 async function loadRadarTelemetryDirect(){
   if(!networkRadarScanId)return [];
   try{
-    const since=new Date(networkRadarStartedAt||Date.now()-86400000).toISOString();
-    const {data,error}=await supabase.from('audit_logs')
-      .select('created_at,organization_id,entity_id,details')
-      .eq('action','radar_scan_event')
-      .gte('created_at',since)
-      .order('created_at',{ascending:false})
-      .limit(80);
-    if(error)return [];
-    const rows=(Array.isArray(data)?data:[])
-      .filter(row=>String(row?.details?.scan_id||'')===String(networkRadarScanId))
-      .slice(0,24)
-      .map(row=>({created_at:row.created_at,organization_id:row.organization_id||row.entity_id||null,...(row.details||{})}));
+    const {data,error}=await invokeBackend('monitor-worker',{
+      mode:'radar_telemetry',
+      scan_id:networkRadarScanId,
+      scan_started_at:new Date(networkRadarStartedAt||Date.now()-86400000).toISOString(),
+      telemetry_limit:24
+    });
+    if(error||!data?.ok)return [];
+    const rows=Array.isArray(data.telemetry)?data.telemetry:[];
     if(rows.length){
       renderRadarTelemetry(rows);
       const current=rows[0];
@@ -1416,7 +1412,7 @@ async function loadRadarTelemetryDirect(){
 function startRadarTelemetryPolling(){
   if(networkRadarTelemetryPollTimer)clearInterval(networkRadarTelemetryPollTimer);
   loadRadarTelemetryDirect();
-  networkRadarTelemetryPollTimer=setInterval(()=>{if(networkRadarRunning)loadRadarTelemetryDirect();},15000);
+  networkRadarTelemetryPollTimer=setInterval(()=>{if(networkRadarRunning)loadRadarTelemetryDirect();},8000);
 }
 function stopRadarTelemetryPolling(){if(networkRadarTelemetryPollTimer){clearInterval(networkRadarTelemetryPollTimer);networkRadarTelemetryPollTimer=null;}}
 function startRadarTerminal(){
@@ -1429,7 +1425,7 @@ function startRadarTerminal(){
     if(age<12000)return;
     const now=new Date().toLocaleTimeString('az-AZ',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const line=document.createElement('div');line.className='radar-terminal-line real muted live-heartbeat';
-    line.innerHTML=`<span class="terminal-time">${escapeHtml(now)}</span><span class="terminal-prompt">›</span><div><strong>Canlı server bağlantısı aktivdir</strong><small>Radar prosesi davam edir • yeni əməliyyat hadisəsi gözlənilir.</small></div>`;
+    line.innerHTML=`<span class="terminal-time">${escapeHtml(now)}</span><span class="terminal-prompt">›</span><div><strong>Radar prosesi davam edir</strong><small>Yeni canlı telemetriya hadisəsi gözlənilir.</small></div>`;
     box.prepend(line);while(box.children.length>24)box.lastElementChild?.remove();
     networkRadarLastTelemetryAt=Date.now()-7000;
   },5000);
@@ -1463,7 +1459,7 @@ function radarSetVisualRunning(running){
 function stopRadarTimers(){if(networkRadarTimer){clearInterval(networkRadarTimer);networkRadarTimer=null}if(networkRadarPollTimer){clearTimeout(networkRadarPollTimer);networkRadarPollTimer=null}stopRadarTerminal();stopRadarTelemetryPolling()}
 async function refreshCompletedRadarSnapshot(){
   if(!networkRadarScanId)return;
-  const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_status',scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString()});
+  const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_status',scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString(),include_telemetry:false});
   if(error||!data?.ok)return;
   networkRadarMaxFound=Math.max(networkRadarMaxFound,Number(data.new_mentions||0));
   if(Array.isArray(data.telemetry)&&data.telemetry.length)renderRadarTelemetry(data.telemetry);
@@ -1475,7 +1471,7 @@ async function refreshCompletedRadarSnapshot(){
 
 async function pollNetworkRadarStatus(){
   if(!networkRadarScanId)return;
-  const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_status',scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString()});
+  const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_status',scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString(),include_telemetry:false});
   if(error||!data?.ok){
     networkRadarTransientErrors++;
     const msg=String(data?.error||error?.message||'');
