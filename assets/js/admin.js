@@ -25,6 +25,7 @@ let sourceIndex = [];
 const SOURCE_PAGE_SIZE = 100;
 let auditRows = [];
 let aliases = [];
+let showArchivedOrganizations = false;
 
 const STATUS_LABELS = { active: 'Aktiv', grace: 'Möhlət', suspended: 'Dayandırılıb', archived: 'Arxiv' };
 const ROLE_LABELS = { super_admin: 'Super Admin', organization_admin: 'Təşkilat admini', manager: 'Menecer', analyst: 'Analitik', viewer: 'Baxış' };
@@ -238,7 +239,11 @@ function renderOrgs() {
   const desktop = document.querySelector('#org-body');
   const mobile = document.querySelector('#org-mobile-list');
   if (!desktop || !mobile) return;
-  desktop.innerHTML = sortedOrganizations().map(o => `
+  const rows = sortedOrganizations().filter(o => showArchivedOrganizations || o.service_status !== 'archived');
+  const archiveCount = orgs.filter(o=>o.service_status==='archived').length;
+  const archiveToggle = document.querySelector('#toggle-archived-organizations');
+  if (archiveToggle) archiveToggle.textContent = showArchivedOrganizations ? `Arxivləri gizlət (${archiveCount})` : `Arxivləri göstər (${archiveCount})`;
+  desktop.innerHTML = rows.map(o => `
     <tr>
       <td><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></td>
       <td>${escapeHtml(organizationTypeLabel(o.organization_type))}</td>
@@ -248,7 +253,7 @@ function renderOrgs() {
       <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger btn-sm" data-org-delete="${o.id}">Sil</button></div></td>
     </tr>`).join('') || '<tr><td colspan="6" class="empty">Təşkilat yoxdur.</td></tr>';
 
-  mobile.innerHTML = sortedOrganizations().map(o => `
+  mobile.innerHTML = rows.map(o => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
       <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Yerləşdiyi ərazi</span><b>${escapeHtml((districts.find(d=>d.id===(o.location_district_id||o.district_id))?.name) || '—')}</b></div><div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
@@ -845,6 +850,9 @@ function bindDynamicActions() {
   document.querySelectorAll('[data-user-edit]').forEach(b => b.onclick = () => modal('user', { user_id:b.dataset.userEdit }));
   document.querySelectorAll('[data-user-toggle]').forEach(b => b.onclick = () => toggleUser(b.dataset.userToggle, b.dataset.active === 'true'));
   document.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => resetPassword(b.dataset.reset));
+
+  const archiveToggle=document.querySelector('#toggle-archived-organizations');
+  if(archiveToggle && !archiveToggle.dataset.bound){archiveToggle.dataset.bound='1';archiveToggle.addEventListener('click',()=>{showArchivedOrganizations=!showArchivedOrganizations;renderOrgs();bindDynamicActions();});}
   const fullRefilterBtn=document.querySelector('#full-refilter-btn');
   if(fullRefilterBtn && !fullRefilterBtn.dataset.bound){fullRefilterBtn.dataset.bound='1';fullRefilterBtn.addEventListener('click',runFullDatabaseRefilter);}
   const reviewSieveBtn=document.querySelector('#review-auto-sieve-btn');
