@@ -100,9 +100,10 @@ export async function setupOrganizationFilter(profile, select){
   select.classList.remove('hidden','scope-filter-pending','scope-filter-local');
   const {data,error}=await supabase.from('organizations').select('id,short_name,name,service_status').order('short_name');
   if(error) throw error;
-  // Nazirlik / mərkəzi istifadəçi bütün reyestri görməlidir. Arxiv statusu yalnız
-  // monitorinq işinin prioritetidir; filtrdən təşkilatı gizlətməməlidir.
-  const items=(data||[]);
+  // Nazirlik / mərkəzi istifadəçinin monitorinq filtrində yalnız hazırda istifadə olunan
+  // təşkilatlar göstərilir. Arxiv qeydləri tarix, alias və köhnə nəticələrin bütövlüyü üçün
+  // bazada/admin reyestrində saxlanılır, amma gündəlik monitorinq filtrini qarışdırmır.
+  const items=(data||[]).filter(o=>['active','grace'].includes(o.service_status));
   select.innerHTML='<option value="">Bütün təşkilatlar</option>'+items.map(o=>`<option value="${o.id}">${escapeHtml(o.short_name||o.name||'Təşkilat')}</option>`).join('');
   select.disabled=false;
   select.classList.remove('hidden','scope-filter-pending');
