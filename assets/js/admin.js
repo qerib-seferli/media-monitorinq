@@ -156,7 +156,7 @@ function bindLocationCatalogFilters() {
 
 async function refresh() {
   const results = await Promise.all([
-    supabase.from('organizations').select('*,districts(name)').order('created_at'),
+    supabase.from('organizations').select('*').order('created_at'),
     supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
@@ -242,7 +242,7 @@ function renderOrgs() {
     <tr>
       <td><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></td>
       <td>${escapeHtml(organizationTypeLabel(o.organization_type))}</td>
-      <td>${escapeHtml(o.districts?.name || '—')}</td>
+      <td>${escapeHtml((districts.find(d=>d.id===o.district_id)?.name) || '—')}</td>
       <td><strong>${escapeHtml((districts.find(d=>d.id===(o.location_district_id||o.district_id))?.name) || '—')}</strong><br><span class="muted table-sub">${escapeHtml(o.address_text || 'Ünvan qeyd edilməyib')}</span></td>
       <td>${statusBadge(o.service_status)}</td>
       <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger btn-sm" data-org-delete="${o.id}">Sil</button></div></td>
@@ -251,7 +251,7 @@ function renderOrgs() {
   mobile.innerHTML = sortedOrganizations().map(o => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
-      <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Monitorinq ərazisi</span><b>${escapeHtml(o.districts?.name || '—')}</b></div><div><span>Fiziki yerləşmə</span><b>${escapeHtml((districts.find(d=>d.id===(o.location_district_id||o.district_id))?.name) || '—')}</b></div><div><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
+      <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Monitorinq ərazisi</span><b>${escapeHtml((districts.find(d=>d.id===o.district_id)?.name) || '—')}</b></div><div><span>Fiziki yerləşmə</span><b>${escapeHtml((districts.find(d=>d.id===(o.location_district_id||o.district_id))?.name) || '—')}</b></div><div><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
       <div class="record-actions org-record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
     </article>`).join('') || '<div class="empty">Təşkilat yoxdur.</div>';
 }
