@@ -80,7 +80,7 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d "{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":false,\"force_youtube\":true,\"include_archived\":true,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":4,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1,\"verify_existing\":false}" \
+            -d "{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":false,\"force_youtube\":true,\"include_archived\":false,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":4,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1,\"verify_existing\":false}" \
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
 
   web-fast-watch:
@@ -111,7 +111,7 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
-          NEWS_GLOBAL_ORGS: '1'
+          NEWS_GLOBAL_ORGS: '0'
           NEWS_ORG_SHARD_COUNT: '5'
           NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_ORG_BATCH: '1'
@@ -160,7 +160,7 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
-          NEWS_GLOBAL_ORGS: '1'
+          NEWS_GLOBAL_ORGS: '0'
           NEWS_ORG_SHARD_COUNT: '5'
           NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_ORG_BATCH: '1'
@@ -209,7 +209,7 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
-          NEWS_GLOBAL_ORGS: '1'
+          NEWS_GLOBAL_ORGS: '0'
           NEWS_ORG_SHARD_COUNT: '5'
           NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_ORG_BATCH: '1'
@@ -263,7 +263,7 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
-          NEWS_GLOBAL_ORGS: '1'
+          NEWS_GLOBAL_ORGS: '0'
           NEWS_ORG_SHARD_COUNT: '5'
           NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_ORG_BATCH: '1'
@@ -318,7 +318,7 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
-          NEWS_GLOBAL_ORGS: '1'
+          NEWS_GLOBAL_ORGS: '0'
           NEWS_ORG_SHARD_COUNT: '5'
           NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_ORG_BATCH: '1'
