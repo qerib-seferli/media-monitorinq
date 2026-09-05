@@ -1,13 +1,13 @@
 import { supabase, escapeHtml, fmtDate, toast, confirmDialog } from './core.js';
 
-const MAP_URL='https://simplemaps.com/static/svg/country/az/admin1/az.json';
+const MAP_URL='https://raw.githubusercontent.com/stephanietuerk/admin-boundaries/master/lo-res/Admin2_simp05/gadm36_AZE_2.json';
 const RADAR_KEY='media_monitorinq_full_radar_v2';
-const GEO_CACHE_KEY='mm.az.admin1.geojson.v1';
+const GEO_CACHE_KEY='mm.az.districts.geojson.v2';
 const ACTIVE_STATUSES=new Set(['active','grace']);
 
 const fold=v=>String(v||'').normalize('NFKC').toLocaleLowerCase('az-AZ').replace(/rayonu|şəhəri|şəhər|rayon/g,'').replace(/[^a-z0-9əğıöşüç]+/g,' ').replace(/\s+/g,' ').trim();
 const nameAliases=new Map(Object.entries({
-  'xanlar':'göygöl','hajigabul':'hacıqabul','lankaran city':'lənkəran','lankaran':'lənkəran','lachin':'laçın','kangarli':'kəngərli','qubadli':'qubadlı','shaki':'şəki','shirvan':'şirvan','yevlakh':'yevlax','stepanakert':'xankəndi','dəvəçi':'şabran','xızı':'xızı','xizı':'xızı'
+  'xanlar':'göygöl','hajigabul':'hacıqabul','lankaran city':'lənkəran','lankaran':'lənkəran','lachin':'laçın','kangarli':'kəngərli','qubadli':'qubadlı','shaki':'şəki','shirvan':'şirvan','yevlakh':'yevlax','stepanakert':'xankəndi','dəvəçi':'şabran','əli bayramlı':'şirvan','ali bayramli':'şirvan','xızı':'xızı','xizı':'xızı'
 }).map(([a,b])=>[fold(a),fold(b)]));
 const normName=v=>nameAliases.get(fold(v))||fold(v);
 
@@ -43,11 +43,23 @@ async function loadGeo(){
     const cached=localStorage.getItem(GEO_CACHE_KEY);
     if(cached){const parsed=JSON.parse(cached);if(parsed?.features?.length)return parsed;}
   }catch{}
-  const res=await fetch(MAP_URL,{cache:'force-cache'});
-  if(!res.ok)throw new Error('Azərbaycan xəritəsi yüklənmədi');
-  const geo=await res.json();
-  try{localStorage.setItem(GEO_CACHE_KEY,JSON.stringify(geo))}catch{}
-  return geo;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),15000);
+  try{
+    const res=await fetch(MAP_URL,{cache:'force-cache',mode:'cors',credentials:'omit',signal:controller.signal});
+    if(!res.ok)throw new Error(`Azərbaycan xəritəsi yüklənmədi (${res.status})`);
+    const geo=await res.json();
+    if(!geo?.features?.length)throw new Error('Azərbaycan xəritəsi boş qaytarıldı');
+    try{localStorage.setItem(GEO_CACHE_KEY,JSON.stringify(geo))}catch{}
+    return geo;
+  }finally{clearTimeout(timer);}
+}
+
+function featureName(feature){
+  return feature?.properties?.name||feature?.properties?.NAME_2||feature?.properties?.NAME_1||'';
+}
+function featureCode(feature){
+  return feature?.properties?.id||feature?.properties?.GID_2||feature?.properties?.HASC_2||feature?.id||'';
 }
 
 function allCoordinates(geometry){
@@ -69,7 +81,7 @@ function createSvg(geo){
   const W=920,H=520,pad=18;const sx=(W-pad*2)/(maxX-minX),sy=(H-pad*2)/(maxY-minY),scale=Math.min(sx,sy);
   const ox=(W-(maxX-minX)*scale)/2,oy=(H-(maxY-minY)*scale)/2;
   const project=(x,y)=>[(ox+(x-minX)*scale).toFixed(1),(H-(oy+(y-minY)*scale)).toFixed(1)];
-  return `<svg class="az-live-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Azərbaycan üzrə monitorinq xəritəsi">${geo.features.map(f=>`<path class="az-region" data-map-name="${escapeHtml(f.properties?.name||'')}" data-map-code="${escapeHtml(f.properties?.id||'')}" d="${geometryPaths(f.geometry,project)}" tabindex="0"/>`).join('')}</svg>`;
+  return `<svg class="az-live-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Azərbaycan üzrə monitorinq xəritəsi">${geo.features.map(f=>`<path class="az-region" data-map-name="${escapeHtml(featureName(f))}" data-map-code="${escapeHtml(featureCode(f))}" d="${geometryPaths(f.geometry,project)}" tabindex="0"/>`).join('')}</svg>`;
 }
 
 async function loadMapData(){
@@ -114,7 +126,7 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   const orgsByDistrict=new Map();
   for(const o of orgs){if(!o.district_id)continue;const key=String(o.district_id);if(!orgsByDistrict.has(key))orgsByDistrict.set(key,[]);orgsByDistrict.get(key).push(o);}
 
-  root.innerHTML=`<div class="az-map-layout"><div class="az-map-stage"><div class="az-map-toolbar"><div><span class="eyebrow">Azərbaycan üzrə canlı monitorinq</span><h2>Ərazi Aktivlik Xəritəsi</h2><p>Rayonun üzərinə gəl və ya toxun — təşkilatlar və mənbə nəticələri açılacaq.</p></div>${allowScan?'<button class="btn az-map-scan" type="button" data-map-scan>Tam şəbəkəni skan et</button>':''}</div><div class="az-map-kpis" data-map-kpis></div><div class="az-map-svg-wrap">${createSvg(geo)}<div class="az-map-tooltip" data-map-tooltip hidden></div></div><div class="az-map-legend"><span><i class="idle"></i>Nəticə yoxdur</span><span><i class="has"></i>Nəticə var</span><span><i class="live"></i>Son skanda yeni nəticə</span></div><small class="az-map-credit">İnzibati sərhəd məlumatı: SimpleMaps (CC BY 4.0).</small></div><aside class="az-map-detail" data-map-detail><div class="az-map-detail-empty"><strong>Rayon seçin</strong><span>Təşkilatların tam adları və mənbə sayları burada göstəriləcək.</span></div></aside></div>`;
+  root.innerHTML=`<div class="az-map-layout"><div class="az-map-stage"><div class="az-map-toolbar"><div><span class="eyebrow">Azərbaycan üzrə canlı monitorinq</span><h2>Ərazi Aktivlik Xəritəsi</h2><p>Rayonun üzərinə gəl və ya toxun — təşkilatlar və mənbə nəticələri açılacaq.</p></div>${allowScan?'<button class="btn az-map-scan" type="button" data-map-scan>Tam şəbəkəni skan et</button>':''}</div><div class="az-map-kpis" data-map-kpis></div><div class="az-map-svg-wrap">${createSvg(geo)}<div class="az-map-tooltip" data-map-tooltip hidden></div></div><div class="az-map-legend"><span><i class="idle"></i>Nəticə yoxdur</span><span><i class="has"></i>Nəticə var</span><span><i class="live"></i>Son skanda yeni nəticə</span></div><small class="az-map-credit">İnzibati sərhəd məlumatı: GADM 3.6 xəritə datası (GitHub mirror).</small></div><aside class="az-map-detail" data-map-detail><div class="az-map-detail-empty"><strong>Rayon seçin</strong><span>Təşkilatların tam adları və mənbə sayları burada göstəriləcək.</span></div></aside></div>`;
 
   const paths=[...root.querySelectorAll('.az-region')];
   const tooltip=root.querySelector('[data-map-tooltip]'),detail=root.querySelector('[data-map-detail]'),kpis=root.querySelector('[data-map-kpis]'),scanBtn=root.querySelector('[data-map-scan]');
