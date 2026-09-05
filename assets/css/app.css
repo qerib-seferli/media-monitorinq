@@ -1901,3 +1901,13 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 @media(max-width:430px){
   .radar-keyword-list{min-height:86px}
 }
+
+/* 2026-09-06 — final təşkilat əlaqələri, xidmət nöqtələri və fiziki yer ayrımı */
+.az-org-meta{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:7px}
+.az-org-meta span{min-width:0;padding:5px 6px;border:1px solid rgba(99,164,196,.12);border-radius:8px;background:rgba(7,24,39,.62);color:#7f9fb2;font-size:7px;line-height:1.35}
+.az-org-meta b{color:#cfe8f1;font-weight:700}.az-org-meta .verified{border-color:rgba(63,213,155,.18);background:rgba(38,161,113,.07)}.az-org-meta .verified b{color:#8ee9bd}.az-org-meta .pending{border-color:rgba(245,183,71,.2);background:rgba(245,183,71,.06)}.az-org-meta .pending b{color:#efc975}
+.az-contact-links{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}.az-contact-links a{display:inline-flex;align-items:center;min-width:0;max-width:100%;padding:4px 7px;border:1px solid rgba(93,177,211,.13);border-radius:8px;background:rgba(22,64,84,.2);color:#a9d7e8;font-size:7px;line-height:1.3;text-decoration:none;overflow-wrap:anywhere}.az-contact-links a:hover{border-color:rgba(93,211,172,.35);color:#bff5df;background:rgba(31,120,88,.12)}
+.az-official-source{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-top:6px}.az-official-source a,.az-official-source>span{flex:0 0 auto;color:#6fd6b3;font-size:7px;font-weight:700;text-decoration:none}.az-official-source a:hover{text-decoration:underline}.az-official-source small{min-width:0;color:#658ba0;font-size:6.5px;line-height:1.35;text-align:right;overflow-wrap:anywhere}
+.az-detail-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:11px 1px 7px;color:#a4c9d7;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}.az-detail-section-title b{padding:2px 6px;border-radius:999px;background:rgba(87,184,212,.1);color:#d8f2f8;font-size:7px}.az-detail-section-title.service{margin-top:14px;color:#74d8b7}.az-detail-section-title.service b{background:rgba(54,201,148,.1);color:#a8efd2}
+.az-service-point{border-color:rgba(58,201,151,.16);background:linear-gradient(145deg,rgba(8,34,43,.72),rgba(6,27,38,.6))}.az-service-point .az-org-title small{color:#66d4ae}.az-point-parent{margin-top:6px;color:#799caf;font-size:7px}.az-point-parent b{color:#b8dce7}
+@media(max-width:640px){.az-org-meta{grid-template-columns:1fr}.az-contact-links{display:grid;grid-template-columns:1fr}.az-contact-links a{width:100%}.az-official-source{flex-direction:column;gap:3px}.az-official-source small{text-align:left}.az-map-kpis small{letter-spacing:0}}
