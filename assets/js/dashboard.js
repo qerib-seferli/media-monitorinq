@@ -3,6 +3,7 @@ import { renderShell } from './shell.js';
 import { supabase, escapeHtml, fmtDate, registerSW, friendlyError, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 import { startLiveMonitor } from './live-monitor.js';
 import { applyOrganizationScope, isCentralScope, setupOrganizationFilter, loadGlobalExcludes, filterExcludedMentions, mentionPreviewUrl, isMentionExcluded } from './scope.js';
+import { initAzerbaijanMonitoringMap } from './azerbaijan-map.js';
 
 registerSW();
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'dashboard'); showPageLoader();
@@ -15,6 +16,7 @@ const fullName = `${ctx.profile.first_name || ''} ${ctx.profile.last_name || ''}
 document.querySelector('#hello').textContent = `Salam, ${fullName}`;
 const organizationFilter=document.querySelector('#organization-filter');
 await setupOrganizationFilter(ctx.profile, organizationFilter);
+if(isCentralScope(ctx.profile)){const card=document.querySelector('#dashboard-azerbaijan-map-card');card?.classList.remove('hidden');initAzerbaijanMonitoringMap({rootId:'dashboard-azerbaijan-live-map',profile:ctx.profile,allowScan:true});}
 const today = new Date(); today.setHours(0,0,0,0);
 let latest=[], notifs=[];
 

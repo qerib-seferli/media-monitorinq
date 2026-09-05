@@ -2,6 +2,7 @@ import { requireAuth } from './guard.js';
 import { renderShell } from './shell.js';
 import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader, confirmDialog, promptDialog } from './core.js';
 import { resetGlobalExcludeCache, loadGlobalExcludes, isMentionExcluded } from './scope.js';
+import { initAzerbaijanMonitoringMap } from './azerbaijan-map.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile?.system_role==='super_admin') renderShell(cachedProfile, location.hash.replace('#','')||'dashboard'); showPageLoader();
 const ctx = await requireAuth({ superAdmin: true });
@@ -1243,6 +1244,7 @@ let networkRadarLastOrgCounts={};
 let networkRadarTerminalTimer=null;
 let networkRadarTerminalIndex=0;
 let bardaStatusRenderSeq=0;
+let adminAzerbaijanMap=null;
 
 function radarTime(ms){
   const total=Math.max(0,Math.floor(ms/1000));
@@ -1250,7 +1252,7 @@ function radarTime(ms){
   return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 function radarStorageRead(){try{const raw=localStorage.getItem(NETWORK_RADAR_STORAGE_KEY);return raw?JSON.parse(raw):null}catch{return null}}
-function radarStorageWrite(value){try{localStorage.setItem(NETWORK_RADAR_STORAGE_KEY,JSON.stringify(value||{}))}catch{}}
+function radarStorageWrite(value){try{localStorage.setItem(NETWORK_RADAR_STORAGE_KEY,JSON.stringify(value||{}));adminAzerbaijanMap?.refreshRadar?.()}catch{}}
 function radarStorageClear(){try{localStorage.removeItem(NETWORK_RADAR_STORAGE_KEY)}catch{}}
 function readableRadarStage(value=''){
   return String(value||'')
@@ -1346,6 +1348,7 @@ function radarSetProgress(pct,jobsDone,jobsTotal,found,current='',source='',stat
   if(current)set('#radar-current-org',readableRadarStage(current));if(source)set('#radar-current-source',source);
   const state=document.querySelector('#radar-state');if(state)state.textContent=stateLabel||(networkRadarRunning?'Skan edilir':safePct===100?'Tamamlandı':'Hazır');
   renderRadarOrganizations(orgHits);
+  adminAzerbaijanMap?.refreshRadar?.();
 }
 function radarStageLabel(stage=''){
   return ({youtube:'YouTube video və şərhlər',web_recent:'Yeni dövr Web axtarışı',web_archive:'Tarixi arxiv Web axtarışı',ai:'AI ələk və söz bankı'})[String(stage)]||String(stage||'Monitorinq');
@@ -1547,4 +1550,5 @@ document.querySelector('#configure-barda').onclick = configureBarda;
 document.querySelector('#run-monitor').onclick = runMonitorNow;
 
 await refresh();
+adminAzerbaijanMap=await initAzerbaijanMonitoringMap({rootId:'admin-azerbaijan-live-map',profile:ctx.profile,allowScan:false});
 route();
