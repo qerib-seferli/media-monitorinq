@@ -242,8 +242,8 @@ function renderOrgs() {
     <tr>
       <td><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></td>
       <td>${escapeHtml(organizationTypeLabel(o.organization_type))}</td>
-      <td>${escapeHtml((districts.find(d=>d.id===o.district_id)?.name) || '—')}</td>
-      <td><strong>${escapeHtml((districts.find(d=>d.id===(o.location_district_id||o.district_id))?.name) || '—')}</strong><br><span class="muted table-sub">${escapeHtml(o.address_text || 'Ünvan qeyd edilməyib')}</span></td>
+      <td><strong>${escapeHtml((districts.find(d=>d.id===(o.location_district_id||o.district_id))?.name) || '—')}</strong></td>
+      <td><span class="muted table-sub">${escapeHtml(o.address_text || 'Ünvan qeyd edilməyib')}</span></td>
       <td>${statusBadge(o.service_status)}</td>
       <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger btn-sm" data-org-delete="${o.id}">Sil</button></div></td>
     </tr>`).join('') || '<tr><td colspan="6" class="empty">Təşkilat yoxdur.</td></tr>';
@@ -251,7 +251,7 @@ function renderOrgs() {
   mobile.innerHTML = sortedOrganizations().map(o => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
-      <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Monitorinq ərazisi</span><b>${escapeHtml((districts.find(d=>d.id===o.district_id)?.name) || '—')}</b></div><div><span>Fiziki yerləşmə</span><b>${escapeHtml((districts.find(d=>d.id===(o.location_district_id||o.district_id))?.name) || '—')}</b></div><div><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
+      <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Yerləşdiyi ərazi</span><b>${escapeHtml((districts.find(d=>d.id===(o.location_district_id||o.district_id))?.name) || '—')}</b></div><div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
       <div class="record-actions org-record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
     </article>`).join('') || '<div class="empty">Təşkilat yoxdur.</div>';
 }
@@ -1024,7 +1024,7 @@ function modal(type, preset={}) {
     const title = editing ? 'Təşkilatı redaktə et' : 'Yeni təşkilat';
     const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Təşkilat yarat';
     const typeValue = editing?.organization_type || 'district';
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="org-form" data-org-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat kataloqu</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" value="${escapeHtml(editing?.name || '')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" value="${escapeHtml(editing?.short_name || '')}" required></div><div class="field"><label>Təşkilat növü</label><select class="select" id="org-type"><option value="district" ${typeValue==='district'?'selected':''}>Rayon idarəsi</option><option value="regional_unit" ${typeValue==='regional_unit'?'selected':''}>Regional vahid</option><option value="special_unit" ${typeValue==='special_unit'?'selected':''}>Xüsusi idarə</option><option value="central_service" ${typeValue==='central_service'?'selected':''}>Mərkəzi xidmət</option></select></div><div class="field"><label>Monitorinq / xidmət ərazisi</label><select class="select" id="org-district"><option value="">Mərkəzi / ümumi</option>${districts.map(d=>`<option value="${d.id}" ${editing?.district_id===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Fiziki yerləşdiyi rayon / şəhər</label><select class="select" id="org-location-district"><option value="">Seçilməyib</option>${districts.map(d=>`<option value="${d.id}" ${(editing?.location_district_id||editing?.district_id)===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field form-span-2"><label>Təşkilatın rəsmi ünvanı</label><input class="input" id="org-address" value="${escapeHtml(editing?.address_text || '')}" placeholder="Məs: Bərdə şəhəri, H. Əliyev prospekti 110"></div><div class="field form-span-2"><label>Ünvan mənbəyi</label><input class="input" id="org-address-source" type="url" value="${escapeHtml(editing?.address_source_url || '')}" placeholder="https://..."></div><div class="field"><label>Xidmət statusu</label><select class="select" id="org-status"><option value="active" ${editing?.service_status==='active'?'selected':''}>Aktiv</option><option value="grace" ${editing?.service_status==='grace'?'selected':''}>Möhlət</option><option value="suspended" ${editing?.service_status==='suspended'?'selected':''}>Dayandırılıb</option><option value="archived" ${editing?.service_status==='archived'?'selected':''}>Arxiv</option></select></div><div class="field field-toggle"><label>Rayon üzrə geniş monitorinq</label><label class="switch-row"><input type="checkbox" id="org-district-wide" ${editing?.show_district_wide!==false?'checked':''}><span class="switch-ui"></span><span>Təşkilatın rayonuna aid ümumi su və meliorasiya materiallarını da göstər</span></label></div></div><div class="modal-note">Ad, qısa ad, təşkilat növü və rayon gələcək struktur dəyişikliklərində buradan yenilənə bilər. Köhnə və alternativ adlar ayrıca “Təşkilat ad variantları” bölməsində idarə olunur.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="org-form" data-org-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat kataloqu</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" value="${escapeHtml(editing?.name || '')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" value="${escapeHtml(editing?.short_name || '')}" required></div><div class="field"><label>Təşkilat növü</label><select class="select" id="org-type"><option value="district" ${typeValue==='district'?'selected':''}>Rayon idarəsi</option><option value="regional_unit" ${typeValue==='regional_unit'?'selected':''}>Regional vahid</option><option value="special_unit" ${typeValue==='special_unit'?'selected':''}>Xüsusi idarə</option><option value="central_service" ${typeValue==='central_service'?'selected':''}>Mərkəzi xidmət</option></select></div><div class="field"><label>Axtarış əhatəsi (texniki)</label><select class="select" id="org-district"><option value="">Mərkəzi / ümumi</option>${districts.map(d=>`<option value="${d.id}" ${editing?.district_id===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Yerləşdiyi ərazi (xəritə üçün)</label><select class="select" id="org-location-district"><option value="">Seçilməyib</option>${districts.map(d=>`<option value="${d.id}" ${(editing?.location_district_id||editing?.district_id)===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field form-span-2"><label>Təşkilatın rəsmi ünvanı</label><input class="input" id="org-address" value="${escapeHtml(editing?.address_text || '')}" placeholder="Məs: Bərdə şəhəri, H. Əliyev prospekti 110"></div><div class="field form-span-2"><label>Ünvan mənbəyi</label><input class="input" id="org-address-source" type="url" value="${escapeHtml(editing?.address_source_url || '')}" placeholder="https://..."></div><div class="field"><label>Xidmət statusu</label><select class="select" id="org-status"><option value="active" ${editing?.service_status==='active'?'selected':''}>Aktiv</option><option value="grace" ${editing?.service_status==='grace'?'selected':''}>Möhlət</option><option value="suspended" ${editing?.service_status==='suspended'?'selected':''}>Dayandırılıb</option><option value="archived" ${editing?.service_status==='archived'?'selected':''}>Arxiv</option></select></div><div class="field field-toggle"><label>Rayon üzrə geniş monitorinq</label><label class="switch-row"><input type="checkbox" id="org-district-wide" ${editing?.show_district_wide!==false?'checked':''}><span class="switch-ui"></span><span>Təşkilatın rayonuna aid ümumi su və meliorasiya materiallarını da göstər</span></label></div></div><div class="modal-note">“Yerləşdiyi ərazi” təşkilatın fiziki ünvanını və xəritədə hansı rayonda görünəcəyini müəyyən edir. “Axtarış əhatəsi” isə radarın məntəqə/açar-söz genişləndirilməsi üçün texniki sahədir. Köhnə və alternativ adlar ayrıca “Təşkilat ad variantları” bölməsində idarə olunur.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     document.querySelector('#org-form').onsubmit = saveOrg;
   } else {
     const editing = preset.user_id ? users.find(u => u.id === preset.user_id) : null;
@@ -1248,6 +1248,7 @@ let networkRadarLastOrgCounts={};
 let networkRadarTerminalTimer=null;
 let networkRadarTerminalIndex=0;
 let networkRadarLastTelemetryAt=0;
+let networkRadarTelemetryPollTimer=null;
 let bardaStatusRenderSeq=0;
 let adminAzerbaijanMap=null;
 
@@ -1388,6 +1389,36 @@ function radarTerminalSample(){
   line.innerHTML=`<span class="terminal-prompt">›</span><div><strong>${escapeHtml(org.name||org.short_name)}</strong><small>${escapeHtml(district)} • məntəqə: ${escapeHtml(place||'—')}<br><em>+ ${escapeHtml(pos||'—')}</em> <i>− ${escapeHtml(neg||'—')}</i></small></div>`;
   box.prepend(line); while(box.children.length>18)box.lastElementChild?.remove();
 }
+async function loadRadarTelemetryDirect(){
+  if(!networkRadarScanId)return [];
+  try{
+    const since=new Date(networkRadarStartedAt||Date.now()-86400000).toISOString();
+    const {data,error}=await supabase.from('audit_logs')
+      .select('created_at,organization_id,entity_id,details')
+      .eq('action','radar_scan_event')
+      .gte('created_at',since)
+      .order('created_at',{ascending:false})
+      .limit(80);
+    if(error)return [];
+    const rows=(Array.isArray(data)?data:[])
+      .filter(row=>String(row?.details?.scan_id||'')===String(networkRadarScanId))
+      .slice(0,24)
+      .map(row=>({created_at:row.created_at,organization_id:row.organization_id||row.entity_id||null,...(row.details||{})}));
+    if(rows.length){
+      renderRadarTelemetry(rows);
+      const current=rows[0];
+      const saved=radarStorageRead()||{};
+      radarStorageWrite({...saved,current_organization_id:current?.organization_id||saved.current_organization_id||null,current_organization:current?.organization||saved.current_organization||'',telemetry:rows});
+    }
+    return rows;
+  }catch{return [];}
+}
+function startRadarTelemetryPolling(){
+  if(networkRadarTelemetryPollTimer)clearInterval(networkRadarTelemetryPollTimer);
+  loadRadarTelemetryDirect();
+  networkRadarTelemetryPollTimer=setInterval(()=>{if(networkRadarRunning)loadRadarTelemetryDirect();},15000);
+}
+function stopRadarTelemetryPolling(){if(networkRadarTelemetryPollTimer){clearInterval(networkRadarTelemetryPollTimer);networkRadarTelemetryPollTimer=null;}}
 function startRadarTerminal(){
   stopRadarTerminal(); networkRadarTerminalIndex=0; networkRadarLastTelemetryAt=Date.now(); const box=document.querySelector('#radar-terminal'); if(box)box.innerHTML='';
   radarTerminalSample();
@@ -1397,7 +1428,7 @@ function startRadarTerminal(){
     const age=Date.now()-networkRadarLastTelemetryAt;
     if(age<12000)return;
     const now=new Date().toLocaleTimeString('az-AZ',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    const line=document.createElement('div');line.className='radar-terminal-line muted live-heartbeat';
+    const line=document.createElement('div');line.className='radar-terminal-line real muted live-heartbeat';
     line.innerHTML=`<span class="terminal-time">${escapeHtml(now)}</span><span class="terminal-prompt">›</span><div><strong>Canlı server bağlantısı aktivdir</strong><small>Radar prosesi davam edir • yeni əməliyyat hadisəsi gözlənilir.</small></div>`;
     box.prepend(line);while(box.children.length>24)box.lastElementChild?.remove();
     networkRadarLastTelemetryAt=Date.now()-7000;
@@ -1429,7 +1460,7 @@ function radarSetVisualRunning(running){
   const card=document.querySelector('#network-radar-card'),start=document.querySelector('#network-radar-start'),visual=document.querySelector('#radar-visual');
   card?.classList.toggle('is-scanning',running);visual?.classList.toggle('is-scanning',running);if(start)start.disabled=running;
 }
-function stopRadarTimers(){if(networkRadarTimer){clearInterval(networkRadarTimer);networkRadarTimer=null}if(networkRadarPollTimer){clearTimeout(networkRadarPollTimer);networkRadarPollTimer=null}stopRadarTerminal()}
+function stopRadarTimers(){if(networkRadarTimer){clearInterval(networkRadarTimer);networkRadarTimer=null}if(networkRadarPollTimer){clearTimeout(networkRadarPollTimer);networkRadarPollTimer=null}stopRadarTerminal();stopRadarTelemetryPolling()}
 async function refreshCompletedRadarSnapshot(){
   if(!networkRadarScanId)return;
   const {data,error}=await invokeBackend('monitor-worker',{mode:'radar_status',scan_id:networkRadarScanId,scan_started_at:new Date(networkRadarStartedAt||Date.now()).toISOString()});
@@ -1476,6 +1507,7 @@ function startRadarPolling(resume=false){
   if(!resume){const feed=document.querySelector('#radar-feed');if(feed)feed.innerHTML='';networkRadarLastFeedSignature='';networkRadarMaxFound=0;networkRadarLastOrgCounts={};resetRadarBlipSlots();renderRadarOrganizations([])}
   if(!networkRadarTimer)networkRadarTimer=setInterval(()=>{const e=document.querySelector('#radar-elapsed');if(e)e.textContent=radarTime(Date.now()-(networkRadarStartedAt||Date.now()))},1000);
   startRadarTerminal();
+  startRadarTelemetryPolling();
   pollNetworkRadarStatus();
 }
 async function syncLatestNetworkRadar({announce=false}={}){
@@ -1596,6 +1628,6 @@ document.querySelector('#configure-barda').onclick = configureBarda;
 document.querySelector('#run-monitor').onclick = runMonitorNow;
 
 await refresh();
-adminAzerbaijanMap=await initAzerbaijanMonitoringMap({rootId:'admin-azerbaijan-live-map',profile:ctx.profile,allowScan:false});
+adminAzerbaijanMap=await initAzerbaijanMonitoringMap({rootId:'admin-azerbaijan-live-map',profile:ctx.profile,allowScan:false,serverSync:false});
 await syncLatestNetworkRadar().catch(()=>({active:false}));
 route();

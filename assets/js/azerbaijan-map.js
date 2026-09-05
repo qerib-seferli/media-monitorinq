@@ -125,7 +125,7 @@ function radarHitsByDistrict(saved,orgs){
   return out;
 }
 
-export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',profile=null,allowScan=false}={}){
+export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',profile=null,allowScan=false,serverSync=true}={}){
   const root=document.getElementById(rootId);if(!root)return null;
   root.innerHTML='<div class="az-map-loading">Azərbaycan üzrə monitorinq xəritəsi hazırlanır…</div>';
   let geo,data;
@@ -136,7 +136,7 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   const orgsByDistrict=new Map();
   for(const o of orgs){const districtId=organizationMapDistrictId(o);if(!districtId)continue;const key=String(districtId);if(!orgsByDistrict.has(key))orgsByDistrict.set(key,[]);orgsByDistrict.get(key).push(o);}
 
-  root.innerHTML=`<div class="az-map-layout"><div class="az-map-stage"><div class="az-map-toolbar"><div><span class="eyebrow">Azərbaycan üzrə canlı monitorinq</span><h2>Ərazi Aktivlik Xəritəsi</h2><p>Rayonun üzərinə gəl və ya toxun — təşkilatlar və mənbə nəticələri açılacaq.</p></div>${allowScan?'<button class="btn az-map-scan" type="button" data-map-scan>Tam şəbəkəni skan et</button>':''}</div><div class="az-map-kpis" data-map-kpis></div><div class="az-map-svg-wrap"><div class="az-map-scan-beam" aria-hidden="true"></div>${createSvg(geo)}<div class="az-map-tooltip" data-map-tooltip hidden></div><div class="az-map-brand" aria-hidden="true">ADSEA</div></div><div class="az-map-legend"><span><i class="idle"></i>Nəticə yoxdur</span><span><i class="has"></i>Nəticə var</span><span><i class="live"></i>Son skanda yeni nəticə</span></div><small class="az-map-credit">İnzibati sərhəd məlumatı: GADM 3.6 xəritə datası (GitHub mirror).</small></div><aside class="az-map-detail" data-map-detail><div class="az-map-detail-empty"><strong>Rayon seçin</strong><span>Təşkilatların tam adları və mənbə sayları burada göstəriləcək.</span></div></aside></div>`;
+  root.innerHTML=`<div class="az-map-layout"><div class="az-map-stage"><div class="az-map-toolbar"><div><span class="eyebrow">Azərbaycan üzrə canlı monitorinq</span><h2>Ərazi Aktivlik Xəritəsi</h2><p>Rayonun üzərinə gəl və ya toxun — təşkilatlar və mənbə nəticələri açılacaq.</p></div>${allowScan?'<button class="btn az-map-scan" type="button" data-map-scan>Tam şəbəkəni skan et</button>':''}</div><div class="az-map-kpis" data-map-kpis></div><div class="az-map-svg-wrap"><div class="az-map-scan-beam" aria-hidden="true"></div>${createSvg(geo)}<div class="az-map-tooltip" data-map-tooltip hidden></div><div class="az-map-brand" aria-hidden="true">ADSEA</div></div><div class="az-map-legend"><span><i class="empty-org"></i>Təşkilat yoxdur</span><span><i class="idle"></i>Təşkilat var, nəticə yoxdur</span><span><i class="has"></i>Nəticə var</span><span><i class="live"></i>Son skanda yeni nəticə</span></div><small class="az-map-credit">İnzibati sərhəd məlumatı: GADM 3.6 xəritə datası (GitHub mirror).</small></div><aside class="az-map-detail" data-map-detail><div class="az-map-detail-empty"><strong>Rayon seçin</strong><span>Təşkilatların tam adları və mənbə sayları burada göstəriləcək.</span></div></aside></div>`;
 
   const paths=[...root.querySelectorAll('.az-region')];
   const tooltip=root.querySelector('[data-map-tooltip]'),detail=root.querySelector('[data-map-detail]'),kpis=root.querySelector('[data-map-kpis]'),scanBtn=root.querySelector('[data-map-scan]');
@@ -175,7 +175,7 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
     const unlocated=orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status)&&!organizationMapDistrictId(o)).length;
     for(const path of paths){
       const {district,rows}=districtInfo(path);const total=rows.reduce((sum,o)=>sum+orgSources(o).reduce((s,[,n])=>s+n,0),0);
-      const hit=district?Number(hits.get(String(district.id))||0):0;path.classList.toggle('has-results',total>0);path.classList.toggle('radar-hit',hit>0);path.classList.toggle('is-scanning',running&&hit>0);path.classList.toggle('is-current-scan',running&&district&&String(district.id)===currentDistrictId);if(total>0)activeDistricts++;
+      const hit=district?Number(hits.get(String(district.id))||0):0;path.classList.toggle('has-organization',rows.length>0);path.classList.toggle('no-organization',rows.length===0);path.classList.toggle('has-results',total>0);path.classList.toggle('radar-hit',hit>0);path.classList.toggle('is-scanning',running&&hit>0);path.classList.toggle('is-current-scan',running&&district&&String(district.id)===currentDistrictId);if(total>0)activeDistricts++;
     }
     if(kpis)kpis.innerHTML=`<span><b>${districts.length}</b><small>Ərazi</small></span><span><b>${orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status)).length}</b><small>Aktiv təşkilat</small></span><span><b>${activeDistricts}</b><small>Nəticəli ərazi</small></span><span><b>${allResults}</b><small>Yüklənən nəticə</small></span><span class="${unlocated?'needs-location':''}"><b>${unlocated}</b><small>Yerləşməsi yoxdur</small></span>`;
     if(scanBtn){scanBtn.disabled=running;scanBtn.textContent=running?`Şəbəkə skan edilir${saved?.progress_percent!=null?` · ${Math.round(Number(saved.progress_percent)||0)}%`:''}`:'Tam şəbəkəni skan et';}
@@ -236,9 +236,8 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   });}
 
   refreshVisuals();
-  const saved=radarRead();if(saved?.scan_id&&!radarFinished(saved))pollRadar();
-  syncLatestRadar().catch(()=>{});
-  serverSyncTimer=setInterval(()=>syncLatestRadar().catch(()=>{}),60000);
+  const saved=radarRead();if(serverSync&&saved?.scan_id&&!radarFinished(saved))pollRadar();
+  if(serverSync){syncLatestRadar().catch(()=>{});serverSyncTimer=setInterval(()=>syncLatestRadar().catch(()=>{}),60000);}
   window.addEventListener('storage',e=>{if(e.key===RADAR_KEY)refreshVisuals();});
-  return {refreshRadar:refreshVisuals,refreshData:()=>initAzerbaijanMonitoringMap({rootId,profile,allowScan}),destroy:()=>{if(pollTimer)clearTimeout(pollTimer);if(serverSyncTimer)clearInterval(serverSyncTimer);}};
+  return {refreshRadar:refreshVisuals,refreshData:()=>initAzerbaijanMonitoringMap({rootId,profile,allowScan,serverSync}),destroy:()=>{if(pollTimer)clearTimeout(pollTimer);if(serverSyncTimer)clearInterval(serverSyncTimer);}};
 }

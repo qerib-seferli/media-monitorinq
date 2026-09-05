@@ -236,14 +236,13 @@ Deno.serve(async (req) => {
           let tq:any=admin.from('audit_logs')
             .select('created_at,organization_id,entity_id,details')
             .eq('action','radar_scan_event')
+            .contains('details',{scan_id:scanId})
             .gte('created_at',started||new Date(Date.now()-86400000).toISOString())
             .order('created_at',{ascending:false})
-            .limit(80);
+            .limit(24);
           const tr:any=await tq;
           if(!tr?.error){
             telemetry=(Array.isArray(tr?.data)?tr.data:[])
-              .filter((row:any)=>String(row?.details?.scan_id||'')===scanId)
-              .slice(0,30)
               .map((row:any)=>({created_at:row.created_at,organization_id:row.organization_id||row.entity_id||null,...(row.details||{})}));
           }
         } catch(e) { console.error('radar-telemetry-read',errorInfo(e)); }
@@ -1062,7 +1061,7 @@ function safeIsoDate(value:any):string {
 
 async function radarMentionStats(admin:any,startedAt:string) {
   const result:any = await admin.from('mentions')
-    .select('id,organization_id,source_platform,relevance_score,organizations(short_name)')
+    .select('organization_id,source_platform')
     .gte('detected_at',startedAt)
     .gt('relevance_score',0)
     .limit(5000);
@@ -1072,19 +1071,20 @@ async function radarMentionStats(admin:any,startedAt:string) {
   const rows=Array.isArray(result?.data)?result.data:[];
   const orgs=new Set<string>();
   const platforms:Record<string,number>={};
-  const orgHits=new Map<string,{organization_id:string;short_name:string;count:number}>();
+  const hitCounts=new Map<string,number>();
   for(const row of rows){
-    if(row?.organization_id){
-      const id=String(row.organization_id); orgs.add(id);
-      const rel=Array.isArray(row?.organizations)?row.organizations[0]:row?.organizations;
-      const shortName=String(rel?.short_name||'Təşkilat').trim()||'Təşkilat';
-      const current=orgHits.get(id)||{organization_id:id,short_name:shortName,count:0};
-      current.count++; orgHits.set(id,current);
-    }
+    if(row?.organization_id){const id=String(row.organization_id);orgs.add(id);hitCounts.set(id,(hitCounts.get(id)||0)+1);}
     const platform=String(row?.source_platform||'Digər');
     platforms[platform]=(platforms[platform]||0)+1;
   }
-  const organization_hits=[...orgHits.values()].sort((a,b)=>b.count-a.count||a.short_name.localeCompare(b.short_name,'az')).slice(0,24);
+  const ids=[...hitCounts.keys()];
+  const names=new Map<string,string>();
+  if(ids.length){
+    const orgRes:any=await admin.from('organizations').select('id,short_name').in('id',ids.slice(0,500));
+    if(!orgRes?.error) for(const row of (Array.isArray(orgRes?.data)?orgRes.data:[])) names.set(String(row.id),String(row.short_name||'Təşkilat'));
+  }
+  const organization_hits=ids.map(id=>({organization_id:id,short_name:names.get(id)||'Təşkilat',count:Number(hitCounts.get(id)||0)}))
+    .sort((a,b)=>b.count-a.count||a.short_name.localeCompare(b.short_name,'az')).slice(0,24);
   return {new_mentions:rows.length,organizations_with_new:orgs.size,platforms,organization_hits,stats_truncated:rows.length>=5000};
 }
 

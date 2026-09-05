@@ -1801,3 +1801,13 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .radar-terminal-line.live-heartbeat strong{color:#8bd9c4}
 .network-radar-actions .radar-start-btn:disabled,.az-map-scan:disabled{cursor:not-allowed;opacity:.56;filter:saturate(.6);box-shadow:none}
 @media(max-width:640px){.az-map-brand{right:9px;bottom:8px;font-size:10px;letter-spacing:.12em}}
+
+
+/* 2026-09-05 — xəritə status fərqləri və telemetriya sabitliyi */
+.az-region.no-organization{fill:#0b1c2a;stroke:#314d61;opacity:.78}
+.az-region.has-organization:not(.has-results):not(.radar-hit){fill:#12364a;stroke:#5b9ab4}
+.az-map-legend i.empty-org{background:#0b1c2a;border-color:#314d61}
+.radar-terminal-line.live-heartbeat{grid-template-columns:46px 10px minmax(0,1fr)}
+.radar-terminal-line.live-heartbeat>div{min-width:0}
+.record-grid-wide{grid-column:1/-1}
+@media(max-width:640px){.radar-terminal-line.live-heartbeat{grid-template-columns:40px 9px minmax(0,1fr)}}
