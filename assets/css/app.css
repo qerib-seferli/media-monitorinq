@@ -1753,3 +1753,31 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .az-org-list{display:grid;gap:8px}.az-org-row{padding:10px;border:1px solid rgba(91,181,216,.1);border-radius:12px;background:rgba(8,29,45,.56)}.az-org-title{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.az-org-title strong{font-size:10px;line-height:1.35;color:#e1f5fa}.az-org-title small{font-size:7px;color:#d5a46b}.az-org-address{display:block;margin-top:5px;color:#8fb1c4;font-size:7px;line-height:1.35}.az-source-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}.az-source-chip{padding:3px 6px;border-radius:999px;background:rgba(78,111,130,.12);border:1px solid rgba(95,154,184,.1);color:#6f93a8;font-size:7px}.az-source-chip.has-result{background:rgba(45,211,147,.09);border-color:rgba(68,224,164,.18);color:#8ae9bd}.az-org-last{display:block;margin-top:6px;color:#668aa0;font-size:7px}.az-map-loading{padding:34px;text-align:center;color:#89aec3;font-size:11px}
 @media(max-width:980px){.az-map-layout{grid-template-columns:1fr}.az-map-detail{border-left:0;border-top:1px solid rgba(111,190,225,.12);max-height:none}.az-map-svg-wrap{min-height:300px}.az-live-svg{min-height:300px}.az-map-detail-empty{min-height:100px}}
 @media(max-width:640px){.az-map-stage{padding:12px}.az-map-toolbar{align-items:stretch;flex-direction:column}.az-map-toolbar h2{font-size:17px}.az-map-toolbar p{font-size:9px}.az-map-scan{width:100%}.az-map-kpis{grid-template-columns:1fr 1fr;margin-top:10px}.az-map-kpis span:last-child:nth-child(5){grid-column:1/-1}.az-map-kpis span{padding:7px 8px}.az-map-kpis b{font-size:15px}.az-map-svg-wrap{min-height:245px;border-radius:12px}.az-live-svg{min-height:245px;padding:4px}.az-map-detail{padding:12px}.az-map-detail-head{top:-12px;margin:-12px -12px 8px;padding:12px 12px 8px}.az-map-detail-head h3{font-size:16px}.az-org-row{padding:8px}.az-org-title strong{font-size:9px}.az-map-tooltip{display:none}.az-map-legend{gap:8px}}
+
+
+/* 2026-09-05: Təşkilat cədvəli — ünvan və əməliyyatların kompakt düzülüşü */
+@media (min-width: 721px){
+  .admin-view[data-admin-view="organizations"] #org-body td:nth-child(4){
+    max-width:360px;
+  }
+  .admin-view[data-admin-view="organizations"] #org-body td:nth-child(4) .table-sub{
+    display:-webkit-box;
+    -webkit-box-orient:vertical;
+    -webkit-line-clamp:2;
+    overflow:hidden;
+    white-space:normal;
+    line-height:1.35;
+    max-width:350px;
+  }
+  .admin-view[data-admin-view="organizations"] #org-body .inline-actions{
+    flex-wrap:nowrap;
+    gap:5px;
+  }
+  .admin-view[data-admin-view="organizations"] #org-body .inline-actions .btn-sm{
+    padding:7px 9px;
+    min-width:0;
+    font-size:10px;
+    line-height:1;
+    white-space:nowrap;
+  }
+}

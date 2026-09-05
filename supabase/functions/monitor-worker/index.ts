@@ -254,8 +254,12 @@ Deno.serve(async (req) => {
     }
 
     currentStage = 'organizations';
+    // organizations -> districts arasında həm district_id, həm də location_district_id FK-si var.
+    // PostgREST `districts(name)` embed-i bu halda PGRST201 ilə qeyri-müəyyən olur.
+    // Rayon adını ayrıca oxuyub təşkilat obyektinə qoşuruq; monitorinq və radar məntiqi
+    // əvvəlki `org.districts?.name` formasını dəyişmədən istifadə etməyə davam edir.
     let orgQuery:any = admin.from('organizations')
-      .select('id,name,short_name,district_id,districts(name),show_district_wide,organization_type,service_status');
+      .select('id,name,short_name,district_id,show_district_wide,organization_type,service_status');
     // organization_id ilə çağırılan ingest/enrich əməliyyatları arxiv statuslu təşkilatlarda da
     // işləməlidir. Qlobal plan/rotasiya isə bütün reyestri görə bilir; adi lokal monitor
     // əvvəlki kimi yalnız aktiv/grace təşkilatları götürür.
@@ -268,6 +272,26 @@ Deno.serve(async (req) => {
       return json({ok:false,run_id:runId,stage:currentStage,failures:1,errors:[{stage:currentStage,...errorInfo(err)}],details},200);
     }
     let orgs = Array.isArray(orgResult.data) ? orgResult.data : [];
+
+    // FK embed əvəzinə rayon adlarını bir dəfə ayrıca yükləyirik. Bu yanaşma gələcəkdə
+    // organizations cədvəlinə başqa rayon FK-ları əlavə olunsa belə radar planını sındırmır.
+    const districtIds=[...new Set(orgs.map((o:any)=>String(o?.district_id||'')).filter(Boolean))];
+    const districtNameById=new Map<string,string>();
+    if(districtIds.length){
+      const districtResult:any=await admin.from('districts').select('id,name').in('id',districtIds);
+      if(districtResult?.error){
+        const err=districtResult.error;
+        return json({ok:false,run_id:runId,stage:'districts',failures:1,errors:[{stage:'districts',...errorInfo(err)}],details},200);
+      }
+      for(const row of (Array.isArray(districtResult?.data)?districtResult.data:[])){
+        districtNameById.set(String(row.id),String(row.name||''));
+      }
+    }
+    orgs=orgs.map((o:any)=>({
+      ...o,
+      districts:o?.district_id ? {name:districtNameById.get(String(o.district_id))||''} : null
+    }));
+
     if (!requestedOrganizationId && (options.include_archived || options.organization_batch > 0)) {
       orgs = rotateOrganizationBatch(orgs, options.organization_shard_count, options.organization_shard_index, options.organization_batch, options.organization_rotation_bucket);
     }
