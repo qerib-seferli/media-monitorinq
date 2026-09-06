@@ -1911,3 +1911,60 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .az-detail-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:11px 1px 7px;color:#a4c9d7;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}.az-detail-section-title b{padding:2px 6px;border-radius:999px;background:rgba(87,184,212,.1);color:#d8f2f8;font-size:7px}.az-detail-section-title.service{margin-top:14px;color:#74d8b7}.az-detail-section-title.service b{background:rgba(54,201,148,.1);color:#a8efd2}
 .az-service-point{border-color:rgba(58,201,151,.16);background:linear-gradient(145deg,rgba(8,34,43,.72),rgba(6,27,38,.6))}.az-service-point .az-org-title small{color:#66d4ae}.az-point-parent{margin-top:6px;color:#799caf;font-size:7px}.az-point-parent b{color:#b8dce7}
 @media(max-width:640px){.az-org-meta{grid-template-columns:1fr}.az-contact-links{display:grid;grid-template-columns:1fr}.az-contact-links a{width:100%}.az-official-source{flex-direction:column;gap:3px}.az-official-source small{text-align:left}.az-map-kpis small{letter-spacing:0}}
+
+
+/* v55 — xidmət əraziləri çoxseçimli redaktə və xəritə oxunaqlılığı */
+.service-area-picker{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:7px;
+  max-height:230px;
+  overflow:auto;
+  padding:9px;
+  border:1px solid rgba(108,170,205,.18);
+  border-radius:12px;
+  background:rgba(4,18,31,.48);
+}
+.service-area-option{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  min-width:0;
+  padding:7px 8px;
+  border:1px solid rgba(105,168,200,.12);
+  border-radius:9px;
+  background:rgba(12,36,53,.5);
+  color:#bdd7e5;
+  font-size:11px;
+  line-height:1.25;
+  cursor:pointer;
+}
+.service-area-option:hover{border-color:rgba(89,210,165,.3);background:rgba(36,112,87,.12)}
+.service-area-option input{width:15px;height:15px;flex:0 0 auto;accent-color:#47dba3}
+.service-area-option span{min-width:0;overflow-wrap:anywhere}
+.field-help{display:block;margin-top:6px;color:#7397ad;font-size:10px;line-height:1.4}
+
+.az-map-detail{font-size:10px}
+.az-map-detail-head h3{font-size:19px}
+.az-map-detail-head p{font-size:10px;line-height:1.4}
+.az-detail-section-title{font-size:9px}
+.az-detail-section-title b{font-size:8px}
+.az-org-row{padding:12px}
+.az-org-title strong{font-size:11.5px;line-height:1.4}
+.az-org-title small{font-size:8px}
+.az-org-address{font-size:8.5px;line-height:1.45;margin-top:6px}
+.az-org-meta span{font-size:8.5px;line-height:1.4;padding:6px 7px}
+.az-contact-links a{font-size:8.5px;padding:5px 8px}
+.az-official-source a,.az-official-source>span{font-size:8px}
+.az-official-source small{font-size:7.5px;line-height:1.4}
+.az-source-chip{font-size:8px;padding:4px 7px}
+.az-org-last,.az-point-parent{font-size:8px;line-height:1.4}
+
+@media(max-width:900px){
+  .service-area-picker{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:560px){
+  .service-area-picker{grid-template-columns:1fr;max-height:260px}
+  .az-org-title strong{font-size:12px}
+  .az-org-address,.az-org-meta span,.az-contact-links a{font-size:9px}
+}
