@@ -252,6 +252,18 @@ function serviceAreaNamesForOrg(org) {
   return ids.map(id => districts.find(d => String(d.id) === String(id))?.name).filter(Boolean);
 }
 
+function serviceAreaSummaryForOrg(org) {
+  const names = serviceAreaNamesForOrg(org);
+  if (!names.length) return 'Təyin edilməyib';
+  if (names.length === 1) return names[0];
+  return `${names.length} ərazi`;
+}
+
+function serviceAreaTitleForOrg(org) {
+  const names = serviceAreaNamesForOrg(org);
+  return names.length ? names.join(', ') : 'Xidmət ərazisi təyin edilməyib';
+}
+
 function renderOrgs() {
   const desktop = document.querySelector('#org-body');
   const mobile = document.querySelector('#org-mobile-list');
@@ -264,7 +276,7 @@ function renderOrgs() {
     <tr>
       <td><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></td>
       <td>${escapeHtml(organizationTypeLabel(o.organization_type))}</td>
-      <td><span class="muted table-sub">Xidmət: <strong>${escapeHtml(serviceAreaNamesForOrg(o).join(', ') || 'Ümumi')}</strong><br>Fiziki: <strong>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</strong></span></td>
+      <td><span class="muted table-sub org-area-summary" title="${escapeHtml(serviceAreaTitleForOrg(o))}">Xidmət: <strong>${escapeHtml(serviceAreaSummaryForOrg(o))}</strong><br>Fiziki: <strong>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</strong></span></td>
       <td><span class="muted table-sub">${escapeHtml(o.address_text || 'Ünvan qeyd edilməyib')}</span></td>
       <td><span class="muted table-sub">${escapeHtml(o.phone || 'Telefon yoxdur')}<br>${escapeHtml(o.email || 'E-mail yoxdur')}</span></td>
       <td>${statusBadge(o.service_status)}</td>
@@ -274,7 +286,7 @@ function renderOrgs() {
   mobile.innerHTML = rows.map(o => `
     <article class="record-card">
       <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
-      <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Xidmət əraziləri</span><b>${escapeHtml(serviceAreaNamesForOrg(o).join(', ') || 'Ümumi')}</b></div><div><span>Fiziki ərazi</span><b>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</b></div><div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Telefon</span><b>${escapeHtml(o.phone || '—')}</b></div><div><span>E-mail</span><b>${escapeHtml(o.email || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
+      <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Xidmət əraziləri</span><b title="${escapeHtml(serviceAreaTitleForOrg(o))}">${escapeHtml(serviceAreaSummaryForOrg(o))}</b></div><div><span>Fiziki ərazi</span><b>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</b></div><div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Telefon</span><b>${escapeHtml(o.phone || '—')}</b></div><div><span>E-mail</span><b>${escapeHtml(o.email || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
       <div class="record-actions org-record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
     </article>`).join('') || '<div class="empty">Təşkilat yoxdur.</div>';
 }
@@ -1054,14 +1066,17 @@ function serviceAreaPickerHtml(editing) {
       <span>${escapeHtml(d.name)}</span>
     </label>`;
   }).join('');
-  return `<div class="service-area-tools">
-    <div class="service-area-count"><b id="org-service-area-count">${selectedIds.size}</b> ərazi seçilib</div>
-    <div class="service-area-actions">
-      <button type="button" class="btn ghost btn-sm" id="org-service-area-clear">Seçimi təmizlə</button>
+  return `<details class="service-area-details">
+    <summary><span>Xidmət əraziləri / monitorinq əhatəsi</span><span class="service-area-summary-count"><b id="org-service-area-count">${selectedIds.size}</b> seçilib</span></summary>
+    <div class="service-area-details-body">
+      <div class="service-area-tools">
+        <span class="field-help">Yalnız təşkilatın real xidmət etdiyi əraziləri seç. Əhatə dəyişərsə qutuları sonradan yenilə.</span>
+        <div class="service-area-actions"><button type="button" class="btn ghost btn-sm" id="org-service-area-clear">Seçimi təmizlə</button></div>
+      </div>
+      <input class="input service-area-search" id="org-service-area-search" type="search" placeholder="Ərazi axtar...">
+      <div class="service-area-picker" id="org-service-areas">${options}</div>
     </div>
-  </div>
-  <input class="input service-area-search" id="org-service-area-search" type="search" placeholder="Ərazi axtar...">
-  <div class="service-area-picker" id="org-service-areas">${options}</div>`;
+  </details>`;
 }
 
 function bindServiceAreaPicker() {
@@ -1098,7 +1113,7 @@ function modal(type, preset={}) {
     const title = editing ? 'Təşkilatı redaktə et' : 'Yeni təşkilat';
     const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Təşkilat yarat';
     const typeValue = editing?.organization_type || 'district';
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal org-modal" id="org-form" data-org-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat kataloqu</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" value="${escapeHtml(editing?.name || '')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" value="${escapeHtml(editing?.short_name || '')}" required></div><div class="field"><label>Təşkilat növü</label><select class="select" id="org-type"><option value="district" ${typeValue==='district'?'selected':''}>Rayon idarəsi</option><option value="regional_unit" ${typeValue==='regional_unit'?'selected':''}>Regional vahid</option><option value="special_unit" ${typeValue==='special_unit'?'selected':''}>Xüsusi idarə</option><option value="central_service" ${typeValue==='central_service'?'selected':''}>Mərkəzi xidmət</option></select></div><div class="field form-span-2 service-area-field"><label>Xidmət əraziləri / monitorinq əhatəsi</label>${serviceAreaPickerHtml(editing)}<small class="field-help">Yalnız təşkilatın real xidmət etdiyi əraziləri seç. Sonradan əhatə dəyişərsə qutuları əlavə et və ya çıxar.</small></div><div class="field"><label>Fiziki yerləşdiyi ərazi</label><select class="select" id="org-location-district"><option value="">Seçilməyib</option>${districts.map(d=>`<option value="${d.id}" ${editing?.location_district_id===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field form-span-2"><label>Təşkilatın rəsmi ünvanı</label><input class="input" id="org-address" value="${escapeHtml(editing?.address_text || '')}" placeholder="Məs: Bərdə şəhəri, H. Əliyev prospekti 110"></div><div class="field"><label>Telefon</label><input class="input" id="org-phone" value="${escapeHtml(editing?.phone || '')}" placeholder="(+994 ...)"></div><div class="field"><label>E-mail</label><input class="input" id="org-email" type="email" value="${escapeHtml(editing?.email || '')}" placeholder="info@example.gov.az"></div><div class="field form-span-2"><label>Rəsmi mənbə</label><input class="input" id="org-address-source" type="url" value="${escapeHtml(editing?.address_source_url || '')}" placeholder="https://..."></div><div class="field"><label>Xidmət statusu</label><select class="select" id="org-status"><option value="active" ${editing?.service_status==='active'?'selected':''}>Aktiv</option><option value="grace" ${editing?.service_status==='grace'?'selected':''}>Möhlət</option><option value="suspended" ${editing?.service_status==='suspended'?'selected':''}>Dayandırılıb</option><option value="archived" ${editing?.service_status==='archived'?'selected':''}>Arxiv</option></select></div><div class="field field-toggle"><label>Rayon üzrə geniş monitorinq</label><label class="switch-row"><input type="checkbox" id="org-district-wide" ${editing?.show_district_wide!==false?'checked':''}><span class="switch-ui"></span><span>Təşkilatın rayonuna aid ümumi su və meliorasiya materiallarını da göstər</span></label></div></div><div class="modal-note">“Xidmət ərazisi” təşkilatın hansı rayona xidmət etdiyini və xəritədə monitorinq ərazisini müəyyən edir. “Fiziki yerləşdiyi ərazi” isə real ofisin yerləşdiyi rayondur; bu iki sahə eyni olmaya bilər. Köhnə və alternativ adlar ayrıca “Təşkilat ad variantları” bölməsində idarə olunur.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal org-modal" id="org-form" data-org-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Təşkilat kataloqu</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="org-name" value="${escapeHtml(editing?.name || '')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="org-short" value="${escapeHtml(editing?.short_name || '')}" required></div><div class="field"><label>Təşkilat növü</label><select class="select" id="org-type"><option value="district" ${typeValue==='district'?'selected':''}>Rayon idarəsi</option><option value="regional_unit" ${typeValue==='regional_unit'?'selected':''}>Regional vahid</option><option value="special_unit" ${typeValue==='special_unit'?'selected':''}>Xüsusi idarə</option><option value="central_service" ${typeValue==='central_service'?'selected':''}>Mərkəzi xidmət</option></select></div><div class="field"><label>Fiziki yerləşdiyi ərazi</label><select class="select" id="org-location-district"><option value="">Seçilməyib</option>${districts.map(d=>`<option value="${d.id}" ${editing?.location_district_id===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field form-span-2"><label>Təşkilatın rəsmi ünvanı</label><input class="input" id="org-address" value="${escapeHtml(editing?.address_text || '')}" placeholder="Məs: Bərdə şəhəri, H. Əliyev prospekti 110"></div><div class="field"><label>Telefon</label><input class="input" id="org-phone" value="${escapeHtml(editing?.phone || '')}" placeholder="(+994 ...)"></div><div class="field"><label>E-mail</label><input class="input" id="org-email" type="email" value="${escapeHtml(editing?.email || '')}" placeholder="info@example.gov.az"></div><div class="field form-span-2"><label>Rəsmi mənbə</label><input class="input" id="org-address-source" type="url" value="${escapeHtml(editing?.address_source_url || '')}" placeholder="https://..."></div><div class="field"><label>Xidmət statusu</label><select class="select" id="org-status"><option value="active" ${editing?.service_status==='active'?'selected':''}>Aktiv</option><option value="grace" ${editing?.service_status==='grace'?'selected':''}>Möhlət</option><option value="suspended" ${editing?.service_status==='suspended'?'selected':''}>Dayandırılıb</option><option value="archived" ${editing?.service_status==='archived'?'selected':''}>Arxiv</option></select></div><div class="field form-span-2 service-area-field">${serviceAreaPickerHtml(editing)}</div><div class="field field-toggle"><label>Rayon üzrə geniş monitorinq</label><label class="switch-row"><input type="checkbox" id="org-district-wide" ${editing?.show_district_wide!==false?'checked':''}><span class="switch-ui"></span><span>Təşkilatın rayonuna aid ümumi su və meliorasiya materiallarını da göstər</span></label></div></div><div class="modal-note">“Xidmət ərazisi” təşkilatın hansı rayona xidmət etdiyini və xəritədə monitorinq ərazisini müəyyən edir. “Fiziki yerləşdiyi ərazi” isə real ofisin yerləşdiyi rayondur; bu iki sahə eyni olmaya bilər. Köhnə və alternativ adlar ayrıca “Təşkilat ad variantları” bölməsində idarə olunur.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     document.querySelector('#org-form').onsubmit = saveOrg;
     bindServiceAreaPicker();
   } else {

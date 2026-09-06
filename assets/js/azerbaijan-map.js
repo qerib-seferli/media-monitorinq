@@ -5,12 +5,20 @@ const RADAR_KEY='media_monitorinq_full_radar_v2';
 const GEO_CACHE_KEY='mm.az.districts.geojson.v2';
 const ACTIVE_STATUSES=new Set(['active','grace']);
 
-const fold=v=>String(v||'').normalize('NFKC').toLocaleLowerCase('az-AZ').replace(/rayonu|şəhəri|şəhər|rayon/g,'').replace(/[^a-z0-9əğıöşüç]+/g,' ').replace(/\s+/g,' ').trim();
+const fold=v=>String(v||'').normalize('NFKC').toLocaleLowerCase('az-AZ').replace(/\b(city|district)\b/gi,' ').replace(/rayonu|şəhəri|şəhər|rayon/g,'').replace(/[^a-z0-9əğıöşüç]+/g,' ').replace(/\s+/g,' ').trim();
 const nameAliases=new Map(Object.entries({
-  'xanlar':'göygöl','hajigabul':'hacıqabul','lankaran city':'lənkəran','lankaran':'lənkəran','lachin':'laçın','kangarli':'kəngərli','qubadli':'qubadlı','shaki':'şəki','shirvan':'şirvan','yevlakh':'yevlax','stepanakert':'xankəndi','dəvəçi':'şabran','əli bayramlı':'şirvan','ali bayramli':'şirvan','xızı':'xızı','xizı':'xızı','tərtər nagorno karabakh':'tərtər','tartar nagorno karabakh':'tərtər','xocavənd nagorno karabakh':'xocavənd','khojavend nagorno karabakh':'xocavənd','xocalı nagorno karabakh':'xocalı','khojaly nagorno karabakh':'xocalı'
+  'xanlar':'göygöl','hajigabul':'hacıqabul','hajiqabul':'hacıqabul','lankaran':'lənkəran','lachin':'laçın','kangarli':'kəngərli','qubadli':'qubadlı','shaki':'şəki','shirvan':'şirvan','yevlakh':'yevlax','stepanakert':'xankəndi','khankendi':'xankəndi','xankendi':'xankəndi','shusha':'şuşa','susha':'şuşa','khojaly':'xocalı','khojavend':'xocavənd','baku':'bakı','ganja':'gəncə','mingachevir':'mingəçevir','sumgayit':'sumqayıt','nakhchivan':'naxçıvan','agdam':'ağdam','aghdam':'ağdam','agdere':'ağdərə','aghdere':'ağdərə','agcabadi':'ağcabədi','aghjabadi':'ağcabədi','agstafa':'ağstafa','aghstafa':'ağstafa','agsu':'ağsu','aghsu':'ağsu','balakan':'balakən','beylagan':'beyləqan','bilasuvar':'biləsuvar','jabrayil':'cəbrayıl','cabrayil':'cəbrayıl','jalilabad':'cəlilabad','dashkasan':'daşkəsən','fuzuli':'füzuli','gadabay':'gədəbəy','goychay':'göyçay','goygol':'göygöl','imishli':'imişli','ismayilli':'ismayıllı','kalbajar':'kəlbəcər','kurdamir':'kürdəmir','masalli':'masallı','neftchala':'neftçala','oghuz':'oğuz','qakh':'qax','gazakh':'qazax','gabala':'qəbələ','gobustan':'qobustan','guba':'quba','gusar':'qusar','shabran':'şabran','shamakhi':'şamaxı','shamkir':'şəmkir','siyazan':'siyəzən','tartar':'tərtər','khachmaz':'xaçmaz','khizi':'xızı','yardimli':'yardımlı','zangilan':'zəngilan','zardab':'zərdab','dəvəçi':'şabran','əli bayramlı':'şirvan','ali bayramli':'şirvan','xızı':'xızı','xizı':'xızı','tərtər nagorno karabakh':'tərtər','tartar nagorno karabakh':'tərtər','xocavənd nagorno karabakh':'xocavənd','khojavend nagorno karabakh':'xocavənd','xocalı nagorno karabakh':'xocalı','khojaly nagorno karabakh':'xocalı'
 }).map(([a,b])=>[fold(a),fold(b)]));
 const normName=v=>nameAliases.get(fold(v))||fold(v);
-const displayMapName=v=>String(v||'').replace(/\s*\(Nagorno-Karabakh\)\s*/gi,'').trim();
+const displayMapName=v=>{
+  const raw=String(v||'').replace(/\s*\(Nagorno-Karabakh\)\s*/gi,'').replace(/\s+(City|District)\s*$/i,'').trim();
+  const normalized=normName(raw);
+  const visible={
+    [fold('xankəndi')]:'Xankəndi',[fold('şuşa')]:'Şuşa',[fold('xocalı')]:'Xocalı',[fold('xocavənd')]:'Xocavənd',
+    [fold('şəki')]:'Şəki',[fold('yevlax')]:'Yevlax',[fold('gəncə')]:'Gəncə',[fold('bakı')]:'Bakı',[fold('sumqayıt')]:'Sumqayıt',[fold('mingəçevir')]:'Mingəçevir',[fold('naxçıvan')]:'Naxçıvan'
+  };
+  return visible[normalized]||raw;
+};
 
 function radarRead(){try{return JSON.parse(localStorage.getItem(RADAR_KEY)||'null')}catch{return null}}
 function radarWrite(value){try{localStorage.setItem(RADAR_KEY,JSON.stringify(value||{}))}catch{}}

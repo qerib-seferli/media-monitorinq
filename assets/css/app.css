@@ -2030,3 +2030,52 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 @media(max-width:430px){
   .service-area-picker{grid-template-columns:1fr}
 }
+
+/* v57 — final xəritə adı, təşkilat cədvəli və xidmət ərazisi UI */
+.admin-view[data-admin-view="organizations"] .desktop-table table{table-layout:fixed;min-width:1180px}
+.admin-view[data-admin-view="organizations"] .desktop-table th:nth-child(1){width:17%}
+.admin-view[data-admin-view="organizations"] .desktop-table th:nth-child(2){width:9%}
+.admin-view[data-admin-view="organizations"] .desktop-table th:nth-child(3){width:15%}
+.admin-view[data-admin-view="organizations"] .desktop-table th:nth-child(4){width:23%}
+.admin-view[data-admin-view="organizations"] .desktop-table th:nth-child(5){width:15%}
+.admin-view[data-admin-view="organizations"] .desktop-table th:nth-child(6){width:8%}
+.admin-view[data-admin-view="organizations"] .desktop-table th:nth-child(7){width:13%}
+.admin-view[data-admin-view="organizations"] #org-body td{vertical-align:middle;overflow-wrap:anywhere}
+.admin-view[data-admin-view="organizations"] #org-body td:nth-child(1) .table-sub,
+.admin-view[data-admin-view="organizations"] #org-body td:nth-child(4) .table-sub,
+.admin-view[data-admin-view="organizations"] #org-body td:nth-child(5) .table-sub{line-height:1.4}
+.org-area-summary{display:block;line-height:1.45}
+
+.org-modal{width:min(860px,calc(100vw - 28px));max-height:min(88vh,820px);padding:22px}
+.org-modal .form-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px}
+.org-modal .form-span-2{grid-column:1/-1}
+.service-area-field{grid-column:1/-1}
+.service-area-details{border:1px solid rgba(105,168,200,.18);border-radius:12px;background:rgba(6,25,41,.52);overflow:hidden}
+.service-area-details>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;cursor:pointer;color:#d8edf5;font-size:12px;font-weight:800;list-style:none;user-select:none}
+.service-area-details>summary::-webkit-details-marker{display:none}
+.service-area-details>summary:after{content:'▾';margin-left:auto;color:#79b5cc;font-size:12px;transition:transform .18s ease}
+.service-area-details[open]>summary:after{transform:rotate(180deg)}
+.service-area-summary-count{display:inline-flex;align-items:center;gap:5px;margin-left:auto;padding:4px 8px;border-radius:999px;background:rgba(48,188,139,.10);border:1px solid rgba(64,211,158,.20);color:#97ddc4;font-size:10px;font-weight:700;white-space:nowrap}
+.service-area-summary-count b{color:#67e1b4;font-size:11px}
+.service-area-details-body{padding:0 12px 12px;border-top:1px solid rgba(105,168,200,.12)}
+.service-area-tools{margin:10px 0 7px;align-items:center}
+.service-area-tools .field-help{margin:0;max-width:620px}
+.service-area-search{height:38px;margin-bottom:7px}
+.service-area-picker{grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;max-height:210px;padding:7px}
+.service-area-option{min-height:31px;padding:5px 7px;border-radius:8px;font-size:10px;gap:6px}
+.service-area-option input{width:13px;height:13px}
+.service-area-option.is-selected{box-shadow:none}
+.org-modal .modal-note{font-size:10px;line-height:1.45;padding:10px 12px}
+.org-modal .modal-actions{position:sticky;bottom:-22px;z-index:2;margin:14px -22px -22px;padding:12px 22px;background:#0d2136;border-top:1px solid rgba(115,177,208,.14)}
+@media(max-width:760px){
+  .org-modal{width:min(100%,calc(100vw - 16px));padding:16px}
+  .org-modal .form-grid{grid-template-columns:1fr;gap:11px}
+  .org-modal .form-span-2,.service-area-field{grid-column:1}
+  .service-area-picker{grid-template-columns:repeat(3,minmax(0,1fr));max-height:230px}
+  .org-modal .modal-actions{bottom:-16px;margin:12px -16px -16px;padding:10px 16px}
+}
+@media(max-width:480px){
+  .service-area-picker{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .service-area-details>summary{padding:10px 11px;font-size:11px}
+  .service-area-summary-count{font-size:9px}
+}
