@@ -2335,3 +2335,47 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
     max-width:100%!important;box-sizing:border-box!important;
   }
 }
+
+/* v71 — monitorinq detal pəncərəsi sabit mobil menyuların altında qalmasın */
+@media(max-width:720px){
+  #detail-bg.modal-backdrop{
+    top:calc(78px + env(safe-area-inset-top))!important;
+    right:0!important;
+    bottom:calc(82px + env(safe-area-inset-bottom))!important;
+    left:0!important;
+    inset:auto 0 auto 0!important;
+    height:auto!important;
+    min-height:0!important;
+    padding:8px 10px!important;
+    align-items:stretch!important;
+    justify-items:center!important;
+    overflow:hidden!important;
+    z-index:1000!important;
+  }
+  #detail-bg .detail-modal{
+    width:min(100%,760px)!important;
+    max-width:100%!important;
+    height:100%!important;
+    max-height:100%!important;
+    min-height:0!important;
+    overflow-y:auto!important;
+    overscroll-behavior:contain!important;
+    -webkit-overflow-scrolling:touch;
+    border-radius:18px!important;
+    padding:0 12px 14px!important;
+    scroll-padding-top:64px!important;
+    scroll-padding-bottom:16px!important;
+  }
+  #detail-bg .detail-modal-head{
+    top:0!important;
+    z-index:10!important;
+    background:#0c1b2d!important;
+  }
+}
+@media(max-width:430px){
+  #detail-bg.modal-backdrop{
+    top:calc(72px + env(safe-area-inset-top))!important;
+    bottom:calc(76px + env(safe-area-inset-bottom))!important;
+    padding:6px!important;
+  }
+}
