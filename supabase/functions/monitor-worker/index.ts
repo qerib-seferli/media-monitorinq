@@ -371,7 +371,9 @@ Deno.serve(async (req) => {
         fetchOrganizationAliases(admin, String(org.id), 500),
         fetchOrganizationServicePoints(admin, String(org.id), 500)
       ]);
-      org.service_points=servicePoints;
+      const pointAliases=await fetchServicePointAliases(admin,servicePoints.map((p:any)=>String(p.id)));
+      const aliasesByPoint=new Map<string,any[]>(); for(const a of pointAliases){const k=String(a.service_point_id);if(!aliasesByPoint.has(k))aliasesByPoint.set(k,[]);aliasesByPoint.get(k)!.push(a);}
+      org.service_points=servicePoints.map((p:any)=>({...p,aliases:aliasesByPoint.get(String(p.id))||[]}));
       // Tabeli vahid adları discovery sorğularında prioritet alır. Beləliklə parent təşkilatın
       // çoxlu köhnə aliası child adlarını YouTube/News limitindən kənarda qoymur.
       const synthetic=servicePointIdentityValues(org).map(alias=>({alias,alias_type:'service_point',is_active:true}));
@@ -1351,10 +1353,18 @@ async function fetchOrganizationServicePoints(admin:any, organizationId:string, 
   return Array.isArray(result?.data)?result.data:[];
 }
 
+
+async function fetchServicePointAliases(admin:any, pointIds:string[]):Promise<any[]> {
+  if(!pointIds.length)return [];
+  const result:any=await admin.from('organization_service_point_aliases').select('service_point_id,alias,alias_type,is_active').in('service_point_id',pointIds).eq('is_active',true).limit(4000);
+  if(result?.error){if(['42P01','42703'].includes(String(result.error?.code||'')))return [];throw result.error;}
+  return Array.isArray(result?.data)?result.data:[];
+}
+
 function servicePointIdentityValues(org:any):string[] {
   const out:string[]=[]; const seen=new Set<string>();
   for(const point of (Array.isArray(org?.service_points)?org.service_points:[])){
-    for(const raw of [point?.short_name,point?.name]){
+    for(const raw of [point?.short_name,point?.name,...(Array.isArray(point?.aliases)?point.aliases.map((a:any)=>a?.alias):[])]){
       const value=String(raw||'').replace(/\s+/g,' ').trim();
       const key=normalizeForMatch(value);
       if(!value||!key||seen.has(key)) continue;
@@ -1374,7 +1384,7 @@ function resolveServicePointMatch(org:any,item:Item):any|null {
   const candidates:any[]=[];
   for(const point of points){
     let best='';
-    for(const rawName of [point?.name,point?.short_name]){
+    for(const rawName of [point?.name,point?.short_name,...(Array.isArray(point?.aliases)?point.aliases.map((a:any)=>a?.alias):[])]){
       const term=normalizeForMatch(String(rawName||''));
       if(term.length<5) continue;
       if((` ${hay} `).includes(` ${term} `) && term.length>best.length) best=term;
@@ -2795,9 +2805,15 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   const isWebNews = canonicalSourcePlatform === 'Web';
   const storyTitleKey = normalizeForMatch(item.title || '');
   const canonicalUrl=isWebNews?canonicalStoryUrl(item):'';
+  const rawIdentity:any=item?.raw||{};
+  const commentIdentity=String(rawIdentity.comment_id||rawIdentity.commentId||'').trim();
+  const videoIdentity=String(rawIdentity.video_id||rawIdentity.videoId||rawIdentity.parent_video_id||'').trim();
+  const stableSource=canonicalStoryUrl(item);
   const hash = await sha256(isWebNews
     ? `${org.id}|web-canonical|${canonicalUrl||storyTitleKey}`
-    : `${org.id}|${item.url}|${item.title||''}`);
+    : commentIdentity ? `${org.id}|comment|${commentIdentity}`
+    : videoIdentity ? `${org.id}|youtube|${videoIdentity}`
+    : `${org.id}|source|${stableSource||item.url}`);
 
   // Eyni material hər run-da yenidən aşkarlana bilər. Əvvəlcə yeni content_hash ilə yoxla.
   let { data:existing, error:existingError } = await admin.from('mentions')
@@ -2806,6 +2822,9 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     .eq('content_hash',hash)
     .maybeSingle();
   if (existingError) throw existingError;
+
+  if(!existing?.id && commentIdentity){const r:any=await admin.from('mentions').select('id,raw_payload,published_at,source_url').eq('organization_id',org.id).eq('raw_payload->>comment_id',commentIdentity).order('detected_at',{ascending:true}).limit(1).maybeSingle();if(!r?.error&&r?.data?.id)existing=r.data;}
+  if(!existing?.id && videoIdentity && !commentIdentity){const r:any=await admin.from('mentions').select('id,raw_payload,published_at,source_url').eq('organization_id',org.id).eq('raw_payload->>video_id',videoIdentity).order('detected_at',{ascending:true}).limit(1).maybeSingle();if(!r?.error&&r?.data?.id)existing=r.data;}
 
   if (!existing?.id && isWebNews && canonicalUrl) {
     const canonicalResult:any = await admin.from('mentions')

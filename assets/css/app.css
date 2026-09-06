@@ -2111,3 +2111,19 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .org-mobile-level-4{margin-left:30px}
 .az-point-manager{margin:7px 0 3px;color:#9ab7c8;font-size:10px;line-height:1.35}
 .az-point-manager b{color:#d7e9ef}
+
+
+/* v66 — struktur yekunu, media kartları və kompakt mobil seçimlər */
+.org-registry-stats{display:flex;flex-wrap:wrap;gap:8px;margin:-2px 0 12px}.org-registry-stats span{display:inline-flex;align-items:center;gap:5px;padding:7px 10px;border:1px solid var(--line);border-radius:12px;background:rgba(12,37,61,.72);color:var(--muted);font-size:10px}.org-registry-stats b{color:#effbff;font-size:12px}.org-registry-stats .org-total-unit{border-color:rgba(77,205,169,.3);background:rgba(77,205,169,.07)}
+.position-scope-group{display:block;width:100%;padding:7px 0;border-bottom:1px solid rgba(117,167,197,.12)}.position-scope-group>b{display:block;margin-bottom:6px;color:#8fb8cf;font-size:10px}.alias-point-group{margin-left:18px;border-left:2px solid rgba(77,205,169,.18)}
+.mention-card>.thumb{object-fit:cover;object-position:center;background:#071522}.mention-card>.thumb[src$="icon.svg"]{object-fit:contain;padding:10px}
+.mm-select-trigger,.mm-select-popover{display:none}
+@media(max-width:720px){
+  select.mm-native-select{position:absolute!important;opacity:0!important;pointer-events:none!important;width:1px!important;height:1px!important;margin:0!important;padding:0!important}
+  .mm-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-width:0;height:42px;padding:0 30px 0 11px;border:1px solid var(--line);border-radius:12px;background:#0b2035;color:#e9f4fb;font-size:11px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
+  .mm-select-trigger::after{content:'⌄';position:absolute;right:10px;color:#7fa9c2}.mm-select-trigger:disabled{opacity:.55}.mm-select-trigger[hidden]{display:none!important}
+  .mm-select-popover{position:fixed;z-index:9998;left:12px;right:12px;top:auto;bottom:calc(68px + env(safe-area-inset-bottom));max-height:min(42vh,320px);overflow:auto;padding:7px;border:1px solid rgba(107,182,221,.28);border-radius:16px;background:#081a2b;box-shadow:0 18px 50px rgba(0,0,0,.45);overscroll-behavior:contain}
+  .mm-select-popover.is-open{display:block}.mm-select-group{padding:8px 8px 4px;color:#66cfb0;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}.mm-select-option{display:block;width:100%;border:0;border-radius:10px;background:transparent;color:#dbeaf2;text-align:left;padding:9px 10px;font-size:11px;line-height:1.25}.mm-select-option.is-selected{background:rgba(76,205,169,.12);color:#8ff0ce;font-weight:800}.mm-select-option+ .mm-select-option{margin-top:2px}
+  .monitor-filters>.mm-select-trigger[data-select-id="period"]{grid-area:period}.monitor-filters>.mm-select-trigger[data-select-id="platform"]{grid-area:platform}.monitor-filters>.mm-select-trigger[data-select-id="sentiment"]{grid-area:sentiment}.monitor-filters>.mm-select-trigger[data-select-id="organization-filter"]{grid-area:organization}
+  .report-toolbar>.mm-select-trigger[data-select-id="report-period"]{grid-area:period}.report-toolbar>.mm-select-trigger[data-select-id="organization-filter"]{grid-area:organization}
+}

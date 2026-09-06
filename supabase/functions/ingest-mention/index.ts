@@ -10,7 +10,9 @@ Deno.serve(async (req) => {
     const body = await req.json();
     if (!body.organization_id || !body.source_url) throw new Error('organization_id və source_url tələb olunur');
     const text = `${body.title || ''}\n${body.original_text || ''}\n${body.source_url || ''}`;
-    const hash = await sha256(`${body.organization_id}|${text}`);
+    const raw=body.raw_payload||body||{};
+    const stableId=String(raw.comment_id||body.source_post_id||raw.video_id||raw.videoId||body.source_url||'').trim();
+    const hash = await sha256(`${body.organization_id}|${stableId||text}`);
     let servicePoint:any=null;
     if(body.service_point_id){
       const sp:any=await admin.from('organization_service_points')

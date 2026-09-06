@@ -20,15 +20,23 @@ const PAGE_SIZE=50;
 let rows=[], page=0, loading=false, done=false, requestToken=0;
 const globalExcludes=await loadGlobalExcludes();
 function normalizeStoryTitle(v=''){return String(v||'').toLocaleLowerCase('az-AZ').normalize('NFKD').replace(/[əƏ]/g,'e').replace(/[ıİ]/g,'i').replace(/[şŞ]/g,'s').replace(/[çÇ]/g,'c').replace(/[öÖ]/g,'o').replace(/[üÜ]/g,'u').replace(/[ğĞ]/g,'g').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();}
-function storyKey(m){
-  const platformName=String(m?.source_platform||'').toLowerCase();
-  if(platformName==='web'||platformName==='google news'){
-    const title=normalizeStoryTitle(m?.title||''); const day=String(m?.published_at||'').slice(0,10);
-    if(title.length>=18)return `web|${title}|${day}`;
-  }
-  return `id|${m?.id||m?.content_hash||m?.source_url||Math.random()}`;
+function canonicalMentionUrl(value=''){
+  const raw=String(value||'').trim(); if(!raw)return '';
+  try{const u=new URL(raw);u.hash='';for(const key of [...u.searchParams.keys()])if(/^utm_|^(fbclid|gclid|ref|source|feature|si)$/i.test(key))u.searchParams.delete(key);return `${u.origin}${u.pathname}${u.search}`.replace(/\/$/,'').toLowerCase();}catch{return raw.replace(/\/$/,'').toLowerCase();}
 }
-function mergeUnique(existing,incoming){const seen=new Set(existing.map(storyKey));const out=[...existing];for(const row of incoming){const key=storyKey(row);if(seen.has(key))continue;seen.add(key);out.push(row);}return out;}
+function storyKey(m){
+  const raw=m?.raw_payload||{};
+  const commentId=String(raw.comment_id||raw.commentId||'').trim();
+  if(commentId)return `comment|${commentId}`;
+  const videoId=String(raw.video_id||raw.videoId||raw.parent_video_id||'').trim() || (()=>{const x=String(m?.source_url||'').match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([A-Za-z0-9_-]{11})/);return x?.[1]||'';})();
+  if(videoId)return `youtube|${videoId}`;
+  const canonical=canonicalMentionUrl(raw.canonical_url||m?.source_url||'');
+  if(canonical)return `url|${canonical}`;
+  const title=normalizeStoryTitle(m?.title||''); const day=String(m?.published_at||'').slice(0,10);
+  if(title.length>=18)return `title|${title}|${day}`;
+  return `id|${m?.id||m?.content_hash||''}`;
+}
+function mergeUnique(existing,incoming){const seen=new Set(existing.map(storyKey));const out=[...existing];for(const row of incoming){const key=storyKey(row);if(key&&seen.has(key))continue;if(key)seen.add(key);out.push(row);}return out;}
 const commentOnly = new URLSearchParams(location.search).get('type') === 'comments';
 
 function isoDay(d,end=false){

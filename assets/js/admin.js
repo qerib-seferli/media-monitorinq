@@ -25,6 +25,7 @@ let sourceIndex = [];
 const SOURCE_PAGE_SIZE = 100;
 let auditRows = [];
 let aliases = [];
+let servicePointAliases = [];
 let organizationServiceAreas = [];
 let organizationServicePoints = [];
 let showArchivedOrganizations = false;
@@ -166,11 +167,12 @@ async function refresh() {
     supabase.from('audit_logs').select('*').neq('action','radar_scan_event').order('created_at',{ascending:false}).limit(100),
     supabase.from('organization_aliases').select('*').order('alias'),
     supabase.from('organization_service_areas').select('organization_id,district_id').order('organization_id'),
-    supabase.from('organization_service_points').select('*').order('name')
+    supabase.from('organization_service_points').select('*').order('name'),
+    supabase.from('organization_service_point_aliases').select('*').order('alias')
   ]);
 
-  const [o,u,p,d,a,al,osa,osp] = results;
-  const fatal = results.find(r => r.error);
+  const [o,u,p,d,a,al,osa,osp,spal] = results;
+  const fatal = results.slice(0,8).find(r => r.error);
   if (fatal?.error) toast(fatal.error.message, 'error');
 
   orgs = o.data || [];
@@ -184,6 +186,7 @@ async function refresh() {
   aliases = al.data || [];
   organizationServiceAreas = osa?.error ? [] : (osa.data || []);
   organizationServicePoints = osp?.error ? [] : (osp.data || []);
+  servicePointAliases = spal?.error ? [] : (spal.data || []);
 
   await Promise.all([loadKeywordStats(), loadSourceIndex()]);
 
@@ -301,6 +304,8 @@ function renderOrgs() {
   const archiveCount = orgs.filter(o=>o.service_status==='archived').length;
   const archiveToggle = document.querySelector('#toggle-archived-organizations');
   if (archiveToggle) archiveToggle.textContent = showArchivedOrganizations ? `Arxivləri gizlət (${archiveCount})` : `Arxivləri göstər (${archiveCount})`;
+  const stats=document.querySelector('#org-registry-stats');
+  if(stats){const active=orgs.filter(o=>['active','grace'].includes(o.service_status));const points=organizationServicePoints.filter(p=>p.is_active!==false);const count=t=>active.filter(o=>o.organization_type===t).length;stats.innerHTML=`<span><b>${active.length}</b> əsas təşkilat</span><span><b>${points.length}</b> tabeli idarə/şöbə</span><span class="org-total-unit"><b>${active.length+points.length}</b> ümumi təşkilati vahid</span><span><b>${count('regional_unit')}</b> regional</span><span><b>${count('district')}</b> rayon idarəsi</span><span><b>${count('special_unit')}</b> xüsusi/tabeli idarə</span>`;}
   let lastGroup=''; const desktopRows=[];
   for(const o of rows){
     const meta=organizationHierarchyMeta(o);
@@ -354,11 +359,10 @@ function renderUsers() {
 }
 
 function fillSelects() {
-  const orgOptions = '<option value="">Seçin</option>' + orgs.map(o => `<option value="${o.id}">${escapeHtml(o.short_name)}</option>`).join('');
   const posOrg = document.querySelector('#position-org');
-  if (posOrg) posOrg.innerHTML = '<option value="">Qlobal</option>' + orgs.map(o => `<option value="${o.id}">${escapeHtml(o.short_name)}</option>`).join('');
+  if (posOrg) posOrg.innerHTML = '<option value="">Qlobal</option>' + organizationUnitOptions().replace('<option value="">Seçin</option>','');
   const aliasOrg = document.querySelector('#alias-org');
-  if (aliasOrg) aliasOrg.innerHTML = orgOptions;
+  if (aliasOrg) aliasOrg.innerHTML = organizationUnitOptions();
   const villageDistrict = document.querySelector('#village-district');
   if (villageDistrict) villageDistrict.innerHTML = '<option value="">Rayon seçin</option>' + districts.map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
 }
@@ -366,9 +370,14 @@ function fillSelects() {
 function renderCatalogs() {
   const p = document.querySelector('#position-list');
   if (p) {
-    const seen = new Set();
-    const visiblePositions = positions.filter(x => { const key = String(x.name || '').trim().toLocaleLowerCase('az-AZ'); if (seen.has(key)) return false; seen.add(key); return true; });
-    p.innerHTML = visiblePositions.map(x => `<span class="chip"><i></i>${escapeHtml(x.name)}</span>`).join('') || '<div class="empty compact">Vəzifə yoxdur.</div>';
+    const unitLabel = row => {
+      if(row.service_point_id){const point=organizationServicePoints.find(x=>String(x.id)===String(row.service_point_id));return point?.short_name||point?.name||'Tabeli vahid';}
+      if(row.organization_id){const org=orgs.find(x=>String(x.id)===String(row.organization_id));return org?.short_name||org?.name||'Təşkilat';}
+      return 'Qlobal';
+    };
+    const groups=new Map();
+    for(const row of positions){const key=unitLabel(row);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+    p.innerHTML=[...groups.entries()].map(([label,rows])=>`<div class="position-scope-group"><b>${escapeHtml(label)}</b><div class="chip-list">${rows.map(x=>`<span class="chip"><i></i>${escapeHtml(x.name)}</span>`).join('')}</div></div>`).join('') || '<div class="empty compact">Vəzifə yoxdur.</div>';
   }
   const l = document.querySelector('#location-list');
   const stat = document.querySelector('#place-catalog-stats');
@@ -647,14 +656,18 @@ async function loadSourcePlatformGroup(group, offset=0, append=false) {
 }
 
 function renderAliases() {
-  const el = document.querySelector('#alias-list');
-  if (!el) return;
-  const grouped = orgs.map(org=>({org,rows:aliases.filter(a=>a.organization_id===org.id&&a.is_active!==false)})).filter(x=>x.rows.length);
-  el.innerHTML = grouped.map(({org,rows})=>`
-    <details class="keyword-group alias-group">
-      <summary><span><strong>${escapeHtml(org.short_name || org.name)}</strong><small>${rows.length} aktiv ad variantı</small></span><span class="keyword-count">${rows.length}</span></summary>
-      <div class="keyword-group-body">${rows.map(a=>`<div class="keyword-item"><span>${escapeHtml(a.alias)}</span><span class="keyword-item-actions"><span class="badge info">${escapeHtml(a.alias_type || 'alias')}</span><button class="icon-btn keyword-delete" type="button" title="Ad variantını sil" data-alias-delete="${a.id}">×</button></span></div>`).join('')}</div>
-    </details>`).join('') || '<div class="empty compact">Ad variantı yoxdur.</div>';
+  const el = document.querySelector('#alias-list'); if (!el) return;
+  const out=[];
+  for(const org of sortedOrganizations().filter(o=>o.service_status!=='archived')){
+    const rows=aliases.filter(a=>String(a.organization_id)===String(org.id)&&a.is_active!==false);
+    if(rows.length)out.push(`<details class="keyword-group alias-group"><summary><span><strong>${escapeHtml(org.short_name||org.name)}</strong><small>Əsas təşkilat · ${rows.length} aktiv ad variantı</small></span><span class="keyword-count">${rows.length}</span></summary><div class="keyword-group-body">${rows.map(a=>`<div class="keyword-item"><span>${escapeHtml(a.alias)}</span><span class="keyword-item-actions"><span class="badge info">${escapeHtml(a.alias_type||'alias')}</span><button class="icon-btn keyword-delete" type="button" title="Ad variantını sil" data-alias-delete="${a.id}">×</button></span></div>`).join('')}</div></details>`);
+    for(const point of servicePointsForOrg(org.id)){
+      const pointRows=servicePointAliases.filter(a=>String(a.service_point_id)===String(point.id)&&a.is_active!==false);
+      if(!pointRows.length)continue;
+      out.push(`<details class="keyword-group alias-group alias-point-group"><summary><span><strong>${escapeHtml(point.short_name||point.name)}</strong><small>${escapeHtml(org.short_name||org.name)} · tabeli vahid · ${pointRows.length} variant</small></span><span class="keyword-count">${pointRows.length}</span></summary><div class="keyword-group-body">${pointRows.map(a=>`<div class="keyword-item"><span>${escapeHtml(a.alias)}</span><span class="keyword-item-actions"><span class="badge ok">${escapeHtml(a.alias_type||'alias')}</span><button class="icon-btn keyword-delete" type="button" title="Ad variantını sil" data-point-alias-delete="${a.id}">×</button></span></div>`).join('')}</div></details>`);
+    }
+  }
+  el.innerHTML=out.join('')||'<div class="empty compact">Ad variantı yoxdur.</div>';
 }
 
 const REVIEW_NOISE_RULES = [
@@ -905,6 +918,15 @@ function bindDynamicActions() {
     });
   });
 
+  document.querySelectorAll('[data-point-alias-delete]').forEach(btn=>{
+    if (btn.dataset.bound) return; btn.dataset.bound='1';
+    btn.addEventListener('click', async ()=>{
+      if (!await confirmDialog({title:'Ad variantı silinsin?',message:'Seçilmiş tabeli vahid ad variantı reyestrdən silinəcək.',confirmText:'Bəli, sil',cancelText:'Xeyr',tone:'danger'})) return;
+      btn.disabled=true; const {error}=await supabase.from('organization_service_point_aliases').delete().eq('id',btn.dataset.pointAliasDelete); btn.disabled=false;
+      toast(error?error.message:'Ad variantı silindi',error?'error':'success'); if(!error)await refresh();
+    });
+  });
+
   document.querySelectorAll('[data-point-edit]').forEach(b => b.onclick = () => modal('point', { point_id:b.dataset.pointEdit }));
   document.querySelectorAll('[data-point-delete]').forEach(b => b.onclick = () => deleteServicePoint(b.dataset.pointDelete));
   document.querySelectorAll('[data-org-toggle]').forEach(b => b.onclick = () => toggleOrg(b.dataset.orgToggle));
@@ -1086,18 +1108,13 @@ async function resetPassword(authUserId) {
   toast(error ? error.message : (data?.message || 'Şifrə yeniləndi'), error ? 'error' : 'success');
 }
 
-function positionOptionsForOrg(orgId, selected='') {
-  const candidates = positions.filter(p => !p.organization_id || p.organization_id === orgId);
-  const byName = new Map();
-  for (const p of candidates) {
-    const key = String(p.name || '').trim().toLocaleLowerCase('az-AZ');
-    const old = byName.get(key);
-    if (!old || (p.organization_id === orgId && old.organization_id !== orgId) || p.id === selected) byName.set(key, p);
-  }
-  return '<option value="">Seçilməyib</option>' + [...byName.values()]
-    .sort((a,b) => String(a.name).localeCompare(String(b.name), 'az'))
-    .map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+function positionOptionsForUnit(orgId, pointId='', selected='') {
+  const candidates=positions.filter(p=>!p.organization_id&&!p.service_point_id || (pointId&&String(p.service_point_id)===String(pointId)) || (!p.service_point_id&&orgId&&String(p.organization_id)===String(orgId)));
+  const byName=new Map();
+  for(const p of candidates){const key=String(p.name||'').trim().toLocaleLowerCase('az-AZ');const old=byName.get(key);const rank=x=>String(x?.service_point_id||'')===String(pointId)&&pointId?3:String(x?.organization_id||'')===String(orgId)&&orgId?2:1;if(!old||rank(p)>rank(old)||p.id===selected)byName.set(key,p);}
+  return '<option value="">Seçilməyib</option>'+[...byName.values()].sort((a,b)=>String(a.name).localeCompare(String(b.name),'az')).map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
 }
+function positionOptionsForOrg(orgId, selected=''){return positionOptionsForUnit(orgId,'',selected);}
 
 
 function serviceAreaPickerHtml(editing) {
@@ -1210,7 +1227,7 @@ function modal(type, preset={}) {
     const fallbackOrg = editing?.organization_id || preset.organization_id || orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'))?.id || '';
     const defaultUnit = editing?.service_point_id ? `point:${editing.service_point_id}` : (fallbackOrg ? `org:${fallbackOrg}` : '');
     const defaultParsed=parseOrganizationUnitSelection(defaultUnit);
-    const posOptions = positionOptionsForOrg(defaultParsed.organization_id||'', editing?.position_id || preset.position_id || '');
+    const posOptions = positionOptionsForUnit(defaultParsed.organization_id||'',defaultParsed.service_point_id||'', editing?.position_id || preset.position_id || '');
     const title = editing ? 'İstifadəçini redaktə et' : 'Yeni istifadəçi';
     const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Hesab yarat';
     document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Giriş və məlumat əhatəsi</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Məlumat əhatəsi</label><select class="select" id="u-scope"><option value="organization" ${defaultScope!=='all'?'selected':''}>Yalnız seçilən təşkilati vahid</option><option value="all" ${defaultScope==='all'?'selected':''}>Bütün sistem / Nazirlik</option></select></div><div class="field"><label>Təşkilat / tabeli vahid</label><select class="select" id="u-unit">${organizationUnitOptions(defaultUnit)}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">İstifadəçi əsas təşkilata və ya onun tabeli idarə/şöbəsinə ayrıca bağlana bilər. Tabeli vahid seçildikdə profil parent təşkilatı da saxlayır, amma istifadəçi yalnız həmin vahidə aid düzgün təsnif edilmiş monitorinq nəticələrini görür.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
@@ -1226,10 +1243,10 @@ function modal(type, preset={}) {
       } else {
         if (!unitSelect.value && defaultUnit) unitSelect.value = defaultUnit;
         const parsed=parseOrganizationUnitSelection(unitSelect.value);
-        positionSelect.innerHTML = positionOptionsForOrg(parsed.organization_id||'', editing?.position_id || '');
+        positionSelect.innerHTML = positionOptionsForUnit(parsed.organization_id||'',parsed.service_point_id||'', editing?.position_id || '');
       }
     };
-    unitSelect.onchange = () => { const parsed=parseOrganizationUnitSelection(unitSelect.value); positionSelect.innerHTML = positionOptionsForOrg(parsed.organization_id||''); };
+    unitSelect.onchange = () => { const parsed=parseOrganizationUnitSelection(unitSelect.value); positionSelect.innerHTML = positionOptionsForUnit(parsed.organization_id||'',parsed.service_point_id||''); };
     scopeSelect.onchange = syncScope;
     syncScope();
     document.querySelector('#user-form').onsubmit = editing ? updateUser : createUser;
@@ -1881,7 +1898,7 @@ async function runMonitorNow() {
   await renderBardaStatus();
 }
 
-document.querySelector('#position-form').onsubmit = async e => { e.preventDefault(); const { error } = await supabase.from('positions').insert({name:document.querySelector('#position-name').value.trim(),organization_id:document.querySelector('#position-org').value||null}); toast(error?error.message:'Vəzifə əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
+document.querySelector('#position-form').onsubmit = async e => { e.preventDefault(); const parsed=parseOrganizationUnitSelection(document.querySelector('#position-org').value); const { error } = await supabase.from('positions').insert({name:document.querySelector('#position-name').value.trim(),organization_id:parsed.organization_id||null,service_point_id:parsed.service_point_id||null}); toast(error?error.message:'Vəzifə əlavə edildi',error?'error':'success'); if(!error){e.target.reset();await refresh();} };
 document.querySelector('#district-form').onsubmit = async e => {
   e.preventDefault();
   const name = document.querySelector('#district-name').value.trim();
@@ -1938,14 +1955,9 @@ document.querySelector('#source-form').onsubmit = async e => {
   if(!error){e.target.reset();await refresh();}
 };
 document.querySelector('#alias-form').onsubmit = async e => {
-  e.preventDefault();
-  const organization_id=document.querySelector('#alias-org').value;
-  const alias=document.querySelector('#alias-value').value.trim();
-  const alias_type=document.querySelector('#alias-type').value;
-  if(!organization_id||!alias) return;
-  const {error}=await supabase.from('organization_aliases').insert({organization_id,alias,alias_type,is_active:true});
-  toast(error?.code==='23505'?'Bu ad variantı artıq mövcuddur.':(error?.message||'Ad variantı əlavə edildi'),error?'error':'success');
-  if(!error){e.target.reset();await refresh();}
+  e.preventDefault(); const parsed=parseOrganizationUnitSelection(document.querySelector('#alias-org').value); const alias=document.querySelector('#alias-value').value.trim(); const alias_type=document.querySelector('#alias-type').value; if((!parsed.organization_id&&!parsed.service_point_id)||!alias)return;
+  const result=parsed.service_point_id?await supabase.from('organization_service_point_aliases').insert({service_point_id:parsed.service_point_id,alias,alias_type,is_active:true}):await supabase.from('organization_aliases').insert({organization_id:parsed.organization_id,alias,alias_type,is_active:true});
+  toast(result.error?.code==='23505'?'Bu ad variantı artıq mövcuddur.':(result.error?.message||'Ad variantı əlavə edildi'),result.error?'error':'success'); if(!result.error){e.target.reset();await refresh();}
 };
 
 document.querySelector('#configure-barda').onclick = configureBarda;

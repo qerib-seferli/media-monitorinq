@@ -153,6 +153,34 @@ export function registerSW() {
 }
 
 
+
+
+export function installCompactMobileSelects(root=document){
+  const mobile=()=>window.matchMedia('(max-width: 720px)').matches;
+  const closeAll=except=>document.querySelectorAll('.mm-select-popover.is-open').forEach(x=>{if(x!==except)x.classList.remove('is-open')});
+  const enhance=select=>{
+    if(!select || select.dataset.mmSelect==='1')return;
+    select.dataset.mmSelect='1'; select.classList.add('mm-native-select');
+    const trigger=document.createElement('button'); trigger.type='button'; trigger.className='mm-select-trigger'; trigger.dataset.selectId=select.id||'';
+    const pop=document.createElement('div'); pop.className='mm-select-popover';
+    select.insertAdjacentElement('afterend',pop); select.insertAdjacentElement('afterend',trigger);
+    const rebuild=()=>{
+      const current=select.options[select.selectedIndex]; trigger.textContent=current?.textContent||select.getAttribute('aria-label')||'Seçin'; trigger.disabled=select.disabled; trigger.hidden=select.classList.contains('hidden');
+      const parts=[]; let currentGroup='';
+      [...select.options].forEach(opt=>{const group=opt.parentElement?.tagName==='OPTGROUP'?opt.parentElement.label:'';if(group&&group!==currentGroup){parts.push(`<div class="mm-select-group">${escapeHtml(group)}</div>`);currentGroup=group;}if(!group)currentGroup='';parts.push(`<button type="button" class="mm-select-option${opt.selected?' is-selected':''}" data-value="${escapeHtml(opt.value)}" ${opt.disabled?'disabled':''}>${escapeHtml(opt.textContent||'')}</button>`);});
+      pop.innerHTML=parts.join('');
+      pop.querySelectorAll('.mm-select-option').forEach(btn=>btn.onclick=()=>{select.value=btn.dataset.value||'';select.dispatchEvent(new Event('change',{bubbles:true}));rebuild();pop.classList.remove('is-open');});
+    };
+    trigger.onclick=e=>{e.preventDefault();if(!mobile()||select.disabled)return;closeAll(pop);pop.classList.toggle('is-open');};
+    select.addEventListener('change',rebuild);
+    new MutationObserver(rebuild).observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','class']});
+    rebuild();
+  };
+  root.querySelectorAll?.('select.select').forEach(enhance);
+  new MutationObserver(ms=>{for(const m of ms)for(const n of m.addedNodes){if(n.nodeType!==1)continue;if(n.matches?.('select.select'))enhance(n);n.querySelectorAll?.('select.select').forEach(enhance);}}).observe(root===document?document.body:root,{childList:true,subtree:true});
+  if(!window.__mmSelectOutside){window.__mmSelectOutside=true;document.addEventListener('click',e=>{if(!e.target.closest?.('.mm-select-trigger,.mm-select-popover'))closeAll();});window.addEventListener('resize',()=>{if(!mobile())closeAll();});}
+}
+
 export function getCachedProfile() {
   try { return JSON.parse(sessionStorage.getItem('mm.cachedProfile') || 'null'); } catch { return null; }
 }
@@ -218,6 +246,7 @@ function installNavigationLoader() {
 }
 
 installNavigationLoader();
+installCompactMobileSelects();
 
 window.addEventListener('unhandledrejection', event => {
   const reason = event.reason;

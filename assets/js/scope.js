@@ -66,15 +66,20 @@ export function youtubeVideoId(row){
   return '';
 }
 export function mentionPreviewUrl(row){
+  const platform=String(row?.source_platform||'').toLowerCase();
+  // YouTube kartında hər zaman videonun real qapaq şəkli göstərilir. Köhnə arxiv
+  // screenshot-ları və kanal/page görüntüləri kartın ilkin şəklini əvəz etmir.
+  if(platform.includes('youtube')){const id=youtubeVideoId(row);if(id)return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;}
+  const raw=row?.raw_payload||{};
+  const rawCandidates=[raw.image_url,raw.image,raw.thumbnail_url,raw.thumbnail,raw.og_image,raw.preview_image];
+  const rawImage=rawCandidates.map(x=>String(x||'').trim()).find(x=>/^https?:\/\//i.test(x));
+  if(rawImage) return rawImage;
   const media=Array.isArray(row?.mention_media)?row.mention_media:[];
-  const ranked=[...media].filter(x=>x?.url).sort((a,b)=>({preview_external:0,preview:1,screenshot:2}[String(a?.media_type||'').toLowerCase()]??9)-({preview_external:0,preview:1,screenshot:2}[String(b?.media_type||'').toLowerCase()]??9));
-  if(ranked[0]?.url) return ranked[0].url;
-  // Xəbər şəkli Supabase Storage-a kopyalanmır: orijinal CDN URL-i istifadə olunur.
-  // Bu, şəkil egressini ciddi azaldır; screenshot yalnız həqiqətən lazım olanda arxivlənir.
-  const external=String(row?.raw_payload?.image_url||row?.raw_payload?.image||'').trim();
-  if(/^https?:\/\//i.test(external)) return external;
-  if(String(row?.source_platform||'').toLowerCase().includes('youtube')){const id=youtubeVideoId(row);if(id)return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;}
-  return './assets/img/icon.svg';
+  const ranked=[...media].filter(x=>x?.url).sort((a,b)=>({preview_external:0,preview:1,screenshot:9}[String(a?.media_type||'').toLowerCase()]??5)-({preview_external:0,preview:1,screenshot:9}[String(b?.media_type||'').toLowerCase()]??5));
+  const cover=ranked.find(x=>String(x?.media_type||'').toLowerCase()!=='screenshot');
+  if(cover?.url) return cover.url;
+  const shot=ranked.find(x=>String(x?.media_type||'').toLowerCase()==='screenshot');
+  return shot?.url || './assets/img/icon.svg';
 }
 
 
