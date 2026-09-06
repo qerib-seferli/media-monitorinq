@@ -2127,3 +2127,39 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .monitor-filters>.mm-select-trigger[data-select-id="period"]{grid-area:period}.monitor-filters>.mm-select-trigger[data-select-id="platform"]{grid-area:platform}.monitor-filters>.mm-select-trigger[data-select-id="sentiment"]{grid-area:sentiment}.monitor-filters>.mm-select-trigger[data-select-id="organization-filter"]{grid-area:organization}
   .report-toolbar>.mm-select-trigger[data-select-id="report-period"]{grid-area:period}.report-toolbar>.mm-select-trigger[data-select-id="organization-filter"]{grid-area:organization}
 }
+
+
+/* v67 — mobil seçimlər və dashboard idarəetməsi */
+.dashboard-head .page-actions{
+  display:grid!important;
+  grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  gap:8px!important;
+  width:100%!important;
+}
+.dashboard-head .page-actions .dashboard-action-monitor{grid-column:1}
+.dashboard-head .page-actions .dashboard-action-comments{grid-column:2}
+.dashboard-head .page-actions #organization-filter,
+.dashboard-head .page-actions .mm-select-trigger[data-select-id="organization-filter"]{grid-column:1/-1!important;width:100%!important}
+.dashboard-head .page-actions .mm-select-trigger[data-select-id="organization-filter"]{min-width:0!important}
+
+@media (max-width:720px){
+  select.mm-native-select{position:absolute!important;opacity:0!important;pointer-events:none!important;width:1px!important;height:1px!important;margin:0!important;padding:0!important}
+  .mm-select-trigger{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;min-width:0;height:44px;padding:0 34px 0 12px;border:1px solid rgba(119,174,204,.23);border-radius:13px;background:#0b2035;color:#eef7fb;font-size:11px;font-weight:700;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative;box-shadow:none}
+  .mm-select-trigger::after{content:'⌄';position:absolute;right:11px;top:50%;transform:translateY(-52%);color:#78aac3;font-size:13px}
+  .mm-select-trigger:focus-visible{outline:2px solid rgba(90,203,173,.55);outline-offset:1px}
+  .mm-select-trigger:disabled{opacity:.55}.mm-select-trigger[hidden]{display:none!important}
+  .mm-select-popover{display:none;position:fixed;z-index:10050;left:var(--mm-pop-left,8px);top:var(--mm-pop-top,80px);right:auto;bottom:auto;width:var(--mm-pop-width,calc(100vw - 16px));max-width:calc(100vw - 16px);max-height:var(--mm-pop-max-height,300px);overflow:hidden;padding:6px;border:1px solid rgba(107,182,221,.3);border-radius:14px;background:#081a2b;box-shadow:0 18px 52px rgba(0,0,0,.52);overscroll-behavior:contain}
+  .mm-select-popover.is-open{display:flex;flex-direction:column}
+  .mm-select-search-wrap{position:sticky;top:0;z-index:2;padding:2px 2px 6px;background:#081a2b}
+  .mm-select-search{display:block;width:100%;height:38px;padding:0 11px;border:1px solid rgba(117,174,204,.22);border-radius:10px;background:#0c2338;color:#eef7fb;font:inherit;font-size:11px;outline:none}
+  .mm-select-search::placeholder{color:#7999aa}.mm-select-search:focus{border-color:rgba(82,203,166,.48)}
+  .mm-select-options{min-height:0;overflow:auto;padding:0 1px 1px;scrollbar-width:thin;overscroll-behavior:contain}
+  .mm-select-group{position:sticky;top:0;z-index:1;margin:2px 0 1px;padding:7px 8px 4px;background:#081a2b;color:#68d3b3;font-size:8.5px;font-weight:900;text-transform:uppercase;letter-spacing:.055em}
+  .mm-select-option{display:block;width:100%;min-height:38px;border:0;border-radius:9px;background:transparent;color:#dcebf2;text-align:left;padding:8px 9px;font-size:10.5px;line-height:1.28;white-space:normal;overflow-wrap:anywhere}
+  .mm-select-option:hover,.mm-select-option:focus-visible{background:rgba(78,137,166,.11);outline:none}
+  .mm-select-option.is-selected{background:rgba(76,205,169,.13);color:#8ff0ce;font-weight:900}
+  .mm-select-option+ .mm-select-option{margin-top:1px}
+  .dashboard-head .page-actions{grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .dashboard-head .page-actions .btn{height:48px!important;padding:0 8px!important;display:flex!important;align-items:center!important;justify-content:center!important}
+  .dashboard-head .page-actions .mm-select-trigger[data-select-id="organization-filter"]{height:48px!important;grid-column:1/-1!important}
+}
