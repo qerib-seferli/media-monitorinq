@@ -113,7 +113,7 @@ async function loadMapData(){
   if(pointRes.error)console.warn('Xidmət nöqtələri yüklənmədi:',pointRes.error);
   if(areaRes.error)console.warn('Təşkilat xidmət əraziləri yüklənmədi:',areaRes.error);
   const orgs=orgRes.data||[],districts=distRes.data||[],servicePoints=pointRes.data||[],serviceAreas=areaRes.data||[];
-  const counts=new Map(),districtCounts=new Map(),latest=new Map(),districtLatest=new Map();
+  const counts=new Map(),districtCounts=new Map(),unscopedCounts=new Map(),latest=new Map(),districtLatest=new Map(),unscopedLatest=new Map();
   for(let from=0;from<20000;from+=1000){
     const {data,error}=await supabase.from('mentions').select('organization_id,district_id,source_platform,detected_at,relevance_score').gt('relevance_score',0).order('detected_at',{ascending:false}).range(from,from+999);
     if(error)throw error;const rows=data||[];
@@ -127,11 +127,15 @@ async function loadMapData(){
         districtCounts.set(dKey,(districtCounts.get(dKey)||0)+1);
         const dlKey=`${m.organization_id}|${m.district_id}`;
         if(!districtLatest.has(dlKey))districtLatest.set(dlKey,m.detected_at);
+      }else{
+        const uKey=`${m.organization_id}|${platform}`;
+        unscopedCounts.set(uKey,(unscopedCounts.get(uKey)||0)+1);
+        if(!unscopedLatest.has(String(m.organization_id)))unscopedLatest.set(String(m.organization_id),m.detected_at);
       }
     }
     if(rows.length<1000)break;
   }
-  return {orgs,districts,servicePoints,serviceAreas,counts,districtCounts,latest,districtLatest};
+  return {orgs,districts,servicePoints,serviceAreas,counts,districtCounts,unscopedCounts,latest,districtLatest,unscopedLatest};
 }
 
 function organizationMapDistrictId(org){
@@ -186,7 +190,7 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   let geo,data;
   try{[geo,data]=await Promise.all([loadGeo(),loadMapData()]);}
   catch(error){console.warn(error);root.innerHTML='<div class="empty">Xəritə məlumatı hazırda yüklənmədi. Səhifəni yenilədikdə yenidən yoxlanacaq.</div>';return null;}
-  const {orgs,districts,servicePoints,serviceAreas,counts,districtCounts,latest,districtLatest}=data;
+  const {orgs,districts,servicePoints,serviceAreas,counts,districtCounts,unscopedCounts,latest,districtLatest,unscopedLatest}=data;
   const activeOrgs=orgs.filter(o=>ACTIVE_STATUSES.has(o.service_status));
   const activeOrgById=new Map(activeOrgs.map(o=>[String(o.id),o]));
   const districtByNorm=new Map(districts.map(d=>[normName(d.name),d]));
@@ -224,23 +228,38 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
     const points=district?servicePointsByDistrict.get(String(district.id))||[]:[];
     return {mapName,district,rows,points};
   }
-  function orgSources(o,districtId=null){
+  function isPhysicallyInDistrict(o,districtId){
+    if(!o||!districtId)return false;
+    return String(o.location_district_id||'')===String(districtId);
+  }
+  function orgSources(o,districtId=null,{placeUnscopedAtPhysical=false}={}){
     const names=['Web','YouTube','Facebook','Instagram','TikTok','Telegram','RSS'];
     return names.map(name=>{
-      const n=districtId?(districtCounts.get(`${o.id}|${districtId}|${name}`)||0):(counts.get(`${o.id}|${name}`)||0);
+      let n=districtId?(districtCounts.get(`${o.id}|${districtId}|${name}`)||0):(counts.get(`${o.id}|${name}`)||0);
+      // Rayon etiketi olmayan nəticə yalnız təşkilatın faktiki yerləşdiyi ərazidə göstərilir.
+      // Beləliklə mərkəzi qurumun ümumi nəticəsi bütün xidmət rayonlarına yayılmır.
+      if(districtId&&placeUnscopedAtPhysical&&isPhysicallyInDistrict(o,districtId))n+=unscopedCounts.get(`${o.id}|${name}`)||0;
       return [name,n];
     }).filter(([,n])=>n>0);
   }
   function sourceTotal(rows=[]){return rows.reduce((sum,[,n])=>sum+Number(n||0),0);}
-  function orgLatest(o,districtId=null){
-    return districtId?districtLatest.get(`${o.id}|${districtId}`):latest.get(String(o.id));
+  function orgLatest(o,districtId=null,{placeUnscopedAtPhysical=false}={}){
+    if(!districtId)return latest.get(String(o.id));
+    const scoped=districtLatest.get(`${o.id}|${districtId}`);
+    const unscoped=placeUnscopedAtPhysical&&isPhysicallyInDistrict(o,districtId)?unscopedLatest.get(String(o.id)):null;
+    if(!scoped)return unscoped;if(!unscoped)return scoped;
+    return new Date(scoped)>=new Date(unscoped)?scoped:unscoped;
+  }
+  function physicalOrganizations(districtId){
+    if(!districtId)return [];
+    return activeOrgs.filter(o=>isPhysicallyInDistrict(o,districtId));
   }
   function renderDetail(path){
     const {mapName,district,rows:rawRows,points}=districtInfo(path);if(!detail)return;
     const rows=[...rawRows].sort((a,b)=>{const am=mapHierarchyMeta(a),bm=mapHierarchyMeta(b);return am.order-bm.order||String(a.short_name||a.name||'').localeCompare(String(b.short_name||b.name||''),'az');});
     const districtId=district?String(district.id):null;
     const saved=radarRead(),hitMap=radarHitsByDistrict(saved,activeOrgs,serviceAreaIdsByOrg),hit=districtId?Number(hitMap.get(districtId)||0):0;
-    const total=rows.reduce((sum,o)=>sum+sourceTotal(orgSources(o,districtId)),0);
+    const total=activeOrgs.reduce((sum,o)=>sum+sourceTotal(orgSources(o,districtId,{placeUnscopedAtPhysical:true})),0);
     const orgCards=rows.map((o,index)=>{
       const selectedAreaIds=[...(serviceAreaIdsByOrg.get(String(o.id))||[])];
       const serviceDistrict=district?.name || districtNameById(o.district_id,districtsById);
@@ -248,7 +267,7 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
       const physicalDistrict=districtNameById(o.location_district_id,districtsById);
       const verified=Boolean(o.location_verified);
       const meta=mapHierarchyMeta(o);
-      const localSources=orgSources(o,districtId);
+      const localSources=orgSources(o,districtId,{placeUnscopedAtPhysical:true});
       const allSources=orgSources(o);
       const localTotal=sourceTotal(localSources);
       const overallTotal=sourceTotal(allSources);
@@ -258,19 +277,21 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
       const sourceBlock=localTotal>0
         ? `<div class="az-result-scope-label">Bu ərazi üzrə</div><div class="az-source-chips">${localSources.map(([name,n])=>`<span class="az-source-chip has-result">${escapeHtml(name)} · ${n}</span>`).join('')}</div>${overallTotal>localTotal?`<small class="az-org-overall">Təşkilat üzrə ümumi: <b>${overallTotal}</b> məlumat</small>`:''}`
         : (overallTotal>0?`<div class="az-result-scope-label">Təşkilat üzrə ümumi</div><div class="az-source-chips">${allSources.map(([name,n])=>`<span class="az-source-chip has-result">${escapeHtml(name)} · ${n}</span>`).join('')}</div><small class="az-org-overall">Bu nəticələr seçilmiş əraziyə aid edilməyib; xəritənin ərazi sayına və rənginə daxil edilmir.</small>`:'<small class="az-org-overall">Bu təşkilat üzrə hələ monitorinq nəticəsi yoxdur.</small>');
-      const lastSeen=localTotal>0?orgLatest(o,districtId):orgLatest(o);
+      const lastSeen=localTotal>0?orgLatest(o,districtId,{placeUnscopedAtPhysical:true}):orgLatest(o);
       const stateKey=detailStateKey(districtId,'org',String(o.id));
       const isOpen=detailOpenState.get(stateKey)===true;
       return `<details class="az-org-row az-org-collapsible hierarchy-level-${meta.level}" data-detail-state-key="${escapeHtml(stateKey)}" ${isOpen?'open':''}><summary class="az-org-summary"><span class="az-hierarchy-mark" aria-hidden="true"></span><span class="az-org-summary-main"><strong>${escapeHtml(o.name||o.short_name||'Təşkilat')}</strong><small>${escapeHtml(meta.label)} · ${escapeHtml(o.short_name||'')}</small></span>${summaryCount}<span class="az-collapse-chevron" aria-hidden="true">⌄</span></summary><div class="az-org-collapsible-body"><div class="az-org-meta">${serviceDistrict?`<span>Xidmət ərazisi: <b>${escapeHtml(serviceDistrict)}</b>${coverageCount>1?` · ümumi ${coverageCount} ərazi`:''}</span>`:''}<span class="${verified?'verified':'pending'}">Fiziki yerləşmə: <b>${escapeHtml(physicalDistrict||'dəqiqləşdirilir')}</b>${verified?' · təsdiqli':' · dəqiqləşdirilir'}</span></div><small class="az-org-address">${escapeHtml(o.address_text || 'Rəsmi ünvan bazaya daxil edilməyib')}</small>${contactLinks(o)}${sourceLink(o)}${sourceBlock}<small class="az-org-last">Son aşkarlanma: ${escapeHtml(fmtDate(lastSeen))}</small></div></details>`;
     }).join('');
     const pointCards=points.map(p=>{const parent=activeOrgById.get(String(p.organization_id));const stateKey=detailStateKey(districtId,'point',String(p.id));const isOpen=detailOpenState.get(stateKey)===true;return `<details class="az-org-row az-service-point az-org-collapsible hierarchy-level-4" data-detail-state-key="${escapeHtml(stateKey)}" ${isOpen?'open':''}><summary class="az-org-summary"><span class="az-hierarchy-mark" aria-hidden="true"></span><span class="az-org-summary-main"><strong>${escapeHtml(p.name||'Xidmət nöqtəsi')}</strong><small>Xidmət nöqtəsi${parent?` · ${escapeHtml(parent.short_name||parent.name||'')}`:''}</small></span><span class="az-collapse-chevron" aria-hidden="true">⌄</span></summary><div class="az-org-collapsible-body">${parent?`<div class="az-point-parent">Tabeli qurum: <b>${escapeHtml(parent.short_name||parent.name||'')}</b></div>`:''}<small class="az-org-address">${escapeHtml(p.address_text||'Rəsmi ünvan bazaya daxil edilməyib')}</small>${contactLinks(p)}${sourceLink(p)}</div></details>`;}).join('');
+    const physicalCount=physicalOrganizations(districtId).length;
     const districtResultText=total>0?`${total} məlumat`:'ərazi üzrə nəticə yoxdur';
-    detail.innerHTML=`<div class="az-map-detail-head"><div><span class="eyebrow">Seçilən ərazi</span><h3>${escapeHtml(district?.name||mapName||'Ərazi')}</h3><p>${rows.length} təşkilat${points.length?` · ${points.length} xidmət nöqtəsi`:''} · ${districtResultText}${hit?` · <b>son skanda +${hit}</b>`:''}</p></div></div>${rows.length?`<div class="az-detail-section-title">Təşkilatlar <b>${rows.length}</b></div><div class="az-org-list">${orgCards}</div>`:(points.length?'<div class="empty compact">Bu ərazi ayrıca əsas təşkilat deyil, tabeli xidmət nöqtəsi vasitəsilə əhatə olunur.</div>':'<div class="empty compact">Bu əraziyə aktiv xidmət əhatəsi təyin edilməyib.</div>')}${points.length?`<div class="az-detail-section-title service">Xidmət nöqtələri <b>${points.length}</b></div><div class="az-org-list">${pointCards}</div>`:''}`;
+    const coverageText=rows.length!==physicalCount?` · ${rows.length} xidmət göstərən`:'';
+    detail.innerHTML=`<div class="az-map-detail-head"><div><span class="eyebrow">Seçilən ərazi</span><h3>${escapeHtml(district?.name||mapName||'Ərazi')}</h3><p>${physicalCount} fiziki təşkilat${coverageText}${points.length?` · ${points.length} xidmət nöqtəsi`:''} · ${districtResultText}${hit?` · <b>son skanda +${hit}</b>`:''}</p></div></div>${rows.length?`<div class="az-detail-section-title">Xidmət göstərən təşkilatlar <b>${rows.length}</b></div><div class="az-org-list">${orgCards}</div>`:(points.length?'<div class="empty compact">Bu ərazi ayrıca əsas təşkilat deyil, tabeli xidmət nöqtəsi vasitəsilə əhatə olunur.</div>':'<div class="empty compact">Bu əraziyə aktiv xidmət əhatəsi təyin edilməyib.</div>')}${points.length?`<div class="az-detail-section-title service">Xidmət nöqtələri <b>${points.length}</b></div><div class="az-org-list">${pointCards}</div>`:''}`;
     detail.querySelectorAll('details[data-detail-state-key]').forEach(el=>{el.addEventListener('toggle',()=>{detailOpenState.set(el.dataset.detailStateKey,el.open);});});
   }
   function showTooltip(path,event){
     if(!tooltip)return;const {mapName,district,rows,points}=districtInfo(path);const saved=radarRead(),hits=radarHitsByDistrict(saved,activeOrgs,serviceAreaIdsByOrg),hit=district?hits.get(String(district.id))||0:0;
-    tooltip.innerHTML=`<strong>${escapeHtml(district?.name||mapName)}</strong><span>${rows.length} təşkilat${points.length?` · ${points.length} xidmət nöqtəsi`:''}${hit?` · son skan +${hit}`:''}</span>`;tooltip.hidden=false;
+    const physicalCount=district?physicalOrganizations(String(district.id)).length:0;tooltip.innerHTML=`<strong>${escapeHtml(district?.name||mapName)}</strong><span>${physicalCount} fiziki təşkilat${rows.length!==physicalCount?` · ${rows.length} xidmət göstərən`:''}${points.length?` · ${points.length} xidmət nöqtəsi`:''}${hit?` · son skan +${hit}`:''}</span>`;tooltip.hidden=false;
     const box=root.querySelector('.az-map-svg-wrap').getBoundingClientRect();const x=(event?.clientX??box.left+box.width/2)-box.left,y=(event?.clientY??box.top+20)-box.top;
     tooltip.style.left=`${Math.max(8,Math.min(box.width-180,x+12))}px`;tooltip.style.top=`${Math.max(8,Math.min(box.height-64,y+12))}px`;
   }
@@ -284,7 +305,7 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
     const allResults=activeOrgs.reduce((sum,o)=>sum+sourceTotal(orgSources(o)),0);
     const unlocatedOrgs=activeOrgs.filter(o=>!o.location_verified);const unlocated=unlocatedOrgs.length;
     for(const path of paths){
-      const {district,rows}=districtInfo(path);const mapDistrictId=district?String(district.id):null;const total=rows.reduce((sum,o)=>sum+sourceTotal(orgSources(o,mapDistrictId)),0);
+      const {district,rows}=districtInfo(path);const mapDistrictId=district?String(district.id):null;const total=activeOrgs.reduce((sum,o)=>sum+sourceTotal(orgSources(o,mapDistrictId,{placeUnscopedAtPhysical:true})),0);
       const hit=district?Number(hits.get(String(district.id))||0):0;path.classList.toggle('has-organization',rows.length>0);path.classList.toggle('no-organization',rows.length===0);path.classList.toggle('has-results',total>0);path.classList.toggle('radar-hit',hit>0);path.classList.toggle('is-scanning',running&&hit>0);path.classList.toggle('is-current-scan',running&&district&&String(district.id)===currentDistrictId);if(total>0)activeDistricts++;
     }
     if(kpis){kpis.innerHTML=`<span><b>${districts.length}</b><small>Ərazi</small></span><span><b>${activeOrgs.length}</b><small>Aktiv təşkilat</small></span><span><b>${activeDistricts}</b><small>Nəticəli ərazi</small></span><span><b>${allResults}</b><small>Yüklənən nəticə</small></span><span class="${unlocated?'needs-location clickable':''}" data-map-unlocated title="${unlocated?'Dəqiq fiziki yerləşməsi ayrıca təsdiqlənməyən aktiv təşkilatları göstər':'Bütün aktiv təşkilatların fiziki yerləşməsi təsdiqlənib'}"><b>${unlocated}</b><small>Fiziki yer dəqiqləşəcək</small></span>`;kpis.querySelector('[data-map-unlocated]')?.addEventListener('click',renderUnlocated);}
