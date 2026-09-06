@@ -22,7 +22,15 @@ jobs:
   youtube-monitor:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [0, 1, 2]
+    concurrency:
+      group: media-monitor-youtube-live-${{ matrix.shard }}
+      cancel-in-progress: false
     steps:
       - name: Check monitor secret
         env:
@@ -36,21 +44,39 @@ jobs:
       - name: YouTube and internal monitor worker
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          SHARD: ${{ matrix.shard }}
         run: |
-          # Edge Function-un 55s platform limitinə yaxınlaşmamaq üçün aktiv təşkilatlar
-          # 15 dəqiqəlik rotasiya ilə kiçik paketlərdə yoxlanır. Növbəti schedule qalanları götürür.
+          # Eyni 6 təşkilatı bir Edge invocation-a yükləmək 546 / WORKER_RESOURCE_LIMIT
+          # yarada bilirdi. Yük 3 müstəqil shard-a bölünür: hər invocation ən çox 2 qurum.
+          # Beləliklə ümumi rotasiya sürəti qorunur, amma hər funksiyanın yaddaş/CPU yükü azalır.
           ROTATION_BUCKET=$(( $(date +%s) / 900 ))
-          curl --fail-with-body --silent --show-error \
+          URL="https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
+          BODY="{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":true,\"browser_quick\":true,\"verify_existing\":false,\"refilter_existing\":false,\"organization_shard_count\":3,\"organization_shard_index\":${SHARD},\"organization_batch\":2,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1}"
+          if curl --fail-with-body --silent --show-error \
             --connect-timeout 15 \
-            --max-time 105 \
-            --retry 2 \
+            --max-time 95 \
+            --retry 1 \
             --retry-delay 4 \
-            --retry-all-errors \
             -X POST \
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d "{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":true,\"verify_existing\":false,\"refilter_existing\":true,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":6,\"organization_rotation_bucket\":${ROTATION_BUCKET}}" \
-            "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
+            -d "$BODY" "$URL"; then
+            exit 0
+          fi
+
+          # Resurs limiti və ya müvəqqəti Edge xətasında eyni ağır sorğunu kor-koranə
+          # təkrarlamırıq. Son bir təhlükəsiz fallback yalnız 1 təşkilatı yoxlayır.
+          echo "İlkin YouTube shard uğursuz oldu; 1 təşkilatlıq təhlükəsiz fallback işləyir."
+          sleep 5
+          FALLBACK="{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":true,\"browser_quick\":true,\"verify_existing\":false,\"refilter_existing\":false,\"organization_shard_count\":3,\"organization_shard_index\":${SHARD},\"organization_batch\":1,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1}"
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 15 \
+            --max-time 80 \
+            --retry 0 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-monitor-secret: $MONITOR_SECRET" \
+            -d "$FALLBACK" "$URL"
 
   youtube-global-rotation:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
