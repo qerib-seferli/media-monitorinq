@@ -1968,3 +1968,65 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .az-org-title strong{font-size:12px}
   .az-org-address,.az-org-meta span,.az-contact-links a{font-size:9px}
 }
+
+
+/* v56 — xidmət əraziləri seçimi və xəritə sağ panelinin final oxunaqlılığı */
+.org-modal{width:min(940px,100%)}
+.service-area-field{min-width:0}
+.service-area-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.service-area-count{color:#9bb9ca;font-size:11px}
+.service-area-count b{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;margin-right:5px;border-radius:999px;background:rgba(67,218,160,.13);border:1px solid rgba(67,218,160,.28);color:#72e6b8}
+.service-area-actions{display:flex;gap:6px}
+.service-area-search{margin-bottom:8px}
+.service-area-picker{
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:6px;
+  max-height:300px;
+  padding:8px;
+}
+.service-area-option{
+  min-height:38px;
+  padding:7px 9px;
+  font-size:11px;
+  border-color:rgba(105,168,200,.14);
+  transition:border-color .15s ease,background .15s ease,box-shadow .15s ease;
+}
+.service-area-option.is-selected{
+  border-color:rgba(69,222,165,.45);
+  background:rgba(39,154,113,.16);
+  box-shadow:inset 0 0 0 1px rgba(80,232,174,.08);
+  color:#e4fff5;
+}
+.service-area-option[hidden]{display:none!important}
+
+.az-map-detail{font-size:11px}
+.az-map-detail-head h3{font-size:20px}
+.az-map-detail-head p{font-size:11px}
+.az-detail-section-title{font-size:10px}
+.az-detail-section-title b{font-size:9px}
+.az-org-list{gap:10px}
+.az-org-row{padding:13px}
+.az-org-title strong{font-size:12.5px;line-height:1.4}
+.az-org-title small{font-size:9px;line-height:1.35}
+.az-org-address{font-size:9.5px;line-height:1.5;margin-top:7px}
+.az-org-meta{gap:7px}
+.az-org-meta span{font-size:9.5px;line-height:1.45;padding:7px 8px}
+.az-contact-links{gap:6px;margin-top:8px}
+.az-contact-links a{font-size:9.5px;padding:6px 8px}
+.az-official-source{margin-top:8px}
+.az-official-source a,.az-official-source>span{font-size:9px}
+.az-official-source small{font-size:8.5px;line-height:1.45}
+.az-source-chip{font-size:9px;padding:4px 7px}
+.az-org-last,.az-point-parent{font-size:9px;line-height:1.45}
+
+@media(max-width:900px){
+  .service-area-picker{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media(max-width:680px){
+  .org-modal{width:100%}
+  .service-area-tools{align-items:flex-start;flex-direction:column}
+  .service-area-picker{grid-template-columns:repeat(2,minmax(0,1fr));max-height:320px}
+}
+@media(max-width:430px){
+  .service-area-picker{grid-template-columns:1fr}
+}
