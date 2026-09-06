@@ -157,37 +157,55 @@ export function registerSW() {
 
 export function installCompactMobileSelects(root=document){
   const mobile=()=>window.matchMedia('(max-width: 720px)').matches;
-  const closeAll=except=>document.querySelectorAll('.mm-select-popover.is-open').forEach(x=>{
-    if(x!==except){
-      x.classList.remove('is-open','is-above','is-long');
-      x.style.removeProperty('--mm-pop-left');
-      x.style.removeProperty('--mm-pop-top');
-      x.style.removeProperty('--mm-pop-width');
-      x.style.removeProperty('--mm-pop-max-height');
-    }
+  const closeAll=except=>document.querySelectorAll('.mm-select-popover.is-open').forEach(pop=>{
+    if(pop===except)return;
+    pop.classList.remove('is-open','is-above','is-long');
+    pop.style.removeProperty('--mm-pop-left');
+    pop.style.removeProperty('--mm-pop-top');
+    pop.style.removeProperty('--mm-pop-width');
+    pop.style.removeProperty('--mm-pop-max-height');
+    const trigger=pop.previousElementSibling;
+    if(trigger?.classList?.contains('mm-select-trigger'))trigger.setAttribute('aria-expanded','false');
   });
-  const positionPopover=(trigger,pop,optionCount)=>{
+
+  const positionPopover=(trigger,pop)=>{
+    const vv=window.visualViewport;
+    const viewportW=Math.round(vv?.width || document.documentElement.clientWidth || window.innerWidth);
+    const viewportH=Math.round(vv?.height || window.innerHeight || document.documentElement.clientHeight);
+    const viewportLeft=Math.round(vv?.offsetLeft || 0);
+    const viewportTop=Math.round(vv?.offsetTop || 0);
     const rect=trigger.getBoundingClientRect();
     const gap=6;
-    const viewportW=document.documentElement.clientWidth||window.innerWidth;
-    const viewportH=window.innerHeight||document.documentElement.clientHeight;
-    const width=Math.min(viewportW-16,Math.max(rect.width,180));
-    const left=Math.max(8,Math.min(rect.left,viewportW-width-8));
-    const rowH=42;
-    const groupCount=pop.querySelectorAll('.mm-select-group').length;
-    const desired=Math.min(optionCount*rowH + groupCount*25 + 12, Math.round(viewportH*.48));
-    const below=Math.max(0,viewportH-rect.bottom-gap-12);
-    const above=Math.max(0,rect.top-gap-12);
-    const openAbove=below<Math.min(desired,180) && above>below;
-    const available=Math.max(90,Math.min(Math.round(viewportH*.48),openAbove?above:below));
-    const top=openAbove?Math.max(8,rect.top-gap-Math.min(desired,available)):Math.min(viewportH-8,rect.bottom+gap);
-    pop.classList.toggle('is-above',openAbove);
-    pop.classList.toggle('is-long',desired>available || optionCount>8);
-    pop.style.setProperty('--mm-pop-left',`${left}px`);
-    pop.style.setProperty('--mm-pop-top',`${top}px`);
+    const edge=8;
+    const width=Math.max(120,Math.min(rect.width,viewportW-edge*2));
+    const left=Math.max(viewportLeft+edge,Math.min(rect.left,viewportLeft+viewportW-width-edge));
+
+    // Menyu əvvəlcə görünür ki, real hündürlüyü ölçək; qısa siyahı heç vaxt süni uzadılmır.
     pop.style.setProperty('--mm-pop-width',`${width}px`);
-    pop.style.setProperty('--mm-pop-max-height',`${available}px`);
+    pop.style.setProperty('--mm-pop-left',`${left}px`);
+    pop.style.setProperty('--mm-pop-top',`${Math.round(rect.bottom+gap)}px`);
+    pop.style.setProperty('--mm-pop-max-height',`${Math.max(120,Math.round(viewportH*.42))}px`);
+    pop.classList.remove('is-above','is-long');
+
+    const options=pop.querySelector('.mm-select-options');
+    const contentHeight=Math.ceil((options?.scrollHeight||0)+10);
+    const maxMenu=Math.max(120,Math.min(320,Math.round(viewportH*.42)));
+    const below=Math.max(0,viewportTop+viewportH-rect.bottom-gap-edge);
+    const above=Math.max(0,rect.top-viewportTop-gap-edge);
+    const needsScroll=contentHeight>Math.max(120,Math.max(below,above));
+    const openAbove=below<Math.min(contentHeight,maxMenu) && above>below;
+    const available=Math.max(100,Math.min(maxMenu,openAbove?above:below));
+    const visibleHeight=Math.min(contentHeight,available);
+    const top=openAbove
+      ? Math.max(viewportTop+edge,rect.top-gap-visibleHeight)
+      : Math.min(viewportTop+viewportH-edge-visibleHeight,rect.bottom+gap);
+
+    pop.classList.toggle('is-above',openAbove);
+    pop.classList.toggle('is-long',needsScroll || contentHeight>available);
+    pop.style.setProperty('--mm-pop-top',`${Math.round(top)}px`);
+    pop.style.setProperty('--mm-pop-max-height',`${Math.round(available)}px`);
   };
+
   const enhance=select=>{
     if(!select || select.dataset.mmSelect==='1')return;
     select.dataset.mmSelect='1';
@@ -209,10 +227,9 @@ export function installCompactMobileSelects(root=document){
       trigger.textContent=current?.textContent||select.getAttribute('aria-label')||'Seçin';
       trigger.disabled=select.disabled;
       trigger.hidden=select.classList.contains('hidden');
-      const opts=[...select.options];
       const rows=[];
       let currentGroup='';
-      opts.forEach(opt=>{
+      [...select.options].forEach(opt=>{
         const group=opt.parentElement?.tagName==='OPTGROUP'?opt.parentElement.label:'';
         if(group&&group!==currentGroup){
           rows.push(`<div class="mm-select-group" data-mm-group>${escapeHtml(group)}</div>`);
@@ -222,7 +239,7 @@ export function installCompactMobileSelects(root=document){
         rows.push(`<button type="button" class="mm-select-option${opt.selected?' is-selected':''}" role="option" aria-selected="${opt.selected?'true':'false'}" data-value="${escapeHtml(opt.value)}" ${opt.disabled?'disabled':''}>${escapeHtml(opt.textContent||'')}</button>`);
       });
       pop.innerHTML=`<div class="mm-select-options">${rows.join('')}</div>`;
-      [...pop.querySelectorAll('.mm-select-option')].forEach(btn=>btn.onclick=()=>{
+      pop.querySelectorAll('.mm-select-option').forEach(btn=>btn.onclick=()=>{
         select.value=btn.dataset.value||'';
         select.dispatchEvent(new Event('change',{bubbles:true}));
         rebuild();
@@ -238,13 +255,14 @@ export function installCompactMobileSelects(root=document){
       if(!mobile()||select.disabled)return;
       const opening=!pop.classList.contains('is-open');
       closeAll(pop);
-      pop.classList.toggle('is-open',opening);
-      trigger.setAttribute('aria-expanded',opening?'true':'false');
-      if(opening){
-        const optionCount=[...select.options].filter(o=>!o.disabled).length;
-        positionPopover(trigger,pop,optionCount);
-        requestAnimationFrame(()=>pop.querySelector('.mm-select-option.is-selected:not([disabled]),.mm-select-option:not([disabled])')?.focus({preventScroll:true}));
+      if(!opening){
+        pop.classList.remove('is-open','is-above','is-long');
+        trigger.setAttribute('aria-expanded','false');
+        return;
       }
+      pop.classList.add('is-open');
+      trigger.setAttribute('aria-expanded','true');
+      requestAnimationFrame(()=>positionPopover(trigger,pop));
     };
     select.addEventListener('change',rebuild);
     new MutationObserver(rebuild).observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','class']});
@@ -263,13 +281,13 @@ export function installCompactMobileSelects(root=document){
   if(!window.__mmSelectOutside){
     window.__mmSelectOutside=true;
     document.addEventListener('click',e=>{
-      if(!e.target.closest?.('.mm-select-trigger,.mm-select-popover')){
-        closeAll();
-        document.querySelectorAll('.mm-select-trigger[aria-expanded="true"]').forEach(t=>t.setAttribute('aria-expanded','false'));
-      }
+      if(!e.target.closest?.('.mm-select-trigger,.mm-select-popover'))closeAll();
     });
-    window.addEventListener('resize',()=>closeAll());
-    window.addEventListener('orientationchange',()=>closeAll());
+    const closeOnViewportChange=()=>closeAll();
+    window.addEventListener('resize',closeOnViewportChange);
+    window.addEventListener('orientationchange',closeOnViewportChange);
+    window.visualViewport?.addEventListener('resize',closeOnViewportChange);
+    window.visualViewport?.addEventListener('scroll',closeOnViewportChange);
     document.addEventListener('scroll',e=>{if(!e.target?.closest?.('.mm-select-popover'))closeAll();},{passive:true,capture:true});
   }
 }
