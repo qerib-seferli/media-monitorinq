@@ -11,9 +11,21 @@ Deno.serve(async (req) => {
     if (!body.organization_id || !body.source_url) throw new Error('organization_id və source_url tələb olunur');
     const text = `${body.title || ''}\n${body.original_text || ''}\n${body.source_url || ''}`;
     const hash = await sha256(`${body.organization_id}|${text}`);
+    let servicePoint:any=null;
+    if(body.service_point_id){
+      const sp:any=await admin.from('organization_service_points')
+        .select('id,organization_id,district_id')
+        .eq('id',body.service_point_id)
+        .eq('organization_id',body.organization_id)
+        .eq('is_active',true)
+        .maybeSingle();
+      if(sp?.error) throw sp.error;
+      servicePoint=sp?.data||null;
+    }
     const row = {
       organization_id: body.organization_id,
-      district_id: body.district_id || null,
+      service_point_id: servicePoint?.id || null,
+      district_id: servicePoint?.district_id || body.district_id || null,
       village_id: body.village_id || null,
       source_platform: body.source_platform || 'Web',
       source_url: body.source_url,
@@ -38,7 +50,7 @@ Deno.serve(async (req) => {
       if (media.length) await admin.from('mention_media').insert(media);
     }
     if (data?.id && Number(row.priority_score) >= 81) {
-      await admin.from('notifications').insert({organization_id:body.organization_id,mention_id:data.id,title:'Yüksək prioritetli yeni qeyd',body:row.title,kind:'critical'});
+      await admin.from('notifications').insert({organization_id:body.organization_id,service_point_id:servicePoint?.id||null,mention_id:data.id,title:'Yüksək prioritetli yeni qeyd',body:row.title,kind:'critical'});
     }
     return json({ok:true,mention:data});
   } catch(e) { return json({ok:false,error:e.message||String(e)},400); }

@@ -367,7 +367,20 @@ Deno.serve(async (req) => {
     for (const org of orgs) {
       const sourceMode = options.mode === 'news_plan' || options.edge_news_probe ? 'all' : 'youtube';
       org.sources = await fetchOrganizationSources(admin, String(org.id), sourceMode, 3000);
-      org.aliases = await fetchOrganizationAliases(admin, String(org.id), 500);
+      const [aliases,servicePoints]=await Promise.all([
+        fetchOrganizationAliases(admin, String(org.id), 500),
+        fetchOrganizationServicePoints(admin, String(org.id), 500)
+      ]);
+      org.service_points=servicePoints;
+      // Tabeli vahid adları discovery sorğularında prioritet alır. Beləliklə parent təşkilatın
+      // çoxlu köhnə aliası child adlarını YouTube/News limitindən kənarda qoymur.
+      const synthetic=servicePointIdentityValues(org).map(alias=>({alias,alias_type:'service_point',is_active:true}));
+      const seen=new Set<string>();
+      org.aliases=[...synthetic,...aliases].filter((row:any)=>{
+        const key=normalizeForMatch(String(row?.alias||''));
+        if(!key||seen.has(key)) return false;
+        seen.add(key); return true;
+      });
     }
 
     if (options.mode === 'radar_event') {
@@ -1323,6 +1336,55 @@ async function fetchOrganizationAliases(admin:any, organizationId:string, maxRow
   return Array.isArray(result?.data)?result.data:[];
 }
 
+async function fetchOrganizationServicePoints(admin:any, organizationId:string, maxRows=500):Promise<any[]> {
+  const result:any=await admin.from('organization_service_points')
+    .select('id,organization_id,district_id,name,short_name,point_type,is_active')
+    .eq('organization_id',organizationId)
+    .eq('is_active',true)
+    .order('name')
+    .limit(maxRows);
+  if(result?.error){
+    // v64 migration-u hələ tətbiq edilməyən mühitdə əsas monitorinq dayanmasın.
+    if(['42P01','42703'].includes(String(result.error?.code||''))) return [];
+    throw result.error;
+  }
+  return Array.isArray(result?.data)?result.data:[];
+}
+
+function servicePointIdentityValues(org:any):string[] {
+  const out:string[]=[]; const seen=new Set<string>();
+  for(const point of (Array.isArray(org?.service_points)?org.service_points:[])){
+    for(const raw of [point?.short_name,point?.name]){
+      const value=String(raw||'').replace(/\s+/g,' ').trim();
+      const key=normalizeForMatch(value);
+      if(!value||!key||seen.has(key)) continue;
+      seen.add(key); out.push(value);
+    }
+  }
+  return out;
+}
+
+function resolveServicePointMatch(org:any,item:Item):any|null {
+  const points=Array.isArray(org?.service_points)?org.service_points:[];
+  if(!points.length) return null;
+  const raw:any=item?.raw||{};
+  const urlSignal=(()=>{try{const u=new URL(String(item?.url||''));return decodeURIComponent(`${u.pathname} ${u.search}`)}catch{return String(item?.url||'')}})();
+  const hay=normalizeForMatch(`${item?.title||''} ${String(item?.text||'').slice(0,12000)} ${urlSignal} ${raw?.video_title||''}`);
+  if(!hay) return null;
+  const candidates:any[]=[];
+  for(const point of points){
+    let best='';
+    for(const rawName of [point?.name,point?.short_name]){
+      const term=normalizeForMatch(String(rawName||''));
+      if(term.length<5) continue;
+      if((` ${hay} `).includes(` ${term} `) && term.length>best.length) best=term;
+    }
+    if(best) candidates.push({point,score:best.length});
+  }
+  candidates.sort((a,b)=>b.score-a.score||String(a.point?.name||'').localeCompare(String(b.point?.name||''),'az'));
+  return candidates[0]?.point||null;
+}
+
 async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRows=12000):Promise<any[]> {
   const rows:any[]=[]; const seen=new Set<string>();
   const push=(row:any)=>{
@@ -1467,7 +1529,7 @@ function buildYoutubeDiscoveryQueries(org:any, keywords:string[], villages:strin
 
   const identity:string[] = [];
   const seen = new Set<string>();
-  for (const value of [shortName, fullName, ...aliases]) {
+  for (const value of [shortName, fullName, ...servicePointIdentityValues(org), ...aliases]) {
     const key = normalizeForMatch(value);
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -1475,9 +1537,17 @@ function buildYoutubeDiscoveryQueries(org:any, keywords:string[], villages:strin
   }
 
   // YouTube Data API q parametrində "|" rəsmi OR operatorudur.
-  // Bir quota çağırışında cari ad, qısa ad və köhnə/rəsmi ad variantlarını çağırırıq.
+  // Parent təşkilat və tabeli vahidlər ayrıca qruplanır. Beləliklə Naxçıvan kimi 7 şöbəli
+  // qurumlarda ilk 6 termin limiti səbəbindən son şöbələr axtarışdan kənarda qalmır.
   const quote = (value:string)=>`"${value.replace(/"/g,'').slice(0,100)}"`;
-  const identityQuery = identity.slice(0,6).map(quote).join('|');
+  const pointIdentity=servicePointIdentityValues(org);
+  const parentIdentity=identity.filter(value=>!pointIdentity.some(point=>normalizeForMatch(point)===normalizeForMatch(value)));
+  const identityQuery = parentIdentity.slice(0,6).map(quote).join('|');
+  const servicePointQueries:string[]=[];
+  for(let i=0;i<pointIdentity.length;i+=4){
+    const q=pointIdentity.slice(i,i+4).map(quote).join('|');
+    if(q) servicePointQueries.push(q);
+  }
 
   const districtTopics = district
     ? [
@@ -1487,7 +1557,7 @@ function buildYoutubeDiscoveryQueries(org:any, keywords:string[], villages:strin
     : [];
 
   const fallback = buildDiscoveryQueries(org, keywords, villages, Math.max(2,max+1));
-  const pool = [identityQuery, ...districtTopics, ...fallback].filter(Boolean);
+  const pool = [identityQuery, ...servicePointQueries, ...districtTopics, ...fallback].filter(Boolean);
 
   const out:string[] = [];
   const querySeen = new Set<string>();
@@ -1593,7 +1663,8 @@ function buildGoogleNewsGatewayQueries(org:any):string[] {
     const currentName = fullName.replace(/Suvarma Sistemlərinin/gi,'Su Meliorasiya Sistemlərinin');
     if (normalizeForMatch(currentName) !== normalizeForMatch(fullName)) candidates.push(`"${currentName}"`);
   }
-  for (const row of (Array.isArray(org.aliases)?org.aliases:[]).slice(0,12)) {
+  for(const pointName of servicePointIdentityValues(org).slice(0,18)) candidates.push(`"${pointName}"`);
+  for (const row of (Array.isArray(org.aliases)?org.aliases:[]).slice(0,18)) {
     const alias=String(row?.alias||'').trim();
     if(alias) candidates.push(`"${alias}"`);
   }
@@ -1637,6 +1708,11 @@ function buildGdeltGatewayQueries(org:any):string[] {
   }
   if (shortName) candidates.push(`"${shortName}"`);
   if (fullName && normalizeForMatch(fullName)!==normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
+  const pointIdentity=servicePointIdentityValues(org);
+  for(let i=0;i<pointIdentity.length;i+=4){
+    const group=pointIdentity.slice(i,i+4).map(value=>`"${value}"`).join(' OR ');
+    if(group) candidates.push(`(${group})`);
+  }
   const seen=new Set<string>();
   return candidates.filter(q=>{
     const key=normalizeForMatch(q);
@@ -2699,6 +2775,7 @@ function canonicalStoryUrl(item:Item):string {
 async function save(admin:any, org:any, source:any, item:Item, keywords:string[], villages:string[] = []) {
   if (!item.url) return 0;
   const match = evaluateMatch(org, item, keywords, villages);
+  const matchedServicePoint = resolveServicePointMatch(org,item);
   const normalized = match.normalized;
   const direct = match.direct;
   const matches = match.matches;
@@ -2756,6 +2833,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     // platforma metadatasını da təzələyirik. Xüsusilə YouTube şərhlərində
     // like_count sonradan dəyişə bildiyi üçün köhnə 0 dəyəri saxlanmamalıdır.
     const refresh:any = {
+      ...(matchedServicePoint?.id?{service_point_id:matchedServicePoint.id,district_id:matchedServicePoint.district_id||org.district_id||null}:{}),
       source_status:'active',
       last_seen_at:new Date().toISOString(),
       last_verified_at:new Date().toISOString(),
@@ -2767,6 +2845,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
         ...((item.raw as any) || item),
         ...(isWebNews&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
         monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
+        ...(matchedServicePoint?.id?{service_point_match:{id:matchedServicePoint.id,short_name:matchedServicePoint.short_name||null,name:matchedServicePoint.name||null,matched_at:new Date().toISOString()}}:{}),
         ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
         ...(String((item.raw as any)?.kind||'').includes('comment') && match.reason==='aidiyyəti-videonun-rəyi' && !(match.matches||[]).length ? {admin_review_status:'auto-ignored'} : {})
       }
@@ -2788,7 +2867,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
 
   const row:any = {
     organization_id:org.id,
-    district_id:org.district_id || null,
+    service_point_id:matchedServicePoint?.id || null,
+    district_id:matchedServicePoint?.district_id || org.district_id || null,
     source_platform:canonicalSourcePlatform,
     source_url:item.url,
     author_name:item.author || null,
@@ -2842,6 +2922,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   if (priority >= 81 || isCommentItem) {
     await admin.from('notifications').insert({
       organization_id:org.id,
+      service_point_id:matchedServicePoint?.id || null,
       mention_id:data.id,
       title:isCommentItem ? (priority>=81?'Yüksək prioritetli yeni şərh':'Yeni YouTube şərhi') : 'Yüksək prioritetli yeni qeyd',
       body:item.title || 'Yeni material',
@@ -3339,7 +3420,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // URL və məqalənin ilk əsas hissəsi qiymətləndirilir; YouTube/rəy davranışı dəyişmir.
   const matchText = webLike ? String(item.text || '').slice(0,8000) : String(item.text || '');
   const normalized = normalizeForMatch(`${item.title || ''} ${matchText} ${urlSignal}`);
-  const direct = [String(org.name||''),String(org.short_name||''),...(Array.isArray(org.aliases)?org.aliases.map((a:any)=>String(a?.alias||'')):[])]
+  const direct = [String(org.name||''),String(org.short_name||''),...servicePointIdentityValues(org),...(Array.isArray(org.aliases)?org.aliases.map((a:any)=>String(a?.alias||'')):[])]
     .map(normalizeForMatch).filter(Boolean);
   const normalizedKeywords = Array.isArray(org.__normalized_keywords) ? org.__normalized_keywords : keywords.map(normalizeForMatch).filter(Boolean);
   const normalizedGlobalKeywords = Array.isArray(org.__normalized_global_keywords) ? org.__normalized_global_keywords : normalizedKeywords;
