@@ -160,7 +160,7 @@ function bindLocationCatalogFilters() {
 async function refresh() {
   const results = await Promise.all([
     supabase.from('organizations').select('*').order('created_at'),
-    supabase.from('profiles').select('*,organizations(short_name),positions(name)').order('created_at',{ascending:false}),
+    supabase.from('profiles').select('*,organizations(short_name),positions(name),service_point:organization_service_points!profiles_service_point_id_fkey(id,name,short_name,organization_id)').order('created_at',{ascending:false}),
     supabase.from('positions').select('*').order('name'),
     supabase.from('districts').select('*,villages(*)').order('name'),
     supabase.from('audit_logs').select('*').neq('action','radar_scan_event').order('created_at',{ascending:false}).limit(100),
@@ -328,7 +328,7 @@ function userName(u) {
 }
 
 function userScopeLabel(u) {
-  return u.access_scope === 'all' ? 'Bütün sistem / Nazirlik' : (u.organizations?.short_name || 'Təşkilat seçilməyib');
+  return u.access_scope === 'all' ? 'Bütün sistem / Nazirlik' : (u.service_point?.short_name || u.service_point?.name || u.organizations?.short_name || 'Təşkilati vahid seçilməyib');
 }
 
 function renderUsers() {
@@ -1150,6 +1150,44 @@ function bindServiceAreaPicker() {
   refresh();
 }
 
+function organizationUnitOptions(selectedValue='') {
+  const activeOrgs=sortedOrganizations().filter(o=>['active','grace'].includes(o.service_status));
+  const groups=[
+    ['Baş qurum',activeOrgs.filter(o=>String(o.short_name||'').toUpperCase()==='ADSEA')],
+    ['Mərkəzi tabeli qurumlar',activeOrgs.filter(o=>o.organization_type==='central_service'&&String(o.short_name||'').toUpperCase()!=='ADSEA')],
+    ['Regional bölmələr',activeOrgs.filter(o=>o.organization_type==='regional_unit')],
+    ['Rayon idarələri',activeOrgs.filter(o=>o.organization_type==='district')],
+    ['Xüsusi və tabeli idarələr',activeOrgs.filter(o=>o.organization_type==='special_unit')]
+  ];
+  const html=['<option value="">Seçin</option>'];
+  for(const [label,rows] of groups){
+    if(!rows.length) continue;
+    html.push(`<optgroup label="${escapeHtml(label)}">${rows.map(o=>{const value=`org:${o.id}`;return `<option value="${value}" ${value===selectedValue?'selected':''}>${escapeHtml(o.short_name||o.name)}</option>`;}).join('')}</optgroup>`);
+  }
+  const byParent=new Map();
+  for(const point of organizationServicePoints.filter(p=>p.is_active!==false)){
+    if(!byParent.has(String(point.organization_id))) byParent.set(String(point.organization_id),[]);
+    byParent.get(String(point.organization_id)).push(point);
+  }
+  for(const [parentId,rows] of byParent){
+    const parent=orgs.find(o=>String(o.id)===String(parentId));
+    if(!parent || !['active','grace'].includes(parent.service_status)) continue;
+    html.push(`<optgroup label="${escapeHtml(parent.short_name||parent.name)} — tabeli idarə və şöbələr">${rows.map(point=>{const value=`point:${point.id}`;return `<option value="${value}" ${value===selectedValue?'selected':''}>${escapeHtml(point.short_name||point.name)}</option>`;}).join('')}</optgroup>`);
+  }
+  return html.join('');
+}
+
+function parseOrganizationUnitSelection(value='') {
+  const text=String(value||'');
+  if(text.startsWith('point:')){
+    const service_point_id=text.slice(6);
+    const point=organizationServicePoints.find(p=>String(p.id)===service_point_id);
+    return {organization_id:point?.organization_id||null,service_point_id:service_point_id||null};
+  }
+  if(text.startsWith('org:')) return {organization_id:text.slice(4)||null,service_point_id:null};
+  return {organization_id:text||null,service_point_id:null};
+}
+
 function modal(type, preset={}) {
   if (type === 'org') {
     const editing = preset.organization_id ? orgs.find(o => o.id === preset.organization_id) : null;
@@ -1163,32 +1201,35 @@ function modal(type, preset={}) {
     const editing = organizationServicePoints.find(p => String(p.id) === String(preset.point_id));
     if (!editing) return toast('Tabeli vahid tapılmadı.','error');
     const parent = orgs.find(o => String(o.id) === String(editing.organization_id));
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal org-modal" id="point-form" data-point-id="${editing.id}"><div class="modal-head"><div><span class="eyebrow">Tabeli təşkilati vahid</span><h2>Vahidi redaktə et</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field form-span-2"><label>Adı</label><input class="input" id="point-name" value="${escapeHtml(editing.name||'')}" required></div><div class="field"><label>Tabeli qurum</label><select class="select" id="point-parent">${sortedOrganizations().map(o=>`<option value="${o.id}" ${String(o.id)===String(editing.organization_id)?'selected':''}>${escapeHtml(o.short_name||o.name)}</option>`).join('')}</select></div><div class="field"><label>Ərazi / fiziki yerləşmə</label><select class="select" id="point-district"><option value="">Seçilməyib</option>${districts.map(d=>`<option value="${d.id}" ${String(d.id)===String(editing.district_id)?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Vahid növü</label><select class="select" id="point-type"><option value="department" ${editing.point_type==='department'?'selected':''}>İdarə</option><option value="branch" ${editing.point_type==='branch'?'selected':''}>Şöbə</option><option value="service_point" ${editing.point_type==='service_point'?'selected':''}>Xidmət vahidi</option><option value="office" ${editing.point_type==='office'?'selected':''}>Ofis</option><option value="other" ${editing.point_type==='other'?'selected':''}>Digər</option></select></div><div class="field"><label>Rəhbərin vəzifəsi <small class="muted">(məcburi deyil)</small></label><input class="input" id="point-manager-title" value="${escapeHtml(editing.manager_title||'')}"></div><div class="field form-span-2"><label>Rəhbərin adı <small class="muted">(məcburi deyil)</small></label><input class="input" id="point-manager-name" value="${escapeHtml(editing.manager_name||'')}"></div><div class="field form-span-2"><label>Ünvan</label><input class="input" id="point-address" value="${escapeHtml(editing.address_text||'')}"></div><div class="field"><label>Telefon</label><input class="input" id="point-phone" value="${escapeHtml(editing.phone||'')}"></div><div class="field"><label>E-mail</label><input class="input" id="point-email" type="email" value="${escapeHtml(editing.email||'')}"></div><div class="field form-span-2"><label>Rəsmi mənbə</label><input class="input" id="point-source" type="url" value="${escapeHtml(editing.official_source_url||'')}"></div><div class="field field-toggle"><label>Aktivlik</label><label class="switch-row"><input type="checkbox" id="point-active" ${editing.is_active!==false?'checked':''}><span class="switch-ui"></span><span>Aktiv tabeli vahid</span></label></div></div><div class="modal-note">Rəhbər adı və vəzifəsi məcburi deyil. Məlumat yoxdursa boş saxlanılır; sistem uydurma ad yaratmır.</div><div class="modal-actions"><button class="btn">Dəyişiklikləri yadda saxla</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal org-modal" id="point-form" data-point-id="${editing.id}"><div class="modal-head"><div><span class="eyebrow">Tabeli təşkilati vahid</span><h2>Vahidi redaktə et</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Tam adı</label><input class="input" id="point-name" value="${escapeHtml(editing.name||'')}" required></div><div class="field"><label>Qısa adı</label><input class="input" id="point-short" value="${escapeHtml(editing.short_name||'')}" placeholder="Məs: Sumqayıt Sukanal" required></div><div class="field"><label>Tabeli qurum</label><select class="select" id="point-parent">${sortedOrganizations().map(o=>`<option value="${o.id}" ${String(o.id)===String(editing.organization_id)?'selected':''}>${escapeHtml(o.short_name||o.name)}</option>`).join('')}</select></div><div class="field"><label>Ərazi / fiziki yerləşmə</label><select class="select" id="point-district"><option value="">Seçilməyib</option>${districts.map(d=>`<option value="${d.id}" ${String(d.id)===String(editing.district_id)?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Vahid növü</label><select class="select" id="point-type"><option value="department" ${editing.point_type==='department'?'selected':''}>İdarə</option><option value="branch" ${editing.point_type==='branch'?'selected':''}>Şöbə</option><option value="service_point" ${editing.point_type==='service_point'?'selected':''}>Xidmət vahidi</option><option value="office" ${editing.point_type==='office'?'selected':''}>Ofis</option><option value="other" ${editing.point_type==='other'?'selected':''}>Digər</option></select></div><div class="field"><label>Rəhbərin vəzifəsi <small class="muted">(məcburi deyil)</small></label><input class="input" id="point-manager-title" value="${escapeHtml(editing.manager_title||'')}"></div><div class="field form-span-2"><label>Rəhbərin adı <small class="muted">(məcburi deyil)</small></label><input class="input" id="point-manager-name" value="${escapeHtml(editing.manager_name||'')}"></div><div class="field form-span-2"><label>Ünvan</label><input class="input" id="point-address" value="${escapeHtml(editing.address_text||'')}"></div><div class="field"><label>Telefon</label><input class="input" id="point-phone" value="${escapeHtml(editing.phone||'')}"></div><div class="field"><label>E-mail</label><input class="input" id="point-email" type="email" value="${escapeHtml(editing.email||'')}"></div><div class="field form-span-2"><label>Rəsmi mənbə</label><input class="input" id="point-source" type="url" value="${escapeHtml(editing.official_source_url||'')}"></div><div class="field field-toggle"><label>Aktivlik</label><label class="switch-row"><input type="checkbox" id="point-active" ${editing.is_active!==false?'checked':''}><span class="switch-ui"></span><span>Aktiv tabeli vahid</span></label></div></div><div class="modal-note">Rəhbər adı və vəzifəsi məcburi deyil. Məlumat yoxdursa boş saxlanılır; sistem uydurma ad yaratmır.</div><div class="modal-actions"><button class="btn">Dəyişiklikləri yadda saxla</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
     document.querySelector('#point-form').onsubmit = saveServicePoint;
   } else {
     const editing = preset.user_id ? users.find(u => u.id === preset.user_id) : null;
     if (editing?.system_role === 'super_admin') return toast('Super Admin sistem hesabı redaktə edilə bilməz.', 'error');
     const defaultScope = editing?.access_scope || preset.access_scope || 'organization';
-    const defaultOrg = editing?.organization_id || preset.organization_id || orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'))?.id || '';
-    const posOptions = positionOptionsForOrg(defaultOrg, editing?.position_id || preset.position_id || '');
+    const fallbackOrg = editing?.organization_id || preset.organization_id || orgs.find(o => String(o.short_name||'').toLocaleLowerCase('az-AZ').includes('bərdə sms'))?.id || '';
+    const defaultUnit = editing?.service_point_id ? `point:${editing.service_point_id}` : (fallbackOrg ? `org:${fallbackOrg}` : '');
+    const defaultParsed=parseOrganizationUnitSelection(defaultUnit);
+    const posOptions = positionOptionsForOrg(defaultParsed.organization_id||'', editing?.position_id || preset.position_id || '');
     const title = editing ? 'İstifadəçini redaktə et' : 'Yeni istifadəçi';
     const submitLabel = editing ? 'Dəyişiklikləri yadda saxla' : 'Hesab yarat';
-    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Giriş və məlumat əhatəsi</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Məlumat əhatəsi</label><select class="select" id="u-scope"><option value="organization" ${defaultScope!=='all'?'selected':''}>Yalnız seçilən təşkilat</option><option value="all" ${defaultScope==='all'?'selected':''}>Bütün sistem / Nazirlik</option></select></div><div class="field"><label>Təşkilat</label><select class="select" id="u-org"><option value="">Mərkəzi / təşkilatsız</option>${sortedOrganizations().map(o=>`<option value="${o.id}" ${o.id===defaultOrg?'selected':''}>${escapeHtml(o.short_name)}</option>`).join('')}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">“Bütün sistem / Nazirlik” seçildikdə istifadəçi bütün təşkilatların nəticələrini görür və təşkilat filtrindən istifadə edir. “Yalnız seçilən təşkilat” seçildikdə profilə bağlanan idarənin məlumatları avtomatik göstərilir.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
-    const orgSelect = document.querySelector('#u-org');
+    document.querySelector('#modal-root').innerHTML = `<div class="modal-backdrop" id="modal-bg"><form class="modal" id="user-form" data-user-id="${editing?.id || ''}"><div class="modal-head"><div><span class="eyebrow">Giriş və məlumat əhatəsi</span><h2>${title}</h2></div><button type="button" class="icon-btn" id="close-modal">✕</button></div><div class="form-grid"><div class="field"><label>Ad</label><input class="input" id="u-first" value="${escapeHtml(editing?.first_name || preset.first_name || '')}" required></div><div class="field"><label>Soyad</label><input class="input" id="u-last" value="${escapeHtml(editing?.last_name || preset.last_name || '')}" required></div><div class="field"><label>E-mail</label><input class="input" id="u-email" type="email" value="${escapeHtml(editing?.email || '')}" autocomplete="off" ${editing ? 'readonly title="E-mail təhlükəsizlik səbəbilə ayrıca dəyişdirilir"' : 'required'}></div>${editing ? '' : '<div class="field"><label>Müvəqqəti şifrə</label><input class="input" id="u-pass" type="password" minlength="8" autocomplete="new-password" required></div>'}<div class="field"><label>Məlumat əhatəsi</label><select class="select" id="u-scope"><option value="organization" ${defaultScope!=='all'?'selected':''}>Yalnız seçilən təşkilati vahid</option><option value="all" ${defaultScope==='all'?'selected':''}>Bütün sistem / Nazirlik</option></select></div><div class="field"><label>Təşkilat / tabeli vahid</label><select class="select" id="u-unit">${organizationUnitOptions(defaultUnit)}</select></div><div class="field"><label>Vəzifə</label><select class="select" id="u-position">${posOptions}</select></div><div class="field"><label>Sistem rolu</label><select class="select" id="u-role"><option value="organization_admin" ${(editing?.system_role || preset.system_role)==='organization_admin'?'selected':''}>Təşkilat admini</option><option value="manager" ${(editing?.system_role || preset.system_role)==='manager'?'selected':''}>Menecer</option><option value="analyst" ${(editing?.system_role || preset.system_role)==='analyst'?'selected':''}>Analitik</option><option value="viewer" ${(editing?.system_role || preset.system_role)==='viewer'?'selected':''}>Baxış</option></select></div></div><div class="modal-note">İstifadəçi əsas təşkilata və ya onun tabeli idarə/şöbəsinə ayrıca bağlana bilər. Tabeli vahid seçildikdə profil parent təşkilatı da saxlayır, amma istifadəçi yalnız həmin vahidə aid düzgün təsnif edilmiş monitorinq nəticələrini görür.</div><div class="modal-actions"><button class="btn">${submitLabel}</button><button type="button" class="btn ghost" id="cancel-modal">Ləğv et</button></div></form></div>`;
+    const unitSelect = document.querySelector('#u-unit');
     const scopeSelect = document.querySelector('#u-scope');
     const positionSelect = document.querySelector('#u-position');
     const syncScope = () => {
       const central = scopeSelect.value === 'all';
-      orgSelect.disabled = central;
+      unitSelect.disabled = central;
       if (central) {
-        orgSelect.value = '';
+        unitSelect.value = '';
         positionSelect.innerHTML = positionOptionsForOrg('');
       } else {
-        if (!orgSelect.value && defaultOrg) orgSelect.value = defaultOrg;
-        positionSelect.innerHTML = positionOptionsForOrg(orgSelect.value, editing?.position_id || '');
+        if (!unitSelect.value && defaultUnit) unitSelect.value = defaultUnit;
+        const parsed=parseOrganizationUnitSelection(unitSelect.value);
+        positionSelect.innerHTML = positionOptionsForOrg(parsed.organization_id||'', editing?.position_id || '');
       }
     };
-    orgSelect.onchange = () => { positionSelect.innerHTML = positionOptionsForOrg(orgSelect.value); };
+    unitSelect.onchange = () => { const parsed=parseOrganizationUnitSelection(unitSelect.value); positionSelect.innerHTML = positionOptionsForOrg(parsed.organization_id||''); };
     scopeSelect.onchange = syncScope;
     syncScope();
     document.querySelector('#user-form').onsubmit = editing ? updateUser : createUser;
@@ -1205,6 +1246,7 @@ async function saveServicePoint(e) {
   const id=e.currentTarget.dataset.pointId;
   const row={
     name:document.querySelector('#point-name').value.trim(),
+    short_name:document.querySelector('#point-short').value.trim(),
     organization_id:document.querySelector('#point-parent').value,
     district_id:document.querySelector('#point-district').value||null,
     point_type:document.querySelector('#point-type').value,
@@ -1218,6 +1260,16 @@ async function saveServicePoint(e) {
     updated_at:new Date().toISOString()
   };
   const {error}=await supabase.from('organization_service_points').update(row).eq('id',id);
+  if(!error){
+    const aliasCandidates=[
+      {alias:row.name,alias_type:'alias'},
+      {alias:row.short_name,alias_type:'short'}
+    ].filter(x=>x.alias);
+    const {data:existingAliases=[]}=await supabase.from('organization_aliases').select('alias').eq('organization_id',row.organization_id);
+    const existingSet=new Set((existingAliases||[]).map(x=>String(x.alias||'').trim().toLocaleLowerCase('az-AZ')));
+    const missing=aliasCandidates.filter(x=>!existingSet.has(String(x.alias).trim().toLocaleLowerCase('az-AZ'))).map(x=>({organization_id:row.organization_id,...x,is_active:true}));
+    if(missing.length) await supabase.from('organization_aliases').insert(missing);
+  }
   toast(error?error.message:'Tabeli vahid yeniləndi.',error?'error':'success');
   if(!error){closeModal();await refresh();location.hash='organizations';route();}
 }
@@ -1272,13 +1324,16 @@ async function updateUser(e) {
   const target = users.find(u => u.id === id);
   if (!target || target.system_role === 'super_admin') return toast('Super Admin sistem hesabı dəyişdirilə bilməz.', 'error');
   const access_scope = document.querySelector('#u-scope').value;
-  const organization_id = access_scope === 'all' ? null : (document.querySelector('#u-org').value || null);
-  if (access_scope !== 'all' && !organization_id) return toast('Təşkilat səviyyəli istifadəçi üçün təşkilat seçilməlidir.', 'error');
+  const selectedUnit = access_scope === 'all' ? {organization_id:null,service_point_id:null} : parseOrganizationUnitSelection(document.querySelector('#u-unit').value);
+  const organization_id = selectedUnit.organization_id;
+  const service_point_id = selectedUnit.service_point_id;
+  if (access_scope !== 'all' && !organization_id) return toast('Təşkilat səviyyəli istifadəçi üçün təşkilati vahid seçilməlidir.', 'error');
   const row = {
     first_name:document.querySelector('#u-first').value.trim(),
     last_name:document.querySelector('#u-last').value.trim(),
     access_scope,
     organization_id,
+    service_point_id,
     position_id:document.querySelector('#u-position').value || null,
     system_role:document.querySelector('#u-role').value
   };
@@ -1290,8 +1345,10 @@ async function updateUser(e) {
 async function createUser(e) {
   e.preventDefault();
   const access_scope = document.querySelector('#u-scope').value;
-  const organization_id = access_scope === 'all' ? null : (document.querySelector('#u-org').value || null);
-  if (access_scope !== 'all' && !organization_id) return toast('Təşkilat səviyyəli istifadəçi üçün təşkilat seçilməlidir.', 'error');
+  const selectedUnit = access_scope === 'all' ? {organization_id:null,service_point_id:null} : parseOrganizationUnitSelection(document.querySelector('#u-unit').value);
+  const organization_id = selectedUnit.organization_id;
+  const service_point_id = selectedUnit.service_point_id;
+  if (access_scope !== 'all' && !organization_id) return toast('Təşkilat səviyyəli istifadəçi üçün təşkilati vahid seçilməlidir.', 'error');
   const body = {
     action:'create',
     email:document.querySelector('#u-email').value.trim(),
@@ -1300,6 +1357,7 @@ async function createUser(e) {
     last_name:document.querySelector('#u-last').value.trim(),
     access_scope,
     organization_id,
+    service_point_id,
     position_id:document.querySelector('#u-position').value || null,
     system_role:document.querySelector('#u-role').value
   };

@@ -62,7 +62,10 @@ async function loadNext({reset=false}={}){
   loading=true;sentinel.classList.add('loading');
   try{
     const from=page*PAGE_SIZE,to=from+PAGE_SIZE-1;
-    const {data,error}=await supabase.from('notifications').select('*').order('created_at',{ascending:false}).range(from,to);
+    let notificationQuery=supabase.from('notifications').select('*').order('created_at',{ascending:false}).range(from,to);
+    if(ctx.profile?.service_point_id) notificationQuery=notificationQuery.eq('service_point_id',ctx.profile.service_point_id);
+    else if(ctx.profile?.access_scope!=='all' && ctx.profile?.system_role!=='super_admin' && ctx.profile?.organization_id) notificationQuery=notificationQuery.eq('organization_id',ctx.profile.organization_id);
+    const {data,error}=await notificationQuery;
     if(error)throw error;
     const batch=data||[];
     const ids=[...new Set(batch.map(x=>x.mention_id).filter(Boolean))];

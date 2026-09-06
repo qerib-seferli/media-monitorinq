@@ -20,6 +20,13 @@ Deno.serve(async (req) => {
     if (body.action === 'create') {
       const accessScope = body.access_scope === 'all' ? 'all' : 'organization';
       if (!body.email || !body.password || (accessScope !== 'all' && !body.organization_id)) throw new Error('Məcburi sahələr çatışmır');
+      let servicePointId = accessScope === 'all' ? null : (body.service_point_id || null);
+      if (servicePointId) {
+        const { data: point, error: pointError } = await admin.from('organization_service_points').select('id,organization_id,is_active').eq('id', servicePointId).maybeSingle();
+        if (pointError) throw pointError;
+        if (!point?.id || point.is_active === false) throw new Error('Seçilən tabeli vahid aktiv deyil və ya tapılmadı');
+        if (String(point.organization_id) !== String(body.organization_id)) throw new Error('Tabeli vahid seçilən təşkilata aid deyil');
+      }
       if (String(body.password).length < 8) throw new Error('Şifrə ən az 8 simvol olmalıdır');
       const { data, error } = await admin.auth.admin.createUser({
         email: body.email,
@@ -31,6 +38,7 @@ Deno.serve(async (req) => {
       const profileRow = {
         auth_user_id: data.user.id,
         organization_id: accessScope === 'all' ? null : body.organization_id,
+        service_point_id: servicePointId,
         access_scope: accessScope,
         position_id: body.position_id || null,
         first_name: body.first_name || '',
@@ -44,7 +52,7 @@ Deno.serve(async (req) => {
         await admin.auth.admin.deleteUser(data.user.id).catch(()=>{});
         throw pError;
       }
-      await admin.from('audit_logs').insert({actor_profile_id:profile.id,actor_email:profile.email,organization_id:accessScope === 'all' ? null : body.organization_id,action:'İstifadəçi yaradıldı',entity_type:'profile',entity_id:data.user.id,details:{email:body.email,role:body.system_role,access_scope:accessScope}});
+      await admin.from('audit_logs').insert({actor_profile_id:profile.id,actor_email:profile.email,organization_id:accessScope === 'all' ? null : body.organization_id,action:'İstifadəçi yaradıldı',entity_type:'profile',entity_id:data.user.id,details:{email:body.email,role:body.system_role,access_scope:accessScope,service_point_id:servicePointId}});
       return json({ ok: true, message: 'İstifadəçi hesabı yaradıldı', user_id: data.user.id });
     }
 

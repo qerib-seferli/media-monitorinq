@@ -36,7 +36,7 @@ async function fetchDashboardData(){
     countQuery(q=>q.gte('priority_score',81)),
     countQuery(q=>q.eq('sentiment','negative')),
     countQuery(q=>q.eq('sentiment','positive')),
-    scoped(supabase.from('mentions').select('id,title,summary,original_text,source_platform,source_url,priority_score,sentiment,detected_at,published_at,source_status,raw_payload,organization_id,organizations(short_name),mention_media(url,media_type)').gt('relevance_score',0).not('published_at','is',null).order('published_at',{ascending:false}).limit(48)),
+    scoped(supabase.from('mentions').select('id,title,summary,original_text,source_platform,source_url,priority_score,sentiment,detected_at,published_at,source_status,raw_payload,organization_id,organizations(short_name),service_point:organization_service_points!mentions_service_point_id_fkey(short_name,name),mention_media(url,media_type)').gt('relevance_score',0).not('published_at','is',null).order('published_at',{ascending:false}).limit(48)),
     scoped(supabase.from('notifications').select('id,organization_id,mention_id,title,body,kind,created_at').order('created_at',{ascending:false}).limit(32))
   ]);
   const fatal=[allCount,highCount,negCount,posCount,latestRes,notifRes].find(x=>x.error); if(fatal?.error) console.warn(friendlyError(fatal.error));
@@ -58,7 +58,7 @@ async function renderDashboard(){
   const items=[['Yeni qeydlər',metrics.total||0,'info'],['Yüksək risk',metrics.high||0,'danger'],['Mənfi',metrics.negative||0,'warn'],['Müsbət',metrics.positive||0,'ok']];
   document.querySelector('#metrics').innerHTML=items.map(([l,n,c])=>`<article class="card metric"><span class="badge ${c}">${escapeHtml(l)}</span><div class="num">${n}</div><div class="label">Bu gün</div></article>`).join('');
 const latestEl=document.querySelector('#latest');
-latestEl.innerHTML=latest?.length?latest.map(m=>`<article class="mention-card dashboard-mention-card${isComment(m)?' is-comment':''}" data-detail-href="./monitorinq.html?id=${encodeURIComponent(m.id)}" tabindex="0" role="link" aria-label="${escapeHtml((m.title||'Monitorinq qeydi')+' — ətraflı bax')}"><img class="thumb" src="${mentionPreviewUrl(m)}" alt="" loading="lazy"><div><h3>${escapeHtml(m.title||'Adsız qeyd')}</h3><p>${escapeHtml(m.original_text||m.summary||'')}</p><div class="mention-meta">${isCentralScope(ctx.profile)&&m.organizations?.short_name?`<span class="badge ok">${escapeHtml(m.organizations.short_name)}</span>`:''}<span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${isComment(m)?'<span class="badge comment-badge">✉ Şərh</span>':''}${stateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}%</span><span class="muted">Paylaşım: ${fmtDate(m.published_at)}</span></div></div></article>`).join(''):'<div class="empty compact-empty">Hələ nəticə yoxdur.</div>';
+latestEl.innerHTML=latest?.length?latest.map(m=>`<article class="mention-card dashboard-mention-card${isComment(m)?' is-comment':''}" data-detail-href="./monitorinq.html?id=${encodeURIComponent(m.id)}" tabindex="0" role="link" aria-label="${escapeHtml((m.title||'Monitorinq qeydi')+' — ətraflı bax')}"><img class="thumb" src="${mentionPreviewUrl(m)}" alt="" loading="lazy"><div><h3>${escapeHtml(m.title||'Adsız qeyd')}</h3><p>${escapeHtml(m.original_text||m.summary||'')}</p><div class="mention-meta">${isCentralScope(ctx.profile)&&(m.service_point?.short_name||m.organizations?.short_name)?`<span class="badge ok">${escapeHtml(m.service_point?.short_name||m.organizations?.short_name)}</span>`:''}<span class="badge info">${escapeHtml(m.source_platform||'Web')}</span>${isComment(m)?'<span class="badge comment-badge">✉ Şərh</span>':''}${stateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}%</span><span class="muted">Paylaşım: ${fmtDate(m.published_at)}</span></div></div></article>`).join(''):'<div class="empty compact-empty">Hələ nəticə yoxdur.</div>';
 latestEl.querySelectorAll('[data-detail-href]').forEach(card=>{
   const open=()=>location.href=card.dataset.detailHref;
   card.addEventListener('click',open);
@@ -69,7 +69,7 @@ let notifRows=notifs||[];
 const notifIds=[...new Set(notifRows.map(x=>x.mention_id).filter(Boolean))];
 let mentionMap=new Map();
 if(notifIds.length){
-  const {data:linked=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,organizations(short_name)').in('id',notifIds);
+  const {data:linked=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,organizations(short_name),service_point:organization_service_points!mentions_service_point_id_fkey(short_name,name)').in('id',notifIds);
   mentionMap=new Map(linked.map(x=>[x.id,x]));
 }
 notifRows=notifRows.filter(x=>!x.mention_id||(Number(mentionMap.get(x.mention_id)?.relevance_score||0)>0&&!isMentionExcluded(mentionMap.get(x.mention_id),results.excludes))).sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,8);

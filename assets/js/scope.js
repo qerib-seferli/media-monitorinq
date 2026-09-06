@@ -85,35 +85,75 @@ export function isCentralScope(profile){
 export async function setupOrganizationFilter(profile, select){
   if(!select) return null;
   if(!isCentralScope(profile)){
-    const ownId=profile?.organization_id || '';
-    const ownName=profile?.organizations?.short_name || profile?.organizations?.name || 'Təşkilatım';
-    select.innerHTML=`<option value="${escapeHtml(ownId)}">${escapeHtml(ownName)}</option>`;
-    select.value=ownId;
+    const ownOrgId=profile?.organization_id || '';
+    const ownPointId=profile?.service_point_id || '';
+    const ownPointName=profile?.service_point?.short_name || profile?.service_point?.name || '';
+    const ownOrgName=profile?.organizations?.short_name || profile?.organizations?.name || 'Təşkilatım';
+    const value=ownPointId?`point:${ownPointId}`:(ownOrgId?`org:${ownOrgId}`:'');
+    const label=ownPointName || ownOrgName;
+    select.innerHTML=`<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+    select.value=value;
     select.disabled=true;
-    // Yerli/rayon istifadəçisi öz təşkilatından çıxa bilməz. Təşkilat adı artıq
-    // başlıqda göstərildiyi üçün ayrıca filtr nə telefonda, nə də kompüterdə təkrarlanmır.
     select.classList.add('hidden','scope-filter-local');
     select.classList.remove('scope-filter-pending');
-    select.setAttribute('aria-label','Cari təşkilat');
+    select.setAttribute('aria-label','Cari təşkilati vahid');
     select.setAttribute('aria-hidden','true');
     return select;
   }
   select.disabled=true;
   select.innerHTML='<option value="">Təşkilatlar yüklənir…</option>';
   select.classList.remove('hidden','scope-filter-pending','scope-filter-local');
-  const {data,error}=await supabase.from('organizations').select('id,short_name,name,service_status').order('short_name');
-  if(error) throw error;
-  // Nazirlik / mərkəzi istifadəçinin monitorinq filtrində yalnız hazırda istifadə olunan
-  // təşkilatlar göstərilir. Arxiv qeydləri tarix, alias və köhnə nəticələrin bütövlüyü üçün
-  // bazada/admin reyestrində saxlanılır, amma gündəlik monitorinq filtrini qarışdırmır.
-  const items=(data||[]).filter(o=>['active','grace'].includes(o.service_status));
-  select.innerHTML='<option value="">Bütün təşkilatlar</option>'+items.map(o=>`<option value="${o.id}">${escapeHtml(o.short_name||o.name||'Təşkilat')}</option>`).join('');
+  const [orgRes,pointRes]=await Promise.all([
+    supabase.from('organizations').select('id,short_name,name,service_status,organization_type').order('short_name'),
+    supabase.from('organization_service_points').select('id,organization_id,short_name,name,point_type,is_active').eq('is_active',true).order('name')
+  ]);
+  if(orgRes.error) throw orgRes.error;
+  if(pointRes.error) throw pointRes.error;
+  const orgs=(orgRes.data||[]).filter(o=>['active','grace'].includes(o.service_status));
+  const orgById=new Map(orgs.map(o=>[String(o.id),o]));
+  const groups=[
+    ['Baş qurum',orgs.filter(o=>String(o.short_name||'').toUpperCase()==='ADSEA')],
+    ['Mərkəzi tabeli qurumlar',orgs.filter(o=>o.organization_type==='central_service' && String(o.short_name||'').toUpperCase()!=='ADSEA')],
+    ['Regional bölmələr',orgs.filter(o=>o.organization_type==='regional_unit')],
+    ['Rayon idarələri',orgs.filter(o=>o.organization_type==='district')],
+    ['Xüsusi və tabeli idarələr',orgs.filter(o=>o.organization_type==='special_unit')]
+  ];
+  const options=['<option value="">Bütün təşkilatlar və tabeli vahidlər</option>'];
+  for(const [label,rows] of groups){
+    if(!rows.length) continue;
+    options.push(`<optgroup label="${escapeHtml(label)}">${rows.map(o=>`<option value="org:${o.id}">${escapeHtml(o.short_name||o.name||'Təşkilat')}</option>`).join('')}</optgroup>`);
+  }
+  const points=(pointRes.data||[]).filter(p=>orgById.has(String(p.organization_id)));
+  const pointsByParent=new Map();
+  for(const point of points){
+    const key=String(point.organization_id);
+    if(!pointsByParent.has(key)) pointsByParent.set(key,[]);
+    pointsByParent.get(key).push(point);
+  }
+  for(const [parentId,rows] of [...pointsByParent.entries()].sort((a,b)=>String(orgById.get(a[0])?.short_name||'').localeCompare(String(orgById.get(b[0])?.short_name||''),'az'))){
+    const parent=orgById.get(parentId);
+    const label=`${parent?.short_name||parent?.name||'Təşkilat'} — tabeli idarə və şöbələr`;
+    options.push(`<optgroup label="${escapeHtml(label)}">${rows.map(p=>`<option value="point:${p.id}">${escapeHtml(p.short_name||p.name||'Tabeli vahid')}</option>`).join('')}</optgroup>`);
+  }
+  select.innerHTML=options.join('');
   select.disabled=false;
   select.classList.remove('hidden','scope-filter-pending');
   return select;
 }
 
-export function applyOrganizationScope(query, profile, organizationId=''){
-  if(isCentralScope(profile)) return organizationId ? query.eq('organization_id',organizationId) : query;
+export function applyOrganizationScope(query, profile, selection=''){
+  const parse=value=>{
+    const text=String(value||'');
+    if(text.startsWith('point:')) return {type:'point',id:text.slice(6)};
+    if(text.startsWith('org:')) return {type:'org',id:text.slice(4)};
+    return text?{type:'org',id:text}:{type:'all',id:''};
+  };
+  if(isCentralScope(profile)){
+    const selected=parse(selection);
+    if(selected.type==='point' && selected.id) return query.eq('service_point_id',selected.id);
+    if(selected.type==='org' && selected.id) return query.eq('organization_id',selected.id);
+    return query;
+  }
+  if(profile?.service_point_id) return query.eq('service_point_id',profile.service_point_id);
   return profile?.organization_id ? query.eq('organization_id',profile.organization_id) : query;
 }

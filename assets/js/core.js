@@ -125,7 +125,7 @@ export async function getSessionProfile() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { session: null, profile: null, organization: null };
   const { data: profile, error } = await supabase.from('profiles')
-    .select('*, positions(name), organizations(*)')
+    .select('*, positions(name), organizations(*), service_point:organization_service_points!profiles_service_point_id_fkey(id,name,short_name,organization_id,district_id)')
     .eq('auth_user_id', session.user.id)
     .maybeSingle();
   if (error) throw error;
@@ -145,7 +145,7 @@ export function avatarText(profile) {
 }
 
 export function currentOrgName(profile) {
-  return profile?.access_scope === 'all' ? 'ADSEA' : (profile?.organizations?.short_name || profile?.organizations?.name || 'Media Monitorinq');
+  return profile?.access_scope === 'all' ? 'ADSEA' : (profile?.service_point?.short_name || profile?.service_point?.name || profile?.organizations?.short_name || profile?.organizations?.name || 'Media Monitorinq');
 }
 
 export function registerSW() {
