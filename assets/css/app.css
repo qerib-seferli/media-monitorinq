@@ -2163,3 +2163,49 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .dashboard-head .page-actions .btn{height:48px!important;padding:0 8px!important;display:flex!important;align-items:center!important;justify-content:center!important}
   .dashboard-head .page-actions .mm-select-trigger[data-select-id="organization-filter"]{height:48px!important;grid-column:1/-1!important}
 }
+
+
+/* v68 — mobil seçim menyuları: sadə, seçim-yönümlü, qısa siyahıda scrollbar yoxdur */
+@media(max-width:720px){
+  .mm-select-popover{
+    padding:5px!important;
+    max-height:none!important;
+    overflow:visible!important;
+  }
+  .mm-select-popover.is-open{display:block!important}
+  .mm-select-options{
+    overflow:visible!important;
+    max-height:none!important;
+    padding:0!important;
+    scrollbar-width:none!important;
+  }
+  .mm-select-options::-webkit-scrollbar{display:none!important}
+  .mm-select-popover.is-long{
+    max-height:var(--mm-pop-max-height,46vh)!important;
+    overflow:hidden!important;
+  }
+  .mm-select-popover.is-long .mm-select-options{
+    max-height:calc(var(--mm-pop-max-height,46vh) - 10px)!important;
+    overflow-y:auto!important;
+    overscroll-behavior:contain;
+    scrollbar-width:thin!important;
+    scrollbar-color:rgba(116,176,205,.42) transparent;
+  }
+  .mm-select-popover.is-long .mm-select-options::-webkit-scrollbar{display:block!important;width:4px}
+  .mm-select-popover.is-long .mm-select-options::-webkit-scrollbar-thumb{background:rgba(116,176,205,.42);border-radius:10px}
+  .mm-select-group{
+    position:static!important;
+    margin:3px 2px 2px!important;
+    padding:5px 7px 3px!important;
+    background:transparent!important;
+    font-size:8.5px!important;
+  }
+  .mm-select-option{
+    min-height:40px!important;
+    padding:9px 10px!important;
+    border-radius:10px!important;
+    font-size:10.5px!important;
+    line-height:1.2!important;
+  }
+  .mm-select-option.is-selected{background:rgba(76,205,169,.14)!important}
+}

@@ -158,21 +158,31 @@ export function registerSW() {
 export function installCompactMobileSelects(root=document){
   const mobile=()=>window.matchMedia('(max-width: 720px)').matches;
   const closeAll=except=>document.querySelectorAll('.mm-select-popover.is-open').forEach(x=>{
-    if(x!==except){x.classList.remove('is-open','is-above');x.style.removeProperty('--mm-pop-left');x.style.removeProperty('--mm-pop-top');x.style.removeProperty('--mm-pop-width');x.style.removeProperty('--mm-pop-max-height');}
+    if(x!==except){
+      x.classList.remove('is-open','is-above','is-long');
+      x.style.removeProperty('--mm-pop-left');
+      x.style.removeProperty('--mm-pop-top');
+      x.style.removeProperty('--mm-pop-width');
+      x.style.removeProperty('--mm-pop-max-height');
+    }
   });
-  const positionPopover=(trigger,pop)=>{
+  const positionPopover=(trigger,pop,optionCount)=>{
     const rect=trigger.getBoundingClientRect();
     const gap=6;
     const viewportW=document.documentElement.clientWidth||window.innerWidth;
     const viewportH=window.innerHeight||document.documentElement.clientHeight;
-    const left=Math.max(8,Math.min(rect.left,viewportW-Math.max(rect.width,180)-8));
     const width=Math.min(viewportW-16,Math.max(rect.width,180));
+    const left=Math.max(8,Math.min(rect.left,viewportW-width-8));
+    const rowH=42;
+    const groupCount=pop.querySelectorAll('.mm-select-group').length;
+    const desired=Math.min(optionCount*rowH + groupCount*25 + 12, Math.round(viewportH*.48));
     const below=Math.max(0,viewportH-rect.bottom-gap-12);
     const above=Math.max(0,rect.top-gap-12);
-    const openAbove=below<170 && above>below;
-    const available=Math.max(120,Math.min(330,openAbove?above:below));
-    const top=openAbove?Math.max(8,rect.top-gap-available):Math.min(viewportH-8,rect.bottom+gap);
+    const openAbove=below<Math.min(desired,180) && above>below;
+    const available=Math.max(90,Math.min(Math.round(viewportH*.48),openAbove?above:below));
+    const top=openAbove?Math.max(8,rect.top-gap-Math.min(desired,available)):Math.min(viewportH-8,rect.bottom+gap);
     pop.classList.toggle('is-above',openAbove);
+    pop.classList.toggle('is-long',desired>available || optionCount>8);
     pop.style.setProperty('--mm-pop-left',`${left}px`);
     pop.style.setProperty('--mm-pop-top',`${top}px`);
     pop.style.setProperty('--mm-pop-width',`${width}px`);
@@ -180,62 +190,84 @@ export function installCompactMobileSelects(root=document){
   };
   const enhance=select=>{
     if(!select || select.dataset.mmSelect==='1')return;
-    select.dataset.mmSelect='1'; select.classList.add('mm-native-select');
-    const trigger=document.createElement('button'); trigger.type='button'; trigger.className='mm-select-trigger'; trigger.dataset.selectId=select.id||'';
-    const pop=document.createElement('div'); pop.className='mm-select-popover'; pop.setAttribute('role','listbox');
-    select.insertAdjacentElement('afterend',pop); select.insertAdjacentElement('afterend',trigger);
+    select.dataset.mmSelect='1';
+    select.classList.add('mm-native-select');
+    const trigger=document.createElement('button');
+    trigger.type='button';
+    trigger.className='mm-select-trigger';
+    trigger.dataset.selectId=select.id||'';
+    trigger.setAttribute('aria-haspopup','listbox');
+    trigger.setAttribute('aria-expanded','false');
+    const pop=document.createElement('div');
+    pop.className='mm-select-popover';
+    pop.setAttribute('role','listbox');
+    select.insertAdjacentElement('afterend',pop);
+    select.insertAdjacentElement('afterend',trigger);
+
     const rebuild=()=>{
       const current=select.options[select.selectedIndex];
       trigger.textContent=current?.textContent||select.getAttribute('aria-label')||'Seçin';
-      trigger.disabled=select.disabled; trigger.hidden=select.classList.contains('hidden');
+      trigger.disabled=select.disabled;
+      trigger.hidden=select.classList.contains('hidden');
       const opts=[...select.options];
-      const searchable=opts.filter(o=>!o.disabled).length>10;
-      const rows=[]; let currentGroup='';
+      const rows=[];
+      let currentGroup='';
       opts.forEach(opt=>{
         const group=opt.parentElement?.tagName==='OPTGROUP'?opt.parentElement.label:'';
-        if(group&&group!==currentGroup){rows.push(`<div class="mm-select-group" data-mm-group>${escapeHtml(group)}</div>`);currentGroup=group;}
+        if(group&&group!==currentGroup){
+          rows.push(`<div class="mm-select-group" data-mm-group>${escapeHtml(group)}</div>`);
+          currentGroup=group;
+        }
         if(!group)currentGroup='';
-        rows.push(`<button type="button" class="mm-select-option${opt.selected?' is-selected':''}" role="option" aria-selected="${opt.selected?'true':'false'}" data-value="${escapeHtml(opt.value)}" data-search="${escapeHtml((group+' '+(opt.textContent||'')).toLocaleLowerCase('az-AZ'))}" ${opt.disabled?'disabled':''}>${escapeHtml(opt.textContent||'')}</button>`);
+        rows.push(`<button type="button" class="mm-select-option${opt.selected?' is-selected':''}" role="option" aria-selected="${opt.selected?'true':'false'}" data-value="${escapeHtml(opt.value)}" ${opt.disabled?'disabled':''}>${escapeHtml(opt.textContent||'')}</button>`);
       });
-      pop.innerHTML=`${searchable?'<div class="mm-select-search-wrap"><input class="mm-select-search" type="search" autocomplete="off" placeholder="Siyahıda axtar…" aria-label="Siyahıda axtar"></div>':''}<div class="mm-select-options">${rows.join('')}</div>`;
-      const optionButtons=[...pop.querySelectorAll('.mm-select-option')];
-      optionButtons.forEach(btn=>btn.onclick=()=>{
+      pop.innerHTML=`<div class="mm-select-options">${rows.join('')}</div>`;
+      [...pop.querySelectorAll('.mm-select-option')].forEach(btn=>btn.onclick=()=>{
         select.value=btn.dataset.value||'';
         select.dispatchEvent(new Event('change',{bubbles:true}));
         rebuild();
-        pop.classList.remove('is-open','is-above');
+        pop.classList.remove('is-open','is-above','is-long');
+        trigger.setAttribute('aria-expanded','false');
+        trigger.focus({preventScroll:true});
       });
-      const search=pop.querySelector('.mm-select-search');
-      if(search){
-        search.oninput=()=>{
-          const q=String(search.value||'').trim().toLocaleLowerCase('az-AZ');
-          optionButtons.forEach(btn=>btn.hidden=Boolean(q)&&!String(btn.dataset.search||'').includes(q));
-          let groupEl=null; let any=false;
-          [...pop.querySelector('.mm-select-options').children].forEach(el=>{
-            if(el.matches('[data-mm-group]')){if(groupEl)groupEl.hidden=!any;groupEl=el;any=false;return;}
-            if(el.matches('.mm-select-option')&&!el.hidden)any=true;
-          });
-          if(groupEl)groupEl.hidden=!any;
-        };
-      }
     };
+
     trigger.onclick=e=>{
-      e.preventDefault();e.stopPropagation();
+      e.preventDefault();
+      e.stopPropagation();
       if(!mobile()||select.disabled)return;
       const opening=!pop.classList.contains('is-open');
       closeAll(pop);
       pop.classList.toggle('is-open',opening);
-      if(opening){positionPopover(trigger,pop);requestAnimationFrame(()=>pop.querySelector('.mm-select-search')?.focus({preventScroll:true}));}
+      trigger.setAttribute('aria-expanded',opening?'true':'false');
+      if(opening){
+        const optionCount=[...select.options].filter(o=>!o.disabled).length;
+        positionPopover(trigger,pop,optionCount);
+        requestAnimationFrame(()=>pop.querySelector('.mm-select-option.is-selected:not([disabled]),.mm-select-option:not([disabled])')?.focus({preventScroll:true}));
+      }
     };
     select.addEventListener('change',rebuild);
     new MutationObserver(rebuild).observe(select,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','class']});
     rebuild();
   };
+
   root.querySelectorAll?.('select.select').forEach(enhance);
-  new MutationObserver(ms=>{for(const m of ms)for(const n of m.addedNodes){if(n.nodeType!==1)continue;if(n.matches?.('select.select'))enhance(n);n.querySelectorAll?.('select.select').forEach(enhance);}}).observe(root===document?document.body:root,{childList:true,subtree:true});
+  new MutationObserver(ms=>{
+    for(const m of ms)for(const n of m.addedNodes){
+      if(n.nodeType!==1)continue;
+      if(n.matches?.('select.select'))enhance(n);
+      n.querySelectorAll?.('select.select').forEach(enhance);
+    }
+  }).observe(root===document?document.body:root,{childList:true,subtree:true});
+
   if(!window.__mmSelectOutside){
     window.__mmSelectOutside=true;
-    document.addEventListener('click',e=>{if(!e.target.closest?.('.mm-select-trigger,.mm-select-popover'))closeAll();});
+    document.addEventListener('click',e=>{
+      if(!e.target.closest?.('.mm-select-trigger,.mm-select-popover')){
+        closeAll();
+        document.querySelectorAll('.mm-select-trigger[aria-expanded="true"]').forEach(t=>t.setAttribute('aria-expanded','false'));
+      }
+    });
     window.addEventListener('resize',()=>closeAll());
     window.addEventListener('orientationchange',()=>closeAll());
     document.addEventListener('scroll',e=>{if(!e.target?.closest?.('.mm-select-popover'))closeAll();},{passive:true,capture:true});
