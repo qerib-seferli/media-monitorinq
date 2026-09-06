@@ -2275,3 +2275,63 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
   .mm-select-option+.mm-select-option{margin-top:1px!important}
   .mm-select-option.is-selected{background:rgba(76,205,169,.14)!important}
 }
+
+
+/* v70 — PWA mobil sabitlik, viewport və body-səviyyəli select popover */
+@media(max-width:720px){
+  html,body{
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    overflow-x:clip!important;
+    overscroll-behavior-x:none;
+  }
+  body{position:relative!important}
+  .app-shell,.app-shell>.main,.main{
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    overflow-x:clip!important;
+  }
+  .topbar{
+    position:sticky!important;
+    top:max(6px,env(safe-area-inset-top))!important;
+    left:auto!important;right:auto!important;
+    width:100%!important;max-width:100%!important;
+    z-index:1100!important;
+    transform:none!important;
+  }
+  .bottom-nav{
+    position:fixed!important;
+    left:8px!important;right:8px!important;
+    bottom:max(6px,env(safe-area-inset-bottom))!important;
+    width:auto!important;max-width:none!important;
+    z-index:1200!important;
+    transform:none!important;
+  }
+  .page-head,.toolbar,.dashboard-head,.dashboard-head .page-actions,.monitor-filters,.report-toolbar{
+    min-width:0!important;max-width:100%!important;
+  }
+  .mm-select-trigger{
+    min-width:0!important;max-width:100%!important;
+    overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;
+  }
+  .mm-select-trigger[data-select-id=\"organization-filter\"]{font-size:10.5px!important}
+  body>.mm-select-popover{
+    position:fixed!important;
+    z-index:13000!important;
+    margin:0!important;
+    box-sizing:border-box!important;
+    max-width:calc(100dvw - 16px)!important;
+    overflow:hidden!important;
+    contain:layout paint!important;
+  }
+  body>.mm-select-popover .mm-select-options{
+    width:100%!important;min-width:0!important;max-width:100%!important;
+    overflow-x:hidden!important;
+  }
+  body>.mm-select-popover .mm-select-option,
+  body>.mm-select-popover .mm-select-group{
+    max-width:100%!important;box-sizing:border-box!important;
+  }
+}

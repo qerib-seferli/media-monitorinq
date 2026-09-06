@@ -123,7 +123,7 @@ export async function setupOrganizationFilter(profile, select){
     ['Rayon idarələri',orgs.filter(o=>o.organization_type==='district')],
     ['Xüsusi və tabeli idarələr',orgs.filter(o=>o.organization_type==='special_unit')]
   ];
-  const options=['<option value="">Bütün təşkilatlar və tabeli vahidlər</option>'];
+  const options=['<option value="">Bütün təşkilatlar</option>'];
   for(const [label,rows] of groups){
     if(!rows.length) continue;
     options.push(`<optgroup label="${escapeHtml(label)}">${rows.map(o=>`<option value="org:${o.id}">${escapeHtml(o.short_name||o.name||'Təşkilat')}</option>`).join('')}</optgroup>`);

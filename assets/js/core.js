@@ -164,7 +164,7 @@ export function installCompactMobileSelects(root=document){
     pop.style.removeProperty('--mm-pop-top');
     pop.style.removeProperty('--mm-pop-width');
     pop.style.removeProperty('--mm-pop-max-height');
-    const trigger=pop.previousElementSibling;
+    const trigger=pop.__mmTrigger || document.querySelector(`.mm-select-trigger[data-mm-owner="${pop.dataset.mmOwner||''}"]`);
     if(trigger?.classList?.contains('mm-select-trigger'))trigger.setAttribute('aria-expanded','false');
   });
 
@@ -219,12 +219,17 @@ export function installCompactMobileSelects(root=document){
     const pop=document.createElement('div');
     pop.className='mm-select-popover';
     pop.setAttribute('role','listbox');
-    select.insertAdjacentElement('afterend',pop);
     select.insertAdjacentElement('afterend',trigger);
+    const ownerKey=`mm-${Math.random().toString(36).slice(2,10)}`;
+    trigger.dataset.mmOwner=ownerKey;
+    pop.dataset.mmOwner=ownerKey;
+    pop.__mmTrigger=trigger;
+    document.body.appendChild(pop);
 
     const rebuild=()=>{
       const current=select.options[select.selectedIndex];
-      trigger.textContent=current?.textContent||select.getAttribute('aria-label')||'Seçin';
+      const rawLabel=current?.textContent||select.getAttribute('aria-label')||'Seçin';
+      trigger.textContent=(select.id==='organization-filter' && !select.value) ? 'Bütün təşkilatlar' : rawLabel;
       trigger.disabled=select.disabled;
       trigger.hidden=select.classList.contains('hidden');
       const rows=[];
