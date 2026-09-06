@@ -2099,3 +2099,15 @@ svg{display:block}.nav-icon{width:22px;height:22px;display:grid;place-items:cent
 .az-org-list{gap:7px}.az-org-collapsible{padding:0!important;overflow:hidden}.az-org-summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:10px 11px;cursor:pointer;list-style:none}.az-org-summary::-webkit-details-marker{display:none}.az-org-summary:hover{background:rgba(73,143,163,.06)}.az-org-summary-main{display:block;min-width:0}.az-org-summary-main strong{display:block;color:#e1f5fa;font-size:11.5px;line-height:1.35}.az-org-summary-main small{display:block;margin-top:2px;color:#7fa3b5;font-size:8.5px;line-height:1.3}.az-org-summary-count{padding:3px 6px;border-radius:999px;background:rgba(51,179,132,.09);border:1px solid rgba(51,179,132,.16);color:#83dbb9;font-size:8px;white-space:nowrap}.az-collapse-chevron{color:#789db1;font-size:12px;transition:transform .15s ease}.az-org-collapsible[open] .az-collapse-chevron{transform:rotate(180deg)}.az-org-collapsible-body{padding:0 11px 11px;border-top:1px solid rgba(95,162,188,.09)}.az-hierarchy-mark{width:9px;height:9px;border-left:1px solid rgba(98,194,186,.28);border-bottom:1px solid rgba(98,194,186,.28);border-radius:0 0 0 4px}.hierarchy-level-0 .az-hierarchy-mark{display:none}.hierarchy-level-1{margin-left:5px}.hierarchy-level-2{margin-left:12px}.hierarchy-level-3{margin-left:19px}.hierarchy-level-4{margin-left:26px}.hierarchy-level-0{border-color:rgba(228,192,105,.18);background:rgba(122,91,35,.05)}.hierarchy-level-1{border-color:rgba(75,205,168,.15)}.hierarchy-level-2{border-color:rgba(86,159,215,.15)}
 @media(max-width:1100px){.org-action-stack{grid-template-columns:1fr auto}.org-action-stack .btn.secondary{grid-column:1}.org-delete-btn{grid-column:2;grid-row:1/3}.admin-view[data-admin-view="organizations"] .org-registry-table th:nth-child(4){width:25%}.admin-view[data-admin-view="organizations"] .org-registry-table th:nth-child(6){width:16%}}
 @media(max-width:900px){.admin-view[data-admin-view="organizations"] .desktop-table{display:none}.admin-view[data-admin-view="organizations"] .mobile-record-list{display:grid}.org-mobile-level-1,.org-mobile-level-2,.org-mobile-level-3{margin-left:0}.hierarchy-level-1,.hierarchy-level-2,.hierarchy-level-3,.hierarchy-level-4{margin-left:0}}
+
+/* v62 — tabeli təşkilati vahidlər */
+.org-service-point-row td{background:rgba(56,130,155,.035)}
+.org-service-point-row .org-name-cell{padding-left:34px}
+.org-service-point-row .org-tree-mark{width:12px;border-color:rgba(77,205,169,.38)}
+.org-level-badge.level-4{background:rgba(77,205,169,.09);border-color:rgba(77,205,169,.2);color:#8fe0c7}
+.org-manager-line{color:#9ec8b9!important;font-weight:700}
+.org-readonly-badge{font-size:8px;white-space:nowrap}
+.org-mobile-service-point{border-left:2px solid rgba(77,205,169,.28)}
+.org-mobile-level-4{margin-left:30px}
+.az-point-manager{margin:7px 0 3px;color:#9ab7c8;font-size:10px;line-height:1.35}
+.az-point-manager b{color:#d7e9ef}

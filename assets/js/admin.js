@@ -26,6 +26,7 @@ const SOURCE_PAGE_SIZE = 100;
 let auditRows = [];
 let aliases = [];
 let organizationServiceAreas = [];
+let organizationServicePoints = [];
 let showArchivedOrganizations = false;
 
 const STATUS_LABELS = { active: 'Aktiv', grace: 'Möhlət', suspended: 'Dayandırılıb', archived: 'Arxiv' };
@@ -164,10 +165,11 @@ async function refresh() {
     supabase.from('districts').select('*,villages(*)').order('name'),
     supabase.from('audit_logs').select('*').neq('action','radar_scan_event').order('created_at',{ascending:false}).limit(100),
     supabase.from('organization_aliases').select('*').order('alias'),
-    supabase.from('organization_service_areas').select('organization_id,district_id').order('organization_id')
+    supabase.from('organization_service_areas').select('organization_id,district_id').order('organization_id'),
+    supabase.from('organization_service_points').select('*').order('name')
   ]);
 
-  const [o,u,p,d,a,al,osa] = results;
+  const [o,u,p,d,a,al,osa,osp] = results;
   const fatal = results.find(r => r.error);
   if (fatal?.error) toast(fatal.error.message, 'error');
 
@@ -181,6 +183,7 @@ async function refresh() {
   auditRows = a.data || [];
   aliases = al.data || [];
   organizationServiceAreas = osa?.error ? [] : (osa.data || []);
+  organizationServicePoints = osp?.error ? [] : (osp.data || []);
 
   await Promise.all([loadKeywordStats(), loadSourceIndex()]);
 
@@ -273,6 +276,23 @@ function serviceAreaTitleForOrg(org) {
   return names.length ? names.join(', ') : 'Xidmət ərazisi təyin edilməyib';
 }
 
+function servicePointTypeLabel(point={}) {
+  const name = String(point?.name || '');
+  if (/Sukanal İdarəsi/i.test(name)) return 'Şəhər idarəsi';
+  if (/Şöbəsi/i.test(name)) return 'Tabeli şöbə';
+  return ({department:'İdarə',branch:'Tabeli şöbə',service_point:'Xidmət vahidi',regional_unit:'Regional vahid',office:'Ofis',laboratory:'Laboratoriya',station:'Stansiya',other:'Tabeli vahid'})[point?.point_type] || 'Tabeli vahid';
+}
+function servicePointDistrictName(point={}) {
+  return districts.find(d=>String(d.id)===String(point?.district_id))?.name || '—';
+}
+function servicePointsForOrg(orgId) {
+  return organizationServicePoints.filter(p=>String(p.organization_id)===String(orgId) && p.is_active!==false).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'az'));
+}
+function servicePointManagerText(point={}) {
+  const name=String(point.manager_name||'').trim(); const title=String(point.manager_title||'').trim();
+  if(name && title) return `${title}: ${name}`; return name || title || '';
+}
+
 function renderOrgs() {
   const desktop = document.querySelector('#org-body');
   const mobile = document.querySelector('#org-mobile-list');
@@ -281,41 +301,25 @@ function renderOrgs() {
   const archiveCount = orgs.filter(o=>o.service_status==='archived').length;
   const archiveToggle = document.querySelector('#toggle-archived-organizations');
   if (archiveToggle) archiveToggle.textContent = showArchivedOrganizations ? `Arxivləri gizlət (${archiveCount})` : `Arxivləri göstər (${archiveCount})`;
-
-  let lastGroup='';
-  const desktopRows=[];
+  let lastGroup=''; const desktopRows=[];
   for(const o of rows){
     const meta=organizationHierarchyMeta(o);
-    if(meta.group!==lastGroup){
-      desktopRows.push(`<tr class="org-group-row"><td colspan="6"><span>${escapeHtml(meta.group)}</span></td></tr>`);
-      lastGroup=meta.group;
-    }
+    if(meta.group!==lastGroup){desktopRows.push(`<tr class="org-group-row"><td colspan="6"><span>${escapeHtml(meta.group)}</span></td></tr>`);lastGroup=meta.group;}
     const physical=(districts.find(d=>d.id===o.location_district_id)?.name) || '—';
-    desktopRows.push(`
-      <tr class="org-level-${meta.level}" data-org-level="${meta.level}">
-        <td><div class="org-name-cell"><span class="org-tree-mark" aria-hidden="true"></span><div><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></div></div></td>
-        <td><span class="org-level-badge level-${meta.level}">${escapeHtml(meta.levelLabel)}</span><small class="org-type-sub">${escapeHtml(organizationTypeLabel(o.organization_type))}</small></td>
-        <td><span class="muted table-sub org-area-summary" title="${escapeHtml(serviceAreaTitleForOrg(o))}">Xidmət: <strong>${escapeHtml(serviceAreaSummaryForOrg(o))}</strong><br>Fiziki: <strong>${escapeHtml(physical)}</strong></span></td>
-        <td><div class="org-contact-cell"><span>${escapeHtml(o.address_text || 'Ünvan qeyd edilməyib')}</span><small>${escapeHtml(o.phone || 'Telefon yoxdur')}</small><small>${escapeHtml(o.email || 'E-mail yoxdur')}</small></div></td>
-        <td>${statusBadge(o.service_status)}</td>
-        <td><div class="org-action-stack"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktiv et' : 'Dayandır'}</button><button class="icon-btn org-delete-btn" title="Təşkilatı sil" aria-label="Təşkilatı sil" data-org-delete="${o.id}">×</button></div></td>
-      </tr>`);
+    desktopRows.push(`<tr class="org-level-${meta.level}" data-org-level="${meta.level}"><td><div class="org-name-cell"><span class="org-tree-mark" aria-hidden="true"></span><div><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></div></div></td><td><span class="org-level-badge level-${meta.level}">${escapeHtml(meta.levelLabel)}</span><small class="org-type-sub">${escapeHtml(organizationTypeLabel(o.organization_type))}</small></td><td><span class="muted table-sub org-area-summary" title="${escapeHtml(serviceAreaTitleForOrg(o))}">Xidmət: <strong>${escapeHtml(serviceAreaSummaryForOrg(o))}</strong><br>Fiziki: <strong>${escapeHtml(physical)}</strong></span></td><td><div class="org-contact-cell"><span>${escapeHtml(o.address_text || 'Ünvan qeyd edilməyib')}</span><small>${escapeHtml(o.phone || 'Telefon yoxdur')}</small><small>${escapeHtml(o.email || 'E-mail yoxdur')}</small></div></td><td>${statusBadge(o.service_status)}</td><td><div class="org-action-stack"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktiv et' : 'Dayandır'}</button><button class="icon-btn org-delete-btn" title="Təşkilatı sil" aria-label="Təşkilatı sil" data-org-delete="${o.id}">×</button></div></td></tr>`);
+    for(const p of servicePointsForOrg(o.id)){
+      const manager=servicePointManagerText(p); const pointDistrict=servicePointDistrictName(p);
+      desktopRows.push(`<tr class="org-service-point-row org-level-${Math.min(meta.level+1,4)}"><td><div class="org-name-cell"><span class="org-tree-mark" aria-hidden="true"></span><div><strong>${escapeHtml(p.name||'Tabeli vahid')}</strong><br><span class="muted table-sub">Tabeli qurum: ${escapeHtml(o.short_name||o.name||'')}</span></div></div></td><td><span class="org-level-badge level-4">${escapeHtml(servicePointTypeLabel(p))}</span><small class="org-type-sub">Təşkilati vahid</small></td><td><span class="muted table-sub org-area-summary">Ərazi: <strong>${escapeHtml(pointDistrict)}</strong><br>Fiziki: <strong>${escapeHtml(pointDistrict)}</strong></span></td><td><div class="org-contact-cell"><span>${escapeHtml(p.address_text || 'Ünvan qeyd edilməyib')}</span>${manager?`<small class="org-manager-line">${escapeHtml(manager)}</small>`:''}<small>${escapeHtml(p.phone || 'Telefon yoxdur')}</small><small>${escapeHtml(p.email || 'E-mail yoxdur')}</small></div></td><td><span class="badge ok">Aktiv</span></td><td><span class="badge info org-readonly-badge">Tabeli vahid</span></td></tr>`);
+    }
   }
-  desktop.innerHTML = desktopRows.join('') || '<tr><td colspan="6" class="empty">Təşkilat yoxdur.</td></tr>';
-
-  let mobileGroup='';
-  const mobileRows=[];
+  desktop.innerHTML=desktopRows.join('')||'<tr><td colspan="6" class="empty">Təşkilat yoxdur.</td></tr>';
+  let mobileGroup=''; const mobileRows=[];
   for(const o of rows){
-    const meta=organizationHierarchyMeta(o);
-    if(meta.group!==mobileGroup){mobileRows.push(`<div class="org-mobile-group">${escapeHtml(meta.group)}</div>`);mobileGroup=meta.group;}
-    mobileRows.push(`
-      <article class="record-card org-mobile-level-${meta.level}">
-        <div class="record-head"><div><span class="org-level-badge level-${meta.level}">${escapeHtml(meta.levelLabel)}</span><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
-        <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Xidmət əraziləri</span><b title="${escapeHtml(serviceAreaTitleForOrg(o))}">${escapeHtml(serviceAreaSummaryForOrg(o))}</b></div><div><span>Fiziki ərazi</span><b>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</b></div><div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Telefon</span><b>${escapeHtml(o.phone || '—')}</b></div><div><span>E-mail</span><b>${escapeHtml(o.email || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
-        <div class="record-actions org-record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
-      </article>`);
+    const meta=organizationHierarchyMeta(o); if(meta.group!==mobileGroup){mobileRows.push(`<div class="org-mobile-group">${escapeHtml(meta.group)}</div>`);mobileGroup=meta.group;}
+    mobileRows.push(`<article class="record-card org-mobile-level-${meta.level}"><div class="record-head"><div><span class="org-level-badge level-${meta.level}">${escapeHtml(meta.levelLabel)}</span><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div><div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Xidmət əraziləri</span><b title="${escapeHtml(serviceAreaTitleForOrg(o))}">${escapeHtml(serviceAreaSummaryForOrg(o))}</b></div><div><span>Fiziki ərazi</span><b>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</b></div><div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Telefon</span><b>${escapeHtml(o.phone || '—')}</b></div><div><span>E-mail</span><b>${escapeHtml(o.email || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div><div class="record-actions org-record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div></article>`);
+    for(const p of servicePointsForOrg(o.id)){const manager=servicePointManagerText(p);mobileRows.push(`<article class="record-card org-mobile-service-point org-mobile-level-${Math.min(meta.level+1,4)}"><div class="record-head"><div><span class="org-level-badge level-4">${escapeHtml(servicePointTypeLabel(p))}</span><strong>${escapeHtml(p.name||'Tabeli vahid')}</strong><small>Tabeli qurum: ${escapeHtml(o.short_name||o.name||'')}</small></div><span class="badge ok">Aktiv</span></div><div class="record-grid"><div><span>Ərazi</span><b>${escapeHtml(servicePointDistrictName(p))}</b></div>${manager?`<div><span>Rəhbər</span><b>${escapeHtml(manager)}</b></div>`:''}<div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(p.address_text||'Qeyd edilməyib')}</b></div><div><span>Telefon</span><b>${escapeHtml(p.phone||'—')}</b></div><div><span>E-mail</span><b>${escapeHtml(p.email||'—')}</b></div></div></article>`);}
   }
-  mobile.innerHTML = mobileRows.join('') || '<div class="empty">Təşkilat yoxdur.</div>';
+  mobile.innerHTML=mobileRows.join('')||'<div class="empty">Təşkilat yoxdur.</div>';
 }
 
 function userName(u) {
