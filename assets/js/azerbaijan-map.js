@@ -7,15 +7,15 @@ const ACTIVE_STATUSES=new Set(['active','grace']);
 
 const fold=v=>String(v||'').normalize('NFKC').toLocaleLowerCase('az-AZ').replace(/\b(city|district)\b/gi,' ').replace(/rayonu|şəhəri|şəhər|rayon/g,'').replace(/[^a-z0-9əğıöşüç]+/g,' ').replace(/\s+/g,' ').trim();
 const nameAliases=new Map(Object.entries({
-  'xanlar':'göygöl','hajigabul':'hacıqabul','hajiqabul':'hacıqabul','lankaran':'lənkəran','lachin':'laçın','kangarli':'kəngərli','qubadli':'qubadlı','shaki':'şəki','shirvan':'şirvan','yevlakh':'yevlax','stepanakert':'xankəndi','khankendi':'xankəndi','xankendi':'xankəndi','shusha':'şuşa','susha':'şuşa','khojaly':'xocalı','khojavend':'xocavənd','baku':'bakı','ganja':'gəncə','mingachevir':'mingəçevir','sumgayit':'sumqayıt','nakhchivan':'naxçıvan','agdam':'ağdam','aghdam':'ağdam','agdere':'ağdərə','aghdere':'ağdərə','agcabadi':'ağcabədi','aghjabadi':'ağcabədi','agstafa':'ağstafa','aghstafa':'ağstafa','agsu':'ağsu','aghsu':'ağsu','balakan':'balakən','beylagan':'beyləqan','bilasuvar':'biləsuvar','jabrayil':'cəbrayıl','cabrayil':'cəbrayıl','jalilabad':'cəlilabad','dashkasan':'daşkəsən','fuzuli':'füzuli','gadabay':'gədəbəy','goychay':'göyçay','goygol':'göygöl','imishli':'imişli','ismayilli':'ismayıllı','kalbajar':'kəlbəcər','kurdamir':'kürdəmir','masalli':'masallı','neftchala':'neftçala','oghuz':'oğuz','qakh':'qax','gazakh':'qazax','gabala':'qəbələ','gobustan':'qobustan','guba':'quba','gusar':'qusar','shabran':'şabran','shamakhi':'şamaxı','shamkir':'şəmkir','siyazan':'siyəzən','tartar':'tərtər','khachmaz':'xaçmaz','khizi':'xızı','yardimli':'yardımlı','zangilan':'zəngilan','zardab':'zərdab','dəvəçi':'şabran','əli bayramlı':'şirvan','ali bayramli':'şirvan','xızı':'xızı','xizı':'xızı','tərtər nagorno karabakh':'tərtər','tartar nagorno karabakh':'tərtər','xocavənd nagorno karabakh':'xocavənd','khojavend nagorno karabakh':'xocavənd','xocalı nagorno karabakh':'xocalı','khojaly nagorno karabakh':'xocalı'
+  'xanlar':'göygöl','hajigabul':'hacıqabul','hajiqabul':'hacıqabul','lankaran':'lənkəran','lachin':'laçın','kangarli':'kəngərli','qubadli':'qubadlı','shaki':'şəki','shirvan':'şirvan','yevlakh':'yevlax','stepanakert':'xankəndi','khankendi':'xankəndi','xankendi':'xankəndi','shusha':'şuşa','susha':'şuşa','khojaly':'xocalı','khojavend':'xocavənd','baku':'bakı','ganja':'gəncə','mingachevir':'mingəçevir','sumgayit':'sumqayıt','nakhchivan':'naxçıvan','agdam':'ağdam','aghdam':'ağdam','agdere':'ağdərə','aghdere':'ağdərə','agcabadi':'ağcabədi','aghjabadi':'ağcabədi','agstafa':'ağstafa','aghstafa':'ağstafa','agsu':'ağsu','aghsu':'ağsu','balakan':'balakən','beylagan':'beyləqan','bilasuvar':'biləsuvar','jabrayil':'cəbrayıl','cabrayil':'cəbrayıl','jalilabad':'cəlilabad','dashkasan':'daşkəsən','fuzuli':'füzuli','gadabay':'gədəbəy','goychay':'göyçay','goygol':'göygöl','imishli':'imişli','ismayilli':'ismayıllı','kalbajar':'kəlbəcər','kurdamir':'kürdəmir','masalli':'masallı','neftchala':'neftçala','oghuz':'oğuz','qakh':'qax','gazakh':'qazax','gabala':'qəbələ','gobustan':'qobustan','guba':'quba','gusar':'qusar','shabran':'şabran','shamakhi':'şamaxı','shamkir':'şəmkir','siyazan':'siyəzən','tartar':'tərtər','khachmaz':'xaçmaz','khizi':'xızı','yardimli':'yardımlı','zangilan':'zəngilan','zardab':'zərdab','dəvəçi':'şabran','əli bayramlı':'şirvan','ali bayramli':'şirvan','xızı':'xızı','xizı':'xızı','tərtər nagorno karabakh':'ağdərə','tartar nagorno karabakh':'ağdərə','xocavənd nagorno karabakh':'xocavənd','khojavend nagorno karabakh':'xocavənd','xocalı nagorno karabakh':'xocalı','khojaly nagorno karabakh':'xocalı'
 }).map(([a,b])=>[fold(a),fold(b)]));
 const normName=v=>nameAliases.get(fold(v))||fold(v);
 const displayMapName=v=>{
   const raw=String(v||'').replace(/\s*\(Nagorno-Karabakh\)\s*/gi,'').replace(/\s+(City|District)\s*$/i,'').trim();
   const normalized=normName(raw);
   const visible={
-    [fold('xankəndi')]:'Xankəndi',[fold('şuşa')]:'Şuşa',[fold('xocalı')]:'Xocalı',[fold('xocavənd')]:'Xocavənd',
-    [fold('şəki')]:'Şəki',[fold('yevlax')]:'Yevlax',[fold('gəncə')]:'Gəncə',[fold('bakı')]:'Bakı',[fold('sumqayıt')]:'Sumqayıt',[fold('mingəçevir')]:'Mingəçevir',[fold('naxçıvan')]:'Naxçıvan'
+    [fold('xankəndi')]:'Xankəndi',[fold('şuşa')]:'Şuşa',[fold('xocalı')]:'Xocalı',[fold('xocavənd')]:'Xocavənd',[fold('ağdərə')]:'Ağdərə',
+    [fold('şəki')]:'Şəki',[fold('yevlax')]:'Yevlax',[fold('gəncə')]:'Gəncə',[fold('bakı')]:'Bakı',[fold('sumqayıt')]:'Sumqayıt',[fold('mingəçevir')]:'Mingəçevir',[fold('naxçıvan')]:'Naxçıvan',[fold('tərtər')]:'Tərtər'
   };
   return visible[normalized]||raw;
 };
@@ -158,6 +158,15 @@ function radarHitsByDistrict(saved,activeOrgs){
   return out;
 }
 
+function mapHierarchyMeta(o={}){
+  const short=String(o.short_name||'').trim();
+  if(short==='ADSEA')return {order:0,level:0,label:'Baş qurum'};
+  if(o.organization_type==='central_service')return {order:1,level:1,label:'Mərkəzi qurum'};
+  if(o.organization_type==='regional_unit')return {order:2,level:2,label:'Regional bölmə'};
+  if(o.organization_type==='district')return {order:3,level:3,label:'Rayon idarəsi'};
+  return {order:4,level:3,label:'Xüsusi / tabeli idarə'};
+}
+
 export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',profile=null,allowScan=false,serverSync=true}={}){
   const root=document.getElementById(rootId);if(!root)return null;
   root.innerHTML='<div class="az-map-loading">Azərbaycan üzrə monitorinq xəritəsi hazırlanır…</div>';
@@ -207,20 +216,21 @@ export async function initAzerbaijanMonitoringMap({rootId='azerbaijan-live-map',
   }
   function renderDetail(path){
     const {mapName,district,rows:rawRows,points}=districtInfo(path);if(!detail)return;
-    const typeOrder={district:0,regional_unit:1,special_unit:2,central_service:3};
-    const rows=[...rawRows].sort((a,b)=>(typeOrder[a.organization_type]??9)-(typeOrder[b.organization_type]??9)||String(a.short_name||a.name||'').localeCompare(String(b.short_name||b.name||''),'az'));
+    const rows=[...rawRows].sort((a,b)=>{const am=mapHierarchyMeta(a),bm=mapHierarchyMeta(b);return am.order-bm.order||String(a.short_name||a.name||'').localeCompare(String(b.short_name||b.name||''),'az');});
     const saved=radarRead(),hitMap=radarHitsByDistrict(saved,activeOrgs),hit=district?Number(hitMap.get(String(district.id))||0):0;
     const total=rows.reduce((sum,o)=>sum+orgSources(o).reduce((s,[,n])=>s+n,0),0);
-    const orgCards=rows.map(o=>{
+    const orgCards=rows.map((o,index)=>{
       const selectedAreaIds=[...(serviceAreaIdsByOrg.get(String(o.id))||[])];
       const serviceDistrict=district?.name || districtNameById(o.district_id,districtsById);
       const coverageCount=selectedAreaIds.length || (o.district_id?1:0);
       const physicalDistrict=districtNameById(o.location_district_id,districtsById);
       const verified=Boolean(o.location_verified);
-      const typeLabel=o.organization_type==='regional_unit'?'Regional bölmə':o.organization_type==='district'?'Rayon idarəsi':o.organization_type==='special_unit'?'Xüsusi idarə':'Mərkəzi xidmət';
-      return `<article class="az-org-row"><div class="az-org-title"><strong>${escapeHtml(o.name||o.short_name||'Təşkilat')}</strong><small>${escapeHtml(typeLabel)} · ${escapeHtml(o.short_name||'')}</small></div><div class="az-org-meta">${serviceDistrict?`<span>Xidmət ərazisi: <b>${escapeHtml(serviceDistrict)}</b>${coverageCount>1?` · ümumi ${coverageCount} ərazi`:''}</span>`:''}<span class="${verified?'verified':'pending'}">Fiziki yerləşmə: <b>${escapeHtml(physicalDistrict||'dəqiqləşdirilir')}</b>${verified?' · təsdiqli':' · dəqiqləşdirilir'}</span></div><small class="az-org-address">${escapeHtml(o.address_text || 'Rəsmi ünvan bazaya daxil edilməyib')}</small>${contactLinks(o)}${sourceLink(o)}<div class="az-source-chips">${orgSources(o).map(([name,n])=>`<span class="az-source-chip${n?' has-result':''}">${escapeHtml(name)} · ${n}</span>`).join('')}</div><small class="az-org-last">Son aşkarlanma: ${escapeHtml(fmtDate(latest.get(o.id)))}</small></article>`;
+      const meta=mapHierarchyMeta(o);
+      const sourceTotal=orgSources(o).reduce((s,[,n])=>s+n,0);
+      const autoOpen=rows.length<=2 || (index===0 && rows.length<=4);
+      return `<details class="az-org-row az-org-collapsible hierarchy-level-${meta.level}" ${autoOpen?'open':''}><summary class="az-org-summary"><span class="az-hierarchy-mark" aria-hidden="true"></span><span class="az-org-summary-main"><strong>${escapeHtml(o.name||o.short_name||'Təşkilat')}</strong><small>${escapeHtml(meta.label)} · ${escapeHtml(o.short_name||'')}</small></span><span class="az-org-summary-count">${sourceTotal} məlumat</span><span class="az-collapse-chevron" aria-hidden="true">⌄</span></summary><div class="az-org-collapsible-body"><div class="az-org-meta">${serviceDistrict?`<span>Xidmət ərazisi: <b>${escapeHtml(serviceDistrict)}</b>${coverageCount>1?` · ümumi ${coverageCount} ərazi`:''}</span>`:''}<span class="${verified?'verified':'pending'}">Fiziki yerləşmə: <b>${escapeHtml(physicalDistrict||'dəqiqləşdirilir')}</b>${verified?' · təsdiqli':' · dəqiqləşdirilir'}</span></div><small class="az-org-address">${escapeHtml(o.address_text || 'Rəsmi ünvan bazaya daxil edilməyib')}</small>${contactLinks(o)}${sourceLink(o)}<div class="az-source-chips">${orgSources(o).map(([name,n])=>`<span class="az-source-chip${n?' has-result':''}">${escapeHtml(name)} · ${n}</span>`).join('')}</div><small class="az-org-last">Son aşkarlanma: ${escapeHtml(fmtDate(latest.get(o.id)))}</small></div></details>`;
     }).join('');
-    const pointCards=points.map(p=>{const parent=activeOrgById.get(String(p.organization_id));return `<article class="az-org-row az-service-point"><div class="az-org-title"><strong>${escapeHtml(p.name||'Xidmət nöqtəsi')}</strong><small>Xidmət nöqtəsi</small></div>${parent?`<div class="az-point-parent">Tabeli qurum: <b>${escapeHtml(parent.short_name||parent.name||'')}</b></div>`:''}<small class="az-org-address">${escapeHtml(p.address_text||'Rəsmi ünvan bazaya daxil edilməyib')}</small>${contactLinks(p)}${sourceLink(p)}</article>`;}).join('');
+    const pointCards=points.map(p=>{const parent=activeOrgById.get(String(p.organization_id));return `<details class="az-org-row az-service-point az-org-collapsible hierarchy-level-4"><summary class="az-org-summary"><span class="az-hierarchy-mark" aria-hidden="true"></span><span class="az-org-summary-main"><strong>${escapeHtml(p.name||'Xidmət nöqtəsi')}</strong><small>Xidmət nöqtəsi${parent?` · ${escapeHtml(parent.short_name||parent.name||'')}`:''}</small></span><span class="az-collapse-chevron" aria-hidden="true">⌄</span></summary><div class="az-org-collapsible-body">${parent?`<div class="az-point-parent">Tabeli qurum: <b>${escapeHtml(parent.short_name||parent.name||'')}</b></div>`:''}<small class="az-org-address">${escapeHtml(p.address_text||'Rəsmi ünvan bazaya daxil edilməyib')}</small>${contactLinks(p)}${sourceLink(p)}</div></details>`;}).join('');
     detail.innerHTML=`<div class="az-map-detail-head"><div><span class="eyebrow">Seçilən ərazi</span><h3>${escapeHtml(district?.name||mapName||'Ərazi')}</h3><p>${rows.length} təşkilat${points.length?` · ${points.length} xidmət nöqtəsi`:''} · ${total} məlumat${hit?` · <b>son skanda +${hit}</b>`:''}</p></div></div>${rows.length?`<div class="az-detail-section-title">Təşkilatlar <b>${rows.length}</b></div><div class="az-org-list">${orgCards}</div>`:(points.length?'<div class="empty compact">Bu ərazi ayrıca əsas təşkilat deyil, tabeli xidmət nöqtəsi vasitəsilə əhatə olunur.</div>':'<div class="empty compact">Bu əraziyə aktiv xidmət əhatəsi təyin edilməyib.</div>')}${points.length?`<div class="az-detail-section-title service">Xidmət nöqtələri <b>${points.length}</b></div><div class="az-org-list">${pointCards}</div>`:''}`;
   }
   function showTooltip(path,event){

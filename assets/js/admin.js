@@ -226,9 +226,18 @@ function organizationTypeLabel(value='') {
   return ({district:'Rayon idarəsi',regional_unit:'Regional vahid',special_unit:'Xüsusi idarə',central_service:'Mərkəzi xidmət'})[value] || value || 'Rayon idarəsi';
 }
 
+function organizationHierarchyMeta(o={}) {
+  const short=String(o.short_name||'').trim();
+  if(short==='ADSEA') return {order:0,level:0,group:'Azərbaycan Dövlət Su Ehtiyatları Agentliyi',levelLabel:'Baş qurum'};
+  if(o.organization_type==='central_service') return {order:1,level:1,group:'Mərkəzi tabeli qurumlar',levelLabel:'Mərkəzi qurum'};
+  if(o.organization_type==='regional_unit') return {order:2,level:2,group:'Regional bölmələr',levelLabel:'Regional səviyyə'};
+  if(o.organization_type==='district') return {order:3,level:3,group:'Rayon idarələri',levelLabel:'Rayon səviyyəsi'};
+  return {order:4,level:3,group:'Xüsusi və tabeli idarələr',levelLabel:'Tabeli / xüsusi'};
+}
+
 function organizationSortKey(o={}) {
-  const order = { central_service:0, regional_unit:1, district:2, special_unit:3 };
-  return [order[o.organization_type] ?? 9, String(o.short_name || o.name || '')];
+  const meta=organizationHierarchyMeta(o);
+  return [meta.order, String(o.short_name || o.name || '')];
 }
 
 function sortedOrganizations(rows=orgs) {
@@ -272,23 +281,41 @@ function renderOrgs() {
   const archiveCount = orgs.filter(o=>o.service_status==='archived').length;
   const archiveToggle = document.querySelector('#toggle-archived-organizations');
   if (archiveToggle) archiveToggle.textContent = showArchivedOrganizations ? `Arxivləri gizlət (${archiveCount})` : `Arxivləri göstər (${archiveCount})`;
-  desktop.innerHTML = rows.map(o => `
-    <tr>
-      <td><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></td>
-      <td>${escapeHtml(organizationTypeLabel(o.organization_type))}</td>
-      <td><span class="muted table-sub org-area-summary" title="${escapeHtml(serviceAreaTitleForOrg(o))}">Xidmət: <strong>${escapeHtml(serviceAreaSummaryForOrg(o))}</strong><br>Fiziki: <strong>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</strong></span></td>
-      <td><span class="muted table-sub">${escapeHtml(o.address_text || 'Ünvan qeyd edilməyib')}</span></td>
-      <td><span class="muted table-sub">${escapeHtml(o.phone || 'Telefon yoxdur')}<br>${escapeHtml(o.email || 'E-mail yoxdur')}</span></td>
-      <td>${statusBadge(o.service_status)}</td>
-      <td><div class="inline-actions"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger btn-sm" data-org-delete="${o.id}">Sil</button></div></td>
-    </tr>`).join('') || '<tr><td colspan="7" class="empty">Təşkilat yoxdur.</td></tr>';
 
-  mobile.innerHTML = rows.map(o => `
-    <article class="record-card">
-      <div class="record-head"><div><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
-      <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Xidmət əraziləri</span><b title="${escapeHtml(serviceAreaTitleForOrg(o))}">${escapeHtml(serviceAreaSummaryForOrg(o))}</b></div><div><span>Fiziki ərazi</span><b>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</b></div><div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Telefon</span><b>${escapeHtml(o.phone || '—')}</b></div><div><span>E-mail</span><b>${escapeHtml(o.email || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
-      <div class="record-actions org-record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
-    </article>`).join('') || '<div class="empty">Təşkilat yoxdur.</div>';
+  let lastGroup='';
+  const desktopRows=[];
+  for(const o of rows){
+    const meta=organizationHierarchyMeta(o);
+    if(meta.group!==lastGroup){
+      desktopRows.push(`<tr class="org-group-row"><td colspan="6"><span>${escapeHtml(meta.group)}</span></td></tr>`);
+      lastGroup=meta.group;
+    }
+    const physical=(districts.find(d=>d.id===o.location_district_id)?.name) || '—';
+    desktopRows.push(`
+      <tr class="org-level-${meta.level}" data-org-level="${meta.level}">
+        <td><div class="org-name-cell"><span class="org-tree-mark" aria-hidden="true"></span><div><strong>${escapeHtml(o.short_name)}</strong><br><span class="muted table-sub">${escapeHtml(o.name)}</span></div></div></td>
+        <td><span class="org-level-badge level-${meta.level}">${escapeHtml(meta.levelLabel)}</span><small class="org-type-sub">${escapeHtml(organizationTypeLabel(o.organization_type))}</small></td>
+        <td><span class="muted table-sub org-area-summary" title="${escapeHtml(serviceAreaTitleForOrg(o))}">Xidmət: <strong>${escapeHtml(serviceAreaSummaryForOrg(o))}</strong><br>Fiziki: <strong>${escapeHtml(physical)}</strong></span></td>
+        <td><div class="org-contact-cell"><span>${escapeHtml(o.address_text || 'Ünvan qeyd edilməyib')}</span><small>${escapeHtml(o.phone || 'Telefon yoxdur')}</small><small>${escapeHtml(o.email || 'E-mail yoxdur')}</small></div></td>
+        <td>${statusBadge(o.service_status)}</td>
+        <td><div class="org-action-stack"><button class="btn ghost btn-sm" data-org-edit="${o.id}">Redaktə</button><button class="btn secondary btn-sm" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktiv et' : 'Dayandır'}</button><button class="icon-btn org-delete-btn" title="Təşkilatı sil" aria-label="Təşkilatı sil" data-org-delete="${o.id}">×</button></div></td>
+      </tr>`);
+  }
+  desktop.innerHTML = desktopRows.join('') || '<tr><td colspan="6" class="empty">Təşkilat yoxdur.</td></tr>';
+
+  let mobileGroup='';
+  const mobileRows=[];
+  for(const o of rows){
+    const meta=organizationHierarchyMeta(o);
+    if(meta.group!==mobileGroup){mobileRows.push(`<div class="org-mobile-group">${escapeHtml(meta.group)}</div>`);mobileGroup=meta.group;}
+    mobileRows.push(`
+      <article class="record-card org-mobile-level-${meta.level}">
+        <div class="record-head"><div><span class="org-level-badge level-${meta.level}">${escapeHtml(meta.levelLabel)}</span><strong>${escapeHtml(o.short_name)}</strong><small>${escapeHtml(o.name)}</small></div>${statusBadge(o.service_status)}</div>
+        <div class="record-grid"><div><span>Növ</span><b>${escapeHtml(organizationTypeLabel(o.organization_type))}</b></div><div><span>Xidmət əraziləri</span><b title="${escapeHtml(serviceAreaTitleForOrg(o))}">${escapeHtml(serviceAreaSummaryForOrg(o))}</b></div><div><span>Fiziki ərazi</span><b>${escapeHtml((districts.find(d=>d.id===o.location_district_id)?.name) || '—')}</b></div><div class="record-grid-wide"><span>Ünvan</span><b>${escapeHtml(o.address_text || 'Qeyd edilməyib')}</b></div><div><span>Telefon</span><b>${escapeHtml(o.phone || '—')}</b></div><div><span>E-mail</span><b>${escapeHtml(o.email || '—')}</b></div><div><span>Ad variantı</span><b>${aliases.filter(a=>a.organization_id===o.id&&a.is_active!==false).length}</b></div></div>
+        <div class="record-actions org-record-actions"><button class="btn ghost" data-org-edit="${o.id}">Redaktə et</button><button class="btn secondary" data-org-toggle="${o.id}">${o.service_status === 'suspended' || o.service_status === 'archived' ? 'Aktivləşdir' : 'Dayandır'}</button><button class="btn danger" data-org-delete="${o.id}">Sil</button></div>
+      </article>`);
+  }
+  mobile.innerHTML = mobileRows.join('') || '<div class="empty">Təşkilat yoxdur.</div>';
 }
 
 function userName(u) {
