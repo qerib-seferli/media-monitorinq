@@ -2,7 +2,7 @@ import { requireAuth } from './guard.js';
 import { renderShell, markNotificationsSeen } from './shell.js';
 import { supabase, escapeHtml, fmtDate, toast, getCachedProfile, showPageLoader, hidePageLoader } from './core.js';
 import { startLiveMonitor } from './live-monitor.js';
-import { loadGlobalExcludes, isMentionExcluded } from './scope.js';
+import { loadGlobalExcludes, isMentionExcluded, isCentralScope } from './scope.js';
 
 const cachedProfile=getCachedProfile(); if(cachedProfile) renderShell(cachedProfile,'notifications'); showPageLoader();
 const ctx = await requireAuth();
@@ -91,4 +91,4 @@ document.querySelectorAll('[data-notification-filter]').forEach(btn => btn.addEv
 const observer=new IntersectionObserver(entries=>{if(entries.some(x=>x.isIntersecting))loadNext();},{rootMargin:'500px 0px'});
 observer.observe(sentinel);
 await loadNext({reset:true});
-startLiveMonitor({organizationId:ctx.profile.organization_id,onNew:()=>{if(!document.hidden)loadNext({reset:true});}});
+if(!isCentralScope(ctx.profile) && ctx.profile?.organization_id) startLiveMonitor({organizationId:ctx.profile.organization_id,onNew:()=>{if(!document.hidden)loadNext({reset:true});}});

@@ -2717,3 +2717,43 @@ body.media-viewer-open{
     max-width:100%!important;
   }
 }
+
+
+/* =========================================================
+   v75 — media viewer sabit PWA başlığı + təhlükəsiz layer
+   ========================================================= */
+.viewer-topbar-clone{display:none}
+
+@media(max-width:720px){
+  body.media-viewer-open .topbar:not(.viewer-topbar-clone){
+    visibility:hidden!important;
+  }
+
+  body>.viewer-topbar-clone{
+    display:grid!important;
+    position:fixed!important;
+    top:max(6px,env(safe-area-inset-top))!important;
+    left:8px!important;
+    right:8px!important;
+    width:auto!important;
+    max-width:none!important;
+    margin:0!important;
+    z-index:7000!important;
+    background:#08192a!important;
+    -webkit-backdrop-filter:none!important;
+    backdrop-filter:none!important;
+    box-shadow:var(--shadow)!important;
+    pointer-events:none!important;
+  }
+
+  body.media-viewer-open .media-viewer,
+  html.media-viewer-open body .media-viewer{
+    z-index:5000!important;
+  }
+
+  body.media-viewer-open .bottom-nav,
+  html.media-viewer-open body .bottom-nav{
+    z-index:7100!important;
+    background:#08192a!important;
+  }
+}

@@ -33,7 +33,7 @@ function rememberFocusFromUrl(value){
 }
 
 
-async function invokeQuick({full=false,refilter=false}={}){
+async function invokeQuick({full=false,refilter=false,organizationId=null}={}){
   if(running || stopped || document.hidden) return null;
   const now=Date.now();
   const lockKey='mm.liveMonitor.lock';
@@ -41,8 +41,14 @@ async function invokeQuick({full=false,refilter=false}={}){
   storageSet(lockKey,now);
   running=true;
   try{
+    if(!organizationId) return null;
+    const {data:{session}}=await supabase.auth.getSession();
+    if(!session?.access_token) return null;
+
     const {data,error}=await supabase.functions.invoke('monitor-worker',{
+      headers:{Authorization:`Bearer ${session.access_token}`},
       body:{
+        organization_id:organizationId,
         quick_youtube_comments:true,
         full_comment_sweep:full,
         refilter_existing:refilter,
@@ -54,6 +60,13 @@ async function invokeQuick({full=false,refilter=false}={}){
     if(error) throw error;
     return data||null;
   }catch(error){
+    const status=Number(error?.context?.status||error?.status||0);
+    if(status===401 || status===403){
+      stopped=true;
+      if(timer) clearTimeout(timer);
+      console.warn('Canlı monitorinq brauzer çağırışı dayandırıldı: sessiya və ya səlahiyyət uyğun deyil.');
+      return null;
+    }
     console.warn('Canlı monitorinq sorğusu tamamlanmadı',error);
     return null;
   }finally{
@@ -63,6 +76,7 @@ async function invokeQuick({full=false,refilter=false}={}){
 
 export function startLiveMonitor({organizationId=null,onNew=null,fullFirst=false}={}){
   if(window.__mmLiveMonitorStarted) return;
+  if(!organizationId) return;
   window.__mmLiveMonitorStarted=true;
   startedAt=Date.now();
 
@@ -85,7 +99,7 @@ export function startLiveMonitor({organizationId=null,onNew=null,fullFirst=false
     const fullKey=`mm.liveMonitor.full.v2.${organizationId||'global'}`;
     const canFull=first && (fullFirst || now-storageGet(fullKey)>FULL_SWEEP_COOLDOWN_MS);
     if(canFull) storageSet(fullKey,now);
-    const result=await invokeQuick({full:canFull,refilter:canFull});
+    const result=await invokeQuick({full:canFull,refilter:canFull,organizationId});
     if(Number(result?.new_mentions||0)>0 || Number(result?.details?.find?.(x=>x?.filtered_out)?.filtered_out||0)>0) emit(result);
     const burst=Date.now()-startedAt<BURST_MS;
     timer=setTimeout(()=>tick(false),burst?QUICK_INTERVAL_MS:IDLE_INTERVAL_MS);

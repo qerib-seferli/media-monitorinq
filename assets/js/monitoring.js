@@ -234,6 +234,25 @@ async function openDetail(id){
 
 let scale=1,currentUrl='',tx=0,ty=0,startX=0,startY=0,baseX=0,baseY=0,isDragging=false,pinchStart=0,pinchScale=1,pinchMidX=0,pinchMidY=0,pinchBaseX=0,pinchBaseY=0;
 const viewer=document.querySelector('#viewer'),img=document.querySelector('#viewer-img'),stage=document.querySelector('#viewer-stage');
+
+function mountViewerTopbar(){
+  document.querySelector('#viewer-topbar-clone')?.remove();
+  const source=document.querySelector('#topbar');
+  if(!source) return;
+  const clone=source.cloneNode(true);
+  clone.id='viewer-topbar-clone';
+  clone.classList.add('viewer-topbar-clone');
+  clone.setAttribute('aria-hidden','true');
+  clone.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));
+  clone.querySelectorAll('a,button,input,select,textarea').forEach(el=>{
+    el.setAttribute('tabindex','-1');
+    el.style.pointerEvents='none';
+  });
+  document.body.appendChild(clone);
+}
+function unmountViewerTopbar(){
+  document.querySelector('#viewer-topbar-clone')?.remove();
+}
 function clampPan(){
   const iw=Math.max(1,img.clientWidth||0), ih=Math.max(1,img.clientHeight||0);
   const sw=Math.max(1,stage.clientWidth||0), sh=Math.max(1,stage.clientHeight||0);
@@ -256,6 +275,8 @@ function openViewer(url){
   viewer.classList.remove('hidden');
   viewer.setAttribute('aria-hidden','false');
   document.body.classList.add('media-viewer-open');
+  document.documentElement.classList.add('media-viewer-open');
+  mountViewerTopbar();
   document.body.style.overflow='hidden';
   requestAnimationFrame(applyTransform);
 }
@@ -263,6 +284,8 @@ function closeViewer(){
   viewer.classList.add('hidden');
   viewer.setAttribute('aria-hidden','true');
   document.body.classList.remove('media-viewer-open');
+  document.documentElement.classList.remove('media-viewer-open');
+  unmountViewerTopbar();
   // Ətraflı modal hələ açıqdırsa body scrollunu bağlı saxla.
   document.body.style.overflow=document.querySelector('#detail-bg')?'hidden':'';
   img.removeAttribute('src');
