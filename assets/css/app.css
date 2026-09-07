@@ -2669,13 +2669,19 @@ body.media-viewer-open{
 @media(max-width:1050px){
   .topbar,
   .bottom-nav{
-    background:rgba(8,25,42,.72)!important;
-    -webkit-backdrop-filter:blur(16px) saturate(135%)!important;
-    backdrop-filter:blur(16px) saturate(135%)!important;
+    background:#08192a!important;
+    -webkit-backdrop-filter:none!important;
+    backdrop-filter:none!important;
     border-color:rgba(255,255,255,.10)!important;
   }
-  .topbar{z-index:6200!important}
-  .bottom-nav{z-index:6300!important}
+
+  .topbar{
+    z-index:6200!important;
+  }
+
+  .bottom-nav{
+    z-index:6300!important;
+  }
 }
 
 @media(max-width:720px){
