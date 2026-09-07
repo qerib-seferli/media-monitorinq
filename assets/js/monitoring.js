@@ -222,10 +222,19 @@ async function openDetail(id){
   const screenshotState=hasScreenshot?'':`<div class="card detail-state"><p class="muted">Arxiv ekran görüntüsü hələ hazırlanır. Yeni qəbul olunan Web materialları tam mətn və media ilə birlikdə tamamlanır; köhnə arxiv növbə ilə yenilənir.</p></div>`;
   const originalText=String(m.original_text||raw.text_original||raw.comment_text||raw.description||'').trim();
   document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2>${escapeHtml(m.title||'Monitorinq qeydi')}</h2></div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(m.source_platform||'—')}</p></div><div><strong>Paylaşılma tarixi</strong><p>${publishedDateText(m)}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(m.author_name||raw.author_name||raw.channel_title||raw.author||raw.creator||raw.publisher||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${m.source_url?`<a class="btn" target="_blank" rel="noopener" href="${m.source_url}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><details class="detail-original" open><summary>Orijinal mətn ${originalText.length>1800?'— aç / bağla':''}</summary><div class="muted detail-text">${escapeHtml(originalText||((String(m.source_platform||'').toLowerCase()==='web'||String(m.source_platform||'').toLowerCase()==='google news')?'Tam mətn mənbədən avtomatik tamamlanma növbəsindədir.':'Mətn mənbə tərəfindən təqdim edilməyib.'))}</div></details>${raw.comment_id?`<div class="detail-grid comment-detail-grid"><div><strong>Şərh müəllifi</strong><p>${escapeHtml(m.author_name||raw.author_name||'—')}</p></div><div><strong>Şərhin tarixi</strong><p>${publishedDateText(m)}</p></div><div><strong>Video</strong><p>${escapeHtml(raw.video_title||'—')}</p></div><div><strong>Şərhin bəyənmə sayı</strong><p>${escapeHtml(raw.like_count ?? '0')}</p></div><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Növ</strong><p>${raw.parent_id?'Cavab':'Əsas şərh'}</p></div></div>`:''}${screenshotState}${media?`<h3>Media sübutları</h3><p class="muted detail-media-help">Əvvəl mənbənin qapaq/paylaşım şəkli, sonra varsa arxiv ekran görüntüsü göstərilir.</p><div class="detail-media-gallery">${media}</div>`:''}</div></div>`;
+  document.body.classList.add('detail-modal-open');
+  document.documentElement.classList.add('detail-modal-open');
+  mountViewerTopbar();
+
   document.querySelector('#detail-close').onclick=()=>{
     window.speechSynthesis?.cancel?.();
     document.querySelector('#modal-root').innerHTML='';
-    if(viewer.classList.contains('hidden')) document.body.style.overflow='';
+    document.body.classList.remove('detail-modal-open');
+    document.documentElement.classList.remove('detail-modal-open');
+    if(viewer.classList.contains('hidden')){
+      unmountViewerTopbar();
+      document.body.style.overflow='';
+    }
   };
   document.querySelector('#detail-bg').onclick=e=>{if(e.target.id==='detail-bg')document.querySelector('#detail-close').click();};
   document.querySelector('#detail-speak').onclick=e=>speak(m,e.currentTarget);
@@ -236,7 +245,9 @@ let scale=1,currentUrl='',tx=0,ty=0,startX=0,startY=0,baseX=0,baseY=0,isDragging
 const viewer=document.querySelector('#viewer'),img=document.querySelector('#viewer-img'),stage=document.querySelector('#viewer-stage');
 
 function mountViewerTopbar(){
-  document.querySelector('#viewer-topbar-clone')?.remove();
+  // Ətraflı pəncərə açıq qaldığı müddətdə eyni sabit başlıq saxlanılır.
+  // Şəkillər arasında keçiddə klonu silib-yaratmamaq başlığın itməsinin qarşısını alır.
+  if(document.querySelector('#viewer-topbar-clone')) return;
   const source=document.querySelector('#topbar');
   if(!source) return;
   const clone=source.cloneNode(true);
@@ -285,8 +296,8 @@ function closeViewer(){
   viewer.setAttribute('aria-hidden','true');
   document.body.classList.remove('media-viewer-open');
   document.documentElement.classList.remove('media-viewer-open');
-  unmountViewerTopbar();
-  // Ətraflı modal hələ açıqdırsa body scrollunu bağlı saxla.
+  // Ətraflı modal açıqdırsa sabit başlıq klonu qalır; yalnız bütün detal bağlananda silinir.
+  if(!document.querySelector('#detail-bg')) unmountViewerTopbar();
   document.body.style.overflow=document.querySelector('#detail-bg')?'hidden':'';
   img.removeAttribute('src');
   resetViewer();
