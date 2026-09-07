@@ -2661,3 +2661,53 @@ body.media-viewer-open{
     grid-template-columns:1fr 1fr!important;
   }
 }
+
+/* =========================================================
+   v73 — PWA sabit başlıq/naviqasiya blur + media viewer layer + lokal ton filtri
+   Yalnız mobil/PWA görünüşünə hədəflənib.
+   ========================================================= */
+@media(max-width:1050px){
+  .topbar,
+  .bottom-nav{
+    background:rgba(8,25,42,.72)!important;
+    -webkit-backdrop-filter:blur(16px) saturate(135%)!important;
+    backdrop-filter:blur(16px) saturate(135%)!important;
+    border-color:rgba(255,255,255,.10)!important;
+  }
+  .topbar{z-index:6200!important}
+  .bottom-nav{z-index:6300!important}
+}
+
+@media(max-width:720px){
+  /* Şəkil/video viewer açıq olanda yuxarı sabit başlıq itmir. */
+  body.media-viewer-open .topbar{
+    position:fixed!important;
+    top:max(6px,env(safe-area-inset-top))!important;
+    left:8px!important;
+    right:8px!important;
+    width:auto!important;
+    max-width:none!important;
+    z-index:6200!important;
+  }
+
+  /* Viewer detail modalın üstündə, amma sabit başlıq və alt menyunun altında qalır. */
+  body.media-viewer-open .media-viewer{
+    z-index:5000!important;
+  }
+
+  /* Yerli təşkilat hesabında təşkilat filtri gizlidirsə “Bütün tonlar” boş sahə saxlamır. */
+  .monitor-head>.monitor-filters:has(#organization-filter.scope-filter-local.hidden){
+    grid-template-columns:1fr 1fr!important;
+    grid-template-areas:
+      "period platform"
+      "from to"
+      "sentiment sentiment"!important;
+  }
+  .monitor-head>.monitor-filters:has(#organization-filter.scope-filter-local.hidden) #sentiment,
+  .monitor-head>.monitor-filters:has(#organization-filter.scope-filter-local.hidden) .mm-select-trigger[data-select-id="sentiment"]{
+    grid-area:sentiment!important;
+    grid-column:1/-1!important;
+    width:100%!important;
+    max-width:100%!important;
+  }
+}
