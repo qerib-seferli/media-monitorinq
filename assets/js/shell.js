@@ -89,6 +89,15 @@ export function renderShell(profile, active='dashboard') {
     if(!isAdmin) setTimeout(()=>refreshNotificationBadge(profile),0);
   }
 
+  // Növbəti PWA səhifəsi açılan kimi eyni shell dərhal göstərilsin;
+  // profil sorğusunu gözləyərkən topbar/bottom-nav boş qalmır.
+  try {
+    sessionStorage.setItem('mm.shell.role', isAdmin ? 'admin' : 'user');
+    if (sidebar) sessionStorage.setItem('mm.shell.sidebar', sidebar.innerHTML);
+    if (topbar) sessionStorage.setItem('mm.shell.topbar', topbar.innerHTML);
+    if (bottom) sessionStorage.setItem('mm.shell.bottom', bottom.innerHTML);
+  } catch {}
+
   document.querySelectorAll('[data-action="signout"]').forEach(el => el.addEventListener('click', signOut));
   const toggle = document.querySelector('#profile-menu-toggle');
   const menu = document.querySelector('#profile-menu');

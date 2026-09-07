@@ -15,5 +15,18 @@
   <div class="card"><div class="section-head"><div><h2>Son paylaşımlar</h2><p>Orijinal paylaşım tarixinə görə ən yeni uyğun nəticələr</p></div><a class="text-link" href="./monitorinq.html">Hamısı</a></div><div class="mention-list" id="latest"></div></div>
   <div class="card" id="notifications"><div class="section-head"><div><h2>Bildirişlər</h2><p>Yüksək prioritet və sistem mesajları</p></div><a class="text-link" href="./bildirisler.html">Hamısı</a></div><div id="notif-list"></div></div>
 </section></main></div>
-<nav class="bottom-nav" id="bottom-nav"></nav><div id="toast-stack"></div><script type="module" src="./assets/js/dashboard.js"></script>
+<nav class="bottom-nav" id="bottom-nav"></nav><div id="toast-stack"></div><script>
+(function(){
+  try{
+    if(sessionStorage.getItem('mm.shell.role')!=='user')return;
+    var pairs=[['sidebar','mm.shell.sidebar'],['topbar','mm.shell.topbar'],['bottom-nav','mm.shell.bottom']];
+    pairs.forEach(function(x){var el=document.getElementById(x[0]),html=sessionStorage.getItem(x[1]);if(el&&html)el.innerHTML=html;});
+    var page=(location.pathname.split('/').pop()||'app.html').toLowerCase();
+    document.querySelectorAll('#bottom-nav a,#sidebar .nav a').forEach(function(a){
+      var href=(a.getAttribute('href')||'').split('?')[0].split('#')[0].replace(/^\.\//,'').toLowerCase();
+      a.classList.toggle('active',href===page);
+    });
+  }catch(e){}
+})();
+</script><script type="module" src="./assets/js/dashboard.js"></script>
 </body></html>

@@ -134,6 +134,13 @@ export async function getSessionProfile() {
 }
 
 export async function signOut() {
+  try {
+    sessionStorage.removeItem('mm.shell.role');
+    sessionStorage.removeItem('mm.shell.sidebar');
+    sessionStorage.removeItem('mm.shell.topbar');
+    sessionStorage.removeItem('mm.shell.bottom');
+    sessionStorage.removeItem('mm.cachedProfile');
+  } catch {}
   await supabase.auth.signOut();
   location.href = './index.html';
 }
