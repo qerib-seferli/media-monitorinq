@@ -360,31 +360,11 @@ Deno.serve(async (req) => {
       orgs = rotateOrganizationBatch(orgs, options.organization_shard_count, options.organization_shard_index, options.organization_batch, options.organization_rotation_bucket);
     }
 
-    // sources(*) relation-u yüzlərlə Web mənbəsi olduqda Edge Function yaddaşını şişirdirdi
-    // və YouTube mərhələsində WORKER_RESOURCE_LIMIT (HTTP 546) yaradırdı. Mənbələri
-    // rejimə uyğun ayrıca və səhifəli oxuyuruq: news_plan üçün bütün aktiv mənbələr,
-    // normal production monitorunda isə yalnız YouTube. Web/Xəbər GitHub gateway-dədir.
-    for (const org of orgs) {
-      const sourceMode = options.mode === 'news_plan' || options.edge_news_probe ? 'all' : 'youtube';
-      org.sources = await fetchOrganizationSources(admin, String(org.id), sourceMode, 3000);
-      const [aliases,servicePoints]=await Promise.all([
-        fetchOrganizationAliases(admin, String(org.id), 500),
-        fetchOrganizationServicePoints(admin, String(org.id), 500)
-      ]);
-      const pointAliases=await fetchServicePointAliases(admin,servicePoints.map((p:any)=>String(p.id)));
-      const aliasesByPoint=new Map<string,any[]>(); for(const a of pointAliases){const k=String(a.service_point_id);if(!aliasesByPoint.has(k))aliasesByPoint.set(k,[]);aliasesByPoint.get(k)!.push(a);}
-      org.service_points=servicePoints.map((p:any)=>({...p,aliases:aliasesByPoint.get(String(p.id))||[]}));
-      // Tabeli vahid adları discovery sorğularında prioritet alır. Beləliklə parent təşkilatın
-      // çoxlu köhnə aliası child adlarını YouTube/News limitindən kənarda qoymur.
-      const synthetic=servicePointIdentityValues(org).map(alias=>({alias,alias_type:'service_point',is_active:true}));
-      const seen=new Set<string>();
-      org.aliases=[...synthetic,...aliases].filter((row:any)=>{
-        const key=normalizeForMatch(String(row?.alias||''));
-        if(!key||seen.has(key)) return false;
-        seen.add(key); return true;
-      });
-    }
-
+    // Meta monitoru təşkilatların ağır sources/alias/service-point kontekstini yükləməzdən
+    // əvvəl işləyir. Meta Graph API materiallarının uyğunluq yoxlaması üçün təşkilatın əsas
+    // məlumatları, açar-söz bankı və rayon yaşayış məntəqələri kifayətdir. Bu erkən çıxış
+    // 6 təşkilatlıq tək Meta çağırışında Edge Function yaddaşının şişməsinin və HTTP 546
+    // WORKER_RESOURCE_LIMIT xətasının qarşısını alır; YouTube/Web/radar axını dəyişmir.
     if (options.mode === 'meta_monitor') {
       currentStage = 'meta-monitor';
       const token = Deno.env.get('META_ACCESS_TOKEN') || '';
@@ -416,6 +396,33 @@ Deno.serve(async (req) => {
         return json({ok:false,run_id:runId,mode:'meta_monitor',stage:currentStage,error:errorInfo(e).message,errors,details},200);
       }
     }
+
+    // sources(*) relation-u yüzlərlə Web mənbəsi olduqda Edge Function yaddaşını şişirdirdi
+    // və YouTube mərhələsində WORKER_RESOURCE_LIMIT (HTTP 546) yaradırdı. Mənbələri
+    // rejimə uyğun ayrıca və səhifəli oxuyuruq: news_plan üçün bütün aktiv mənbələr,
+    // normal production monitorunda isə yalnız YouTube. Web/Xəbər GitHub gateway-dədir.
+    for (const org of orgs) {
+      const sourceMode = options.mode === 'news_plan' || options.edge_news_probe ? 'all' : 'youtube';
+      org.sources = await fetchOrganizationSources(admin, String(org.id), sourceMode, 3000);
+      const [aliases,servicePoints]=await Promise.all([
+        fetchOrganizationAliases(admin, String(org.id), 500),
+        fetchOrganizationServicePoints(admin, String(org.id), 500)
+      ]);
+      const pointAliases=await fetchServicePointAliases(admin,servicePoints.map((p:any)=>String(p.id)));
+      const aliasesByPoint=new Map<string,any[]>(); for(const a of pointAliases){const k=String(a.service_point_id);if(!aliasesByPoint.has(k))aliasesByPoint.set(k,[]);aliasesByPoint.get(k)!.push(a);}
+      org.service_points=servicePoints.map((p:any)=>({...p,aliases:aliasesByPoint.get(String(p.id))||[]}));
+      // Tabeli vahid adları discovery sorğularında prioritet alır. Beləliklə parent təşkilatın
+      // çoxlu köhnə aliası child adlarını YouTube/News limitindən kənarda qoymur.
+      const synthetic=servicePointIdentityValues(org).map(alias=>({alias,alias_type:'service_point',is_active:true}));
+      const seen=new Set<string>();
+      org.aliases=[...synthetic,...aliases].filter((row:any)=>{
+        const key=normalizeForMatch(String(row?.alias||''));
+        if(!key||seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+    }
+
+
 
     if (options.mode === 'radar_event') {
       const org=orgs.find((x:any)=>String(x.id)===String(options.organization_id||''));
