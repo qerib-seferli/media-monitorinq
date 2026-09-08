@@ -113,13 +113,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 4
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        shard: [0, 1, 2]
     concurrency:
-      group: media-monitor-meta-live-${{ matrix.shard }}
+      group: media-monitor-meta-live
       cancel-in-progress: false
     steps:
       - name: Check monitor secret
@@ -134,10 +129,12 @@ jobs:
       - name: Facebook and Instagram monitor
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
-          SHARD: ${{ matrix.shard }}
         run: |
+          # Meta Graph API materialları əvvəl 3 shard tərəfindən eyni anda 3 dəfə
+          # endirilirdi. İndi hər 15 dəqiqəlik run-da Meta yalnız 1 dəfə çağırılır,
+          # əvvəlki ümumi təşkilat əhatəsi isə 2+2+2 əvəzinə tək çağırışda 6 təşkilatla qorunur.
           ROTATION_BUCKET=$(( $(date +%s) / 900 ))
-          BODY="{\"mode\":\"meta_monitor\",\"debug\":false,\"include_archived\":false,\"organization_shard_count\":3,\"organization_shard_index\":${SHARD},\"organization_batch\":2,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"meta_page_limit\":1}"
+          BODY="{\"mode\":\"meta_monitor\",\"debug\":false,\"include_archived\":false,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":6,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"meta_page_limit\":1}"
           curl --fail-with-body --silent --show-error \
             --connect-timeout 15 \
             --max-time 95 \
