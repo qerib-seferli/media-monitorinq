@@ -385,6 +385,38 @@ Deno.serve(async (req) => {
       });
     }
 
+    if (options.mode === 'meta_monitor') {
+      currentStage = 'meta-monitor';
+      const token = Deno.env.get('META_ACCESS_TOKEN') || '';
+      const appSecret = Deno.env.get('META_APP_SECRET') || '';
+      if (!token || !appSecret) {
+        return json({ok:false,run_id:runId,mode:'meta_monitor',setup_required:true,missing_secrets:[...(!token?['META_ACCESS_TOKEN']:[]),...(!appSecret?['META_APP_SECRET']:[])],error:'Meta monitorinq üçün server secret-ləri tam deyil.'},200);
+      }
+      try {
+        const meta = await metaManagedItems(token, appSecret, options.meta_page_limit);
+        let metaInserted = 0;
+        for (const org of orgs) {
+          if (Date.now() >= stopAt) break;
+          const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
+          const keywords = installKeywordContext(org, activeKeywordRows);
+          const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
+          let villageNames:string[] = [];
+          if (org.district_id) villageNames = await fetchDistrictPlaceNames(admin,String(org.district_id)).catch(()=>[]);
+          let orgInserted = 0;
+          for (const entry of meta.items) {
+            if (Date.now() >= stopAt) break;
+            orgInserted += await safeSave(admin,org,{platform:entry.platform,url:entry.source},entry.item,lowerKeywords,villageNames,errors,org.short_name,entry.platform);
+          }
+          metaInserted += orgInserted;
+          if (options.debug || orgInserted) details.push({organization:org.short_name,source:'Meta Graph API',items_checked:meta.items.length,inserted:orgInserted});
+        }
+        inserted += metaInserted;
+        return json({ok:true,run_id:runId,mode:'meta_monitor',checked:meta.items.length,new_mentions:metaInserted,pages:meta.pages,instagram_accounts:meta.instagram_accounts,facebook_items:meta.facebook_items,instagram_items:meta.instagram_items,failures:meta.failures,errors,details},200);
+      } catch (e) {
+        return json({ok:false,run_id:runId,mode:'meta_monitor',stage:currentStage,error:errorInfo(e).message,errors,details},200);
+      }
+    }
+
     if (options.mode === 'radar_event') {
       const org=orgs.find((x:any)=>String(x.id)===String(options.organization_id||''));
       if(!org || !options.scan_id) return json({ok:false,run_id:runId,mode:'radar_event',error:'Təşkilat və scan_id tələb olunur'},200);
@@ -1834,6 +1866,76 @@ function gdeltDate(value:any):string|null {
   return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`;
 }
 
+
+async function metaAppSecretProof(token:string, appSecret:string):Promise<string> {
+  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(appSecret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  const sig=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(token));
+  return [...new Uint8Array(sig)].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+
+async function metaGraph(path:string, token:string, appSecret:string):Promise<any> {
+  const proof=await metaAppSecretProof(token,appSecret);
+  const join=path.includes('?')?'&':'?';
+  const url=`https://graph.facebook.com/v26.0/${path}${join}access_token=${encodeURIComponent(token)}&appsecret_proof=${proof}`;
+  const response=await fetch(url,{headers:{accept:'application/json'}});
+  const body=await response.json().catch(()=>({}));
+  if(!response.ok || body?.error) throw new Error(`Meta Graph API ${response.status}: ${body?.error?.message||'sorğu xətası'}`);
+  return body;
+}
+
+async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1):Promise<{items:any[];pages:number;instagram_accounts:number;facebook_items:number;instagram_items:number;failures:any[]}> {
+  const out:any[]=[]; const failures:any[]=[];
+  const accounts=await metaGraph(`me/accounts?fields=id,name,access_token&limit=100`,userToken,appSecret);
+  const pages=Array.isArray(accounts?.data)?accounts.data:[];
+  let instagramAccounts=0, facebookItems=0, instagramItems=0;
+  for(const page of pages){
+    const pageId=String(page?.id||''); const pageName=String(page?.name||'Facebook Page'); const pageToken=String(page?.access_token||'');
+    if(!pageId||!pageToken) continue;
+    try{
+      let path=`${pageId}/posts?fields=id,message,created_time,permalink_url,shares,reactions.limit(0).summary(true),comments.limit(50){id,message,created_time,from,like_count,comments.limit(50){id,message,created_time,from,like_count}}&limit=50`;
+      for(let pg=0;pg<pageLimit && path;pg++){
+        const data=await metaGraph(path,pageToken,appSecret);
+        for(const post of (Array.isArray(data?.data)?data.data:[])){
+          const postText=String(post?.message||''); const postUrl=String(post?.permalink_url||`https://www.facebook.com/${post?.id||pageId}`);
+          out.push({platform:'Facebook',source:`Facebook: ${pageName}`,item:{title:postText.slice(0,180)||`${pageName} Facebook paylaşımı`,text:postText,url:postUrl,published_at:post?.created_time||null,author:pageName,raw:{kind:'facebook_post',post_id:post?.id||null,page_id:pageId,page_name:pageName,reaction_count:Number(post?.reactions?.summary?.total_count||0),comment_count:Number(post?.comments?.summary?.total_count||post?.comments?.data?.length||0),share_count:Number(post?.shares?.count||0),provider:'Meta Graph API v26.0'}}}); facebookItems++;
+          for(const c of (Array.isArray(post?.comments?.data)?post.comments.data:[])){
+            const commentText=String(c?.message||'');
+            out.push({platform:'Facebook',source:`Facebook: ${pageName}`,item:{title:`Facebook şərhi — ${pageName}`,text:`${postText}\n${commentText}`,url:postUrl,published_at:c?.created_time||null,author:c?.from?.name||null,raw:{kind:'facebook_comment',comment_id:c?.id||null,parent_post_id:post?.id||null,comment_text:commentText,parent_text:postText,like_count:Number(c?.like_count||0),author_id:c?.from?.id||null,page_id:pageId,provider:'Meta Graph API v26.0'}}}); facebookItems++;
+            for(const r of (Array.isArray(c?.comments?.data)?c.comments.data:[])){
+              const replyText=String(r?.message||'');
+              out.push({platform:'Facebook',source:`Facebook: ${pageName}`,item:{title:`Facebook cavabı — ${pageName}`,text:`${postText}\n${commentText}\n${replyText}`,url:postUrl,published_at:r?.created_time||null,author:r?.from?.name||null,raw:{kind:'facebook_comment_reply',comment_id:r?.id||null,parent_comment_id:c?.id||null,parent_post_id:post?.id||null,comment_text:replyText,parent_comment_text:commentText,parent_text:postText,like_count:Number(r?.like_count||0),author_id:r?.from?.id||null,page_id:pageId,provider:'Meta Graph API v26.0'}}}); facebookItems++;
+            }
+          }
+        }
+        const next=String(data?.paging?.next||''); path=next?next.replace(/^https:\/\/graph\.facebook\.com\/v26\.0\//,'').replace(/[?&]access_token=[^&]*/,'').replace(/[?&]appsecret_proof=[^&]*/,''):'';
+      }
+    }catch(e){failures.push({platform:'Facebook',page:pageName,...errorInfo(e)});}
+
+    try{
+      const link=await metaGraph(`${pageId}?fields=instagram_business_account{id,username,name}`,pageToken,appSecret);
+      const ig=link?.instagram_business_account; if(!ig?.id) continue; instagramAccounts++;
+      let path=`${ig.id}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp,comments_count,like_count,thumbnail_url,comments.limit(50){id,text,timestamp,username,like_count,replies.limit(50){id,text,timestamp,username,like_count}}&limit=50`;
+      for(let pg=0;pg<pageLimit && path;pg++){
+        const data=await metaGraph(path,pageToken,appSecret);
+        for(const media of (Array.isArray(data?.data)?data.data:[])){
+          const caption=String(media?.caption||''); const mediaUrl=String(media?.permalink||`https://www.instagram.com/${ig.username||''}/`);
+          out.push({platform:'Instagram',source:`Instagram: @${ig.username||ig.id}`,item:{title:caption.slice(0,180)||`@${ig.username||''} Instagram paylaşımı`,text:caption,url:mediaUrl,published_at:media?.timestamp||null,image:media?.thumbnail_url||null,author:ig?.username?`@${ig.username}`:null,raw:{kind:'instagram_media',media_id:media?.id||null,instagram_user_id:ig.id,username:ig?.username||null,media_type:media?.media_type||null,media_product_type:media?.media_product_type||null,comments_count:Number(media?.comments_count||0),like_count:Number(media?.like_count||0),provider:'Meta Graph API v26.0'}}}); instagramItems++;
+          for(const c of (Array.isArray(media?.comments?.data)?media.comments.data:[])){
+            const commentText=String(c?.text||'');
+            out.push({platform:'Instagram',source:`Instagram: @${ig.username||ig.id}`,item:{title:`Instagram şərhi — @${ig.username||''}`,text:`${caption}\n${commentText}`,url:mediaUrl,published_at:c?.timestamp||null,author:c?.username?`@${c.username}`:null,raw:{kind:'instagram_comment',comment_id:c?.id||null,parent_media_id:media?.id||null,comment_text:commentText,parent_text:caption,username:c?.username||null,like_count:Number(c?.like_count||0),provider:'Meta Graph API v26.0'}}}); instagramItems++;
+            for(const r of (Array.isArray(c?.replies?.data)?c.replies.data:[])){
+              const replyText=String(r?.text||'');
+              out.push({platform:'Instagram',source:`Instagram: @${ig.username||ig.id}`,item:{title:`Instagram cavabı — @${ig.username||''}`,text:`${caption}\n${commentText}\n${replyText}`,url:mediaUrl,published_at:r?.timestamp||null,author:r?.username?`@${r.username}`:null,raw:{kind:'instagram_comment_reply',comment_id:r?.id||null,parent_comment_id:c?.id||null,parent_media_id:media?.id||null,comment_text:replyText,parent_comment_text:commentText,parent_text:caption,username:r?.username||null,like_count:Number(r?.like_count||0),provider:'Meta Graph API v26.0'}}}); instagramItems++;
+            }
+          }
+        }
+        const next=String(data?.paging?.next||''); path=next?next.replace(/^https:\/\/graph\.facebook\.com\/v26\.0\//,'').replace(/[?&]access_token=[^&]*/,'').replace(/[?&]appsecret_proof=[^&]*/,''):'';
+      }
+    }catch(e){failures.push({platform:'Instagram',page:pageName,...errorInfo(e)});}
+  }
+  return {items:out,pages:pages.length,instagram_accounts:instagramAccounts,facebook_items:facebookItems,instagram_items:instagramItems,failures};
+}
+
 function canonicalPlatform(value:string) {
   const v = String(value || '').trim().toLowerCase();
   if (v === 'youtube') return 'YouTube';
@@ -2980,7 +3082,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
       organization_id:org.id,
       service_point_id:matchedServicePoint?.id || null,
       mention_id:data.id,
-      title:isCommentItem ? (priority>=81?'Yüksək prioritetli yeni şərh':'Yeni YouTube şərhi') : 'Yüksək prioritetli yeni qeyd',
+      title:isCommentItem ? (priority>=81?'Yüksək prioritetli yeni şərh':`Yeni ${canonicalSourcePlatform} şərhi`) : 'Yüksək prioritetli yeni qeyd',
       body:item.title || 'Yeni material',
       kind:priority>=81?'critical':'comment'
     });
@@ -3031,6 +3133,7 @@ type RunOptions = {
   scan_started_at:string|null;
   github_run_id:number;
   radar_stage:string;
+  meta_page_limit:number;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -3075,7 +3178,8 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   scan_id:'',
   scan_started_at:null,
   github_run_id:0,
-  radar_stage:''
+  radar_stage:'',
+  meta_page_limit:1
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -3136,7 +3240,8 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       scan_id:String(body?.scan_id || '').replace(/[^A-Za-z0-9_-]/g,'').slice(0,80),
       scan_started_at:body?.scan_started_at ? String(body.scan_started_at).slice(0,64) : null,
       github_run_id:Math.max(0,Number(body?.github_run_id || 0)),
-      radar_stage:String(body?.radar_stage || '').replace(/[^A-Za-z0-9_-]/g,'').slice(0,40)
+      radar_stage:String(body?.radar_stage || '').replace(/[^A-Za-z0-9_-]/g,'').slice(0,40),
+      meta_page_limit:Math.max(1,Math.min(4,Number(body?.meta_page_limit || 1)))
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};
