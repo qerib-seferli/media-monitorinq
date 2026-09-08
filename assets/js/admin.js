@@ -793,7 +793,8 @@ async function renderRelevanceReview(){
       insertError=res.error;
     }
     if(insertError && insertError.code!=='23505'){btn.disabled=false;return toast(insertError.message,'error');}
-    const update=await supabase.from('mentions').update({relevance_score:0}).eq('id',btn.dataset.reviewBlock);
+    const blockedRaw={...(row?.raw_payload||{}),admin_review_status:'blocked',admin_review_at:new Date().toISOString(),admin_review_term:term,monitor_acceptance:{accepted:false,checked_at:new Date().toISOString(),reason:'admin-manual-block',matches:[]}};
+    const update=await supabase.from('mentions').update({relevance_score:0,raw_payload:blockedRaw}).eq('id',btn.dataset.reviewBlock);
     btn.disabled=false;
     if(update.error) return toast(update.error.message,'error');
     resetGlobalExcludeCache();

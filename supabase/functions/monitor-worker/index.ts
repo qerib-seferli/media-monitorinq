@@ -754,7 +754,12 @@ Deno.serve(async (req) => {
         ? await fetchDistrictPlaceNames(admin, String(org.district_id))
         : [];
       const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit||800,null,true);
-      return json({ok:true,run_id:runId,mode:'review_auto_sieve',organization:org.short_name,...result},200);
+      // Full radarın AI mərhələsi yalnız görünən (>0) qeydləri yoxlamasın.
+      // Əvvəlki versiyalarda relevance_score=0 qalmış Web materiallarını da
+      // cari sərt uyğunluq qaydaları ilə yenidən qiymətləndiririk. Beləliklə
+      // düzgün materiallar silinmədən bərpa olunur, əlaqəsizlər isə gizli qalır.
+      const webRecovery = await refilterExistingWebMentions(admin,org,lowerKeywords,villageNames,Math.min(320,Math.max(120,Number(options.refilter_limit||180))));
+      return json({ok:true,run_id:runId,mode:'review_auto_sieve',organization:org.short_name,...result,web_recovery:webRecovery},200);
     }
 
     if (options.mode === 'news_ingest') {
@@ -2322,8 +2327,15 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
     if(learned?.kind==='exclude') excludeAdded++;
     const raw={...(row?.raw_payload||{})};
     if(!match.accepted){
-      const patch:any={relevance_score:0};
-      if(learned?.kind==='exclude') patch.raw_payload={...raw,admin_review_status:'auto-blocked',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()},monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]}};
+      const patch:any={
+        relevance_score:0,
+        raw_payload:{
+          ...raw,
+          monitor_acceptance:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[]},
+          monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]},
+          ...(learned?.kind==='exclude'?{admin_review_status:'auto-blocked',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})
+        }
+      };
       const update:any=await admin.from('mentions').update(patch).eq('id',row.id);
       if(!update?.error)filteredOut++;
     }else if(learned?.kind==='phrase'){
@@ -2376,6 +2388,13 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
   const acceptedByTitle=new Map<string,{id:string,text:string}>();
   for(const row of rows){
     const raw=row?.raw_payload||{};
+    const manualStatus=String(raw?.admin_review_status||'');
+    // İstifadəçinin əl ilə blokladığı qeyd və canonical duplicate avtomatik
+    // bərpa edilmir. Qalan relevance_score=0 qeydlər isə yenidən yoxlanır.
+    if(manualStatus==='blocked' || raw?.canonical_duplicate===true){
+      preserved++;
+      continue;
+    }
     const alreadyAccepted=raw?.monitor_acceptance?.accepted===true;
     const item:Item={
       title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',
@@ -2400,19 +2419,31 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
         continue;
       }
       if(titleKey.length>=18)acceptedByTitle.set(titleKey,{id:String(row.id),text:String(row?.original_text||'')});
-      const patch:any={raw_payload:{...raw,monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},...(learned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})}};
+      const patch:any={raw_payload:{
+        ...raw,
+        monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
+        // Köhnə reject izi audit üçün raw_payload-da qala bilər, amma cari qərarın
+        // accepted olduğu ayrıca və aydın saxlanılır. Tarix statusuna toxunulmur.
+        ...(learned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})
+      }};
       if(currentScore<=0){patch.relevance_score=Math.min(100,Math.max(50,40+Math.min(4,(match.matches||[]).length)*10));restored++;}
       else { confirmed++; if(alreadyAccepted) preserved++; }
       const update:any=await admin.from('mentions').update(patch).eq('id',row.id);
       if(update?.error && samples.length<8)samples.push({title:row?.title||'',reason:'bərpa/təsdiq xətası'});
       continue;
     }
-    if(Number(row?.relevance_score||0)>0){
+    {
+      const currentScore=Number(row?.relevance_score||0);
       const update:any=await admin.from('mentions').update({
-        relevance_score:0,
-        raw_payload:{...raw,monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]},...(learned?.kind==='exclude'?{admin_review_status:'auto-blocked',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})}
+        ...(currentScore>0?{relevance_score:0}:{}),
+        raw_payload:{
+          ...raw,
+          monitor_acceptance:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[]},
+          monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]},
+          ...(learned?.kind==='exclude'?{admin_review_status:'auto-blocked',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})
+        }
       }).eq('id',row.id);
-      if(!update?.error){filteredOut++;if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});}
+      if(!update?.error){if(currentScore>0)filteredOut++;if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});}
     }
   }
   return {checked,filtered_out:filteredOut,restored,preserved,confirmed,duplicates_filtered:duplicatesFiltered,samples};
@@ -2828,22 +2859,22 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
 
   if (!existing?.id && isWebNews && canonicalUrl) {
     const canonicalResult:any = await admin.from('mentions')
-      .select('id,raw_payload,published_at,source_url')
-      .eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0)
+      .select('id,raw_payload,published_at,source_url,relevance_score')
+      .eq('organization_id',org.id).in('source_platform',['Web','Google News'])
       .eq('raw_payload->>canonical_url',canonicalUrl).order('detected_at',{ascending:true}).limit(1).maybeSingle();
     if (!canonicalResult?.error && canonicalResult?.data?.id) existing=canonicalResult.data;
   }
   if (!existing?.id && isWebNews && canonicalUrl) {
     const sourceResult:any = await admin.from('mentions')
-      .select('id,raw_payload,published_at,source_url')
-      .eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0)
+      .select('id,raw_payload,published_at,source_url,relevance_score')
+      .eq('organization_id',org.id).in('source_platform',['Web','Google News'])
       .eq('source_url',canonicalUrl).order('detected_at',{ascending:true}).limit(1).maybeSingle();
     if (!sourceResult?.error && sourceResult?.data?.id) existing=sourceResult.data;
   }
   if (!existing?.id && isWebNews && item.title) {
     const legacyResult:any = await admin.from('mentions')
-      .select('id,raw_payload,published_at,source_url')
-      .eq('organization_id',org.id).in('source_platform',['Web','Google News']).gt('relevance_score',0)
+      .select('id,raw_payload,published_at,source_url,relevance_score')
+      .eq('organization_id',org.id).in('source_platform',['Web','Google News'])
       .eq('title',item.title).order('detected_at',{ascending:true}).limit(1).maybeSingle();
     if (!legacyResult?.error && legacyResult?.data?.id) existing = legacyResult.data;
   }
@@ -2870,6 +2901,12 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
       }
     };
     if (item.author) refresh.author_name=item.author;
+    const existingRaw:any=(existing as any)?.raw_payload||{};
+    const existingReviewStatus=String(existingRaw?.admin_review_status||'');
+    const canRestoreExisting=existingReviewStatus!=='blocked' && existingRaw?.canonical_duplicate!==true;
+    if (isWebNews && canRestoreExisting && Number((existing as any)?.relevance_score||0)<=0) {
+      refresh.relevance_score=Math.min(100,Math.max(50,relevance));
+    }
     const refreshPublished=canonicalSourcePlatform==='Web'?reliableWebPublishedDate(item):item.published_at;
     if (refreshPublished) refresh.published_at=refreshPublished;
     if (item.text) refresh.original_text=item.text;
