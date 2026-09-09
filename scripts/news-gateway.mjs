@@ -194,6 +194,36 @@ function socialProfileMatchesOrg(profile={}, org={}){
   return false;
 }
 
+function socialProfileCandidateMatchesOrg(profile={}, item={}, org={}){
+  if(socialProfileMatchesOrg(profile,org)) return true;
+  const hay=asciiToken(`${item?.title||''} ${item?.text||''} ${item?.url||''}`);
+  if(!hay) return false;
+  const identities=[org?.short_name,org?.name]
+    .map(x=>asciiToken(String(x||'')))
+    .filter(x=>x.length>=5);
+  // Axtarış nəticəsinin öz başlıq/snippet-ində təşkilatın tam/qısa adı görünürsə,
+  // rəqəmli Facebook profile.php URL-si kimi handle-dan adı çıxmayan profillər də
+  // təhlükəsiz şəkildə həmin təşkilata bağlana bilər.
+  if(identities.some(x=>hay.includes(x))) return true;
+  const district=asciiToken(String(org?.district||''));
+  const topicSignal=/(?:smsii|su meliorasiya|meliorasiya sistem|suvarma sistem|su kanal|sukanal|adsea)/.test(hay);
+  return Boolean(district && district.length>=4 && hay.includes(district) && topicSignal);
+}
+
+function isSocialPostUrl(value='', platform=''){
+  try{
+    const u=new URL(String(value||''));
+    const p=platform||socialPlatformFromUrl(u.toString());
+    const path=u.pathname;
+    if(p==='Instagram') return /\/(?:p|reel|reels)\/[^/?#]+/i.test(path);
+    if(p==='Facebook') return /\/(?:posts|videos|reel|reels)\/|story_fbid=|permalink\.php/i.test(u.toString());
+    if(p==='TikTok') return /\/video\/\d+/i.test(path);
+    if(p==='LinkedIn') return /\/posts\/|\/feed\/update\//i.test(path);
+    if(p==='X') return /\/status\/\d+/i.test(path);
+  }catch{}
+  return false;
+}
+
 function pilotSocialSeeds(org={}){
   const key=asciiToken(`${org?.short_name||''} ${org?.name||''}`);
   if(key.includes('berde') && key.includes('smsii')) return [
@@ -1566,6 +1596,13 @@ for (const org of plan.organizations) {
   const domainWebItems=[];
   const directWebItems=[];
   const allConfiguredSources=[...(Array.isArray(org.rss_sources)?org.rss_sources:[])];
+  // Mövcud kodda rəsmi sosial profil aşkarlama funksiyaları var idi, amma əsas worker
+  // axınına qoşulmadığı üçün Bing profil səhifəsini tapsa belə həmin profilin postları
+  // heç vaxt oxunmurdu. Burada yalnız sərt təşkilat/handle uyğunluğu olan profilləri
+  // reyestrə alırıq; qlobal platforma kökləri isə əvvəlki kimi aktivləşdirici olaraq qalır.
+  const officialSocialProfiles = !SITEMAP_FOCUS
+    ? await discoverOfficialSocialProfiles(org,allConfiguredSources).catch(()=>[])
+    : [];
   // Sosial platforma kök URL-ləri yalnız qlobal aktivləşdirmə mənbəsidir.
   // organization_id-li test/profil sətrlərini discovery-yə qatmaq bir profilin başqa
   // təşkilatlara qarışmasına səbəb ola bilərdi. İndi public discovery hər təşkilat üçün
@@ -1636,13 +1673,16 @@ for (const org of plan.organizations) {
   }
 
   const socialItemsByPlatform=new Map();
+  const discoveredSocialProfiles=[...(Array.isArray(officialSocialProfiles)?officialSocialProfiles:[])];
   if(!SITEMAP_FOCUS && activeSocialPlatforms.length){
     for(const socialPlatform of activeSocialPlatforms){
       if(gatewayBudgetLow()) break;
-      // Heç bir təşkilat profili avtomatik yaradılmır və başqa təşkilatın profili istifadə
-      // olunmur. Search engine public discovery yalnız bu təşkilatın öz identifikatorları,
-      // aliasları, rayonu və aktiv açar-söz bankından hazırlanmış sorğularla işləyir.
-      const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank,[]);
+      // Public discovery bütün internetdə indekslənmiş sosial nəticələri axtarır.
+      // Profil landing-page tapılarsa onu material kimi saxlamırıq; əvvəl təşkilata
+      // həqiqətən aid olub-olmadığını yoxlayıb həmin profilin real postlarını oxumaq
+      // üçün profil reyestrinə namizəd edirik. Beləliklə "profil tapıldı, mention 0"
+      // boşluğu aradan qalxır və bir təşkilatın profili digərinə qarışmır.
+      const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank,officialSocialProfiles);
       const collected=[];
       for(const q of queries){
         if(gatewayBudgetLow()) break;
@@ -1650,6 +1690,13 @@ for (const org of plan.organizations) {
           const rows=await bingWeb(q,0);
           const exact=dedupe((rows||[]).filter(item=>socialPlatformFromUrl(item?.url||'')===socialPlatform));
           for(const item of exact){
+            const profileUrl=canonicalSocialProfileUrl(item?.url||'',socialPlatform);
+            if(profileUrl && socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl},item,org)){
+              discoveredSocialProfiles.push({platform:socialPlatform,url:profileUrl,name:`${org.short_name||org.name} ${socialPlatform}`});
+            }
+            // Profilin öz landing səhifəsi mention deyil. Post/reel/status URL-ləri isə
+            // normal sərt aidiyyət filtrinə göndərilir və yalnız uyğun olan saxlanılır.
+            if(profileUrl && !isSocialPostUrl(item?.url||'',socialPlatform)) continue;
             collected.push({...item,published_at:null,raw:{...(item?.raw||{}),kind:'public_social_discovery',social_platform:socialPlatform,discovery_query:q,provider:'Bing Web RSS',public_social:true}});
           }
           console.log(`[${org.short_name}] ${socialPlatform} public discovery: ${exact.length} | ${q}`);
@@ -1660,6 +1707,52 @@ for (const org of plan.organizations) {
       }
       socialItemsByPlatform.set(socialPlatform,dedupe(collected).slice(0,Math.min(40,MAX_INGEST_ITEMS)));
     }
+  }
+
+  const verifiedSocialProfiles=[...new Map(
+    discoveredSocialProfiles
+      .filter(x=>x?.platform&&x?.url&&socialProfileCandidateMatchesOrg(x,{title:x?.name||'',text:'',url:x.url},org))
+      .map(x=>[`${x.platform}|${String(x.url).toLowerCase()}`,x])
+  ).values()].slice(0,8);
+
+  // Search engine-in tapdığı, amma təşkilat saytında əvvəl qeyd olunmamış rəsmi profil
+  // varsa onu sources cədvəlinə təşkilat üzrə saxlayırıq. Admin panel qlobal mənbə
+  // sayğacında organization_id-li sətrləri göstərmir; bu yalnız backend xəritələməsidir.
+  const newlyDiscoveredProfiles=verifiedSocialProfiles.filter(x=>
+    !officialSocialProfiles.some(y=>y.platform===x.platform&&String(y.url).toLowerCase()===String(x.url).toLowerCase())
+  );
+  if(newlyDiscoveredProfiles.length){
+    try{
+      const reg=await callMonitor({mode:'social_source_upsert',organization_id:org.id,social_sources:newlyDiscoveredProfiles},35000,1);
+      console.log(`[${org.short_name}] Sosial profil reyestri (public discovery): yeni=${Number(reg?.inserted||0)}, mövcud=${Number(reg?.existing||0)}`);
+    }catch(e){ console.log(`[${org.short_name}] Sosial profil reyestri public discovery yazılmadı: ${e?.message||e}`); }
+  }
+
+  // Facebook/Instagram üçün mövcud Meta secret-lərindən istifadə edərək yalnız həmin
+  // təşkilata sərt uyğunlaşdırılmış profillərin real postlarını oxuyuruq. Meta icazəsi
+  // hansı profilə çatmırsa run qırılmır; aşağıdakı public Web discovery fallback qalır.
+  const metaProfiles=verifiedSocialProfiles.filter(x=>['Facebook','Instagram'].includes(x.platform)).slice(0,4);
+  if(metaProfiles.length && !gatewayBudgetLow()){
+    try{
+      const metaScan=await callMonitor({mode:'meta_public_profile_scan',organization_id:org.id,social_sources:metaProfiles},45000,1);
+      totalReceived += Number(metaScan?.items||0);
+      totalAccepted += Number(metaScan?.inserted||0);
+      totalInserted += Number(metaScan?.inserted||0);
+      console.log(`[${org.short_name}] Meta profil scan: profil=${Number(metaScan?.profiles||0)} items=${Number(metaScan?.items||0)} inserted=${Number(metaScan?.inserted||0)} fb=${Number(metaScan?.facebook_items||0)} ig=${Number(metaScan?.instagram_items||0)}`);
+      if(Array.isArray(metaScan?.failures)) for(const f of metaScan.failures.slice(0,3)) console.log(`[${org.short_name}] Meta profil scan fallback: ${f?.platform||''} ${f?.message||''}`);
+    }catch(e){ console.log(`[${org.short_name}] Meta profil scan alınmadı, public discovery davam edir: ${e?.message||e}`); }
+  }
+
+  // LinkedIn/TikTok/X və Meta-nın icazə vermədiyi hallarda məlum profilin açıq HTML-indən
+  // post permalink-lərini çıxarmağa çalışırıq. Yalnız verified profile və maksimum 2 profil
+  // işlənir ki, fast-watch vaxtı/YouTube/Web işinə təsir etməsin.
+  for(const profile of verifiedSocialProfiles.filter(x=>!['Facebook','Instagram'].includes(x.platform)).slice(0,2)){
+    if(gatewayBudgetLow()) break;
+    const directItems=await directSocialProfileItems(profile,org).catch(()=>[]);
+    if(!directItems.length) continue;
+    const current=Array.isArray(socialItemsByPlatform.get(profile.platform))?socialItemsByPlatform.get(profile.platform):[];
+    socialItemsByPlatform.set(profile.platform,dedupe([...directItems,...current]).slice(0,Math.min(40,MAX_INGEST_ITEMS)));
+    console.log(`[${org.short_name}] ${profile.platform} məlum profil postları: ${directItems.length} | ${profile.url}`);
   }
 
   const shardPool=sourceShard(configuredSources);
