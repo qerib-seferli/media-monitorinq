@@ -1139,12 +1139,10 @@ function buildDomainQueries(org, domain, keyword='') {
 }
 function inferredOrgDomains(org) {
   const out=new Set();
-  // Qlobal 150 Web mənbəni təşkilatın rəsmi domeni saymırıq. Əks halda eyni qlobal
-  // saytın footer-indəki sosial link bütün təşkilatlara səhv profil kimi bağlanırdı.
-  // Yalnız organization_id-si məhz bu təşkilata bağlı Web mənbə rəsmi domen namizədi ola bilər.
+  // Web mənbələrinin əvvəlki qlobal hovuz məntiqini saxlayırıq; yalnız Facebook/Instagram/
+  // TikTok/LinkedIn/X kök URL-lərini Web domeni kimi qəbul etmirik.
   for (const source of (Array.isArray(org?.rss_sources)?org.rss_sources:[])) {
     if(isSocialSource(source)) continue;
-    if(!source?.organization_id || String(source.organization_id)!==String(org?.id||'')) continue;
     const d=domainFromUrl(source?.url||''); if(d && !/google\.com$|bing\.com$/i.test(d)) out.add(d);
   }
   const district=String(org?.district||'').trim().toLocaleLowerCase('az-AZ')
@@ -1568,17 +1566,15 @@ for (const org of plan.organizations) {
   const domainWebItems=[];
   const directWebItems=[];
   const allConfiguredSources=[...(Array.isArray(org.rss_sources)?org.rss_sources:[])];
-  // Köhnə Web mənbələri əvvəlki kimi qlobal hovuz olaraq qalır. Sosial profil sətrləri isə
-  // organization_id daşıyırsa yalnız həmin təşkilata aiddir; başqa rayonun profilini bu
-  // təşkilat üçün scan etmirik. organization_id=NULL olan facebook.com/instagram.com kökü
-  // yalnız platformanı aktivləşdirən qlobal flag rolunu oynayır.
-  const socialConfigForOrg=allConfiguredSources.filter(source=>isSocialSource(source) && (!source?.organization_id || String(source.organization_id)===String(org.id)));
+  // Sosial platforma kök URL-ləri yalnız qlobal aktivləşdirmə mənbəsidir.
+  // organization_id-li test/profil sətrlərini discovery-yə qatmaq bir profilin başqa
+  // təşkilatlara qarışmasına səbəb ola bilərdi. İndi public discovery hər təşkilat üçün
+  // yalnız həmin təşkilatın öz adı/alias/rayon/açar-söz konteksti ilə aparılır.
+  const globalSocialSources=allConfiguredSources.filter(source=>isSocialSource(source) && !source?.organization_id);
   const configuredSources=allConfiguredSources.filter(source=>!isSocialSource(source));
-  const socialProfileSources=await discoverOfficialSocialProfiles(org,allConfiguredSources);
-  const activeSocialPlatforms=[...new Set([
-    ...socialConfigForOrg.map(x=>normalizeSocialPlatform(x?.platform)||socialPlatformFromUrl(x?.url)),
-    ...socialProfileSources.map(x=>x.platform)
-  ].filter(Boolean))];
+  const activeSocialPlatforms=[...new Set(globalSocialSources
+    .map(x=>normalizeSocialPlatform(x?.platform)||socialPlatformFromUrl(x?.url))
+    .filter(Boolean))];
   for(const domain of inferredOrgDomains(org)){
     if(!configuredSources.some(x=>domainFromUrl(x?.url||'')===domain)) configuredSources.push({platform:'Web',url:`https://${domain}/`,name:`${domain} birbaşa sayt`});
   }
@@ -1643,28 +1639,11 @@ for (const org of plan.organizations) {
   if(!SITEMAP_FOCUS && activeSocialPlatforms.length){
     for(const socialPlatform of activeSocialPlatforms){
       if(gatewayBudgetLow()) break;
-      const platformProfiles=socialProfileSources.filter(x=>x.platform===socialPlatform);
-      const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank,platformProfiles);
+      // Heç bir təşkilat profili avtomatik yaradılmır və başqa təşkilatın profili istifadə
+      // olunmur. Search engine public discovery yalnız bu təşkilatın öz identifikatorları,
+      // aliasları, rayonu və aktiv açar-söz bankından hazırlanmış sorğularla işləyir.
+      const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank,[]);
       const collected=[];
-      // Meta token GitHub-a çıxmadan Supabase daxilində məlum rəsmi Facebook/Instagram
-      // profillərini ayrıca yoxlayırıq. Instagram professional hesablarında Business Discovery
-      // real media/permalink/tarix/metadatanı qaytara bilir; Facebook public Page icazəsi yoxdursa
-      // bu çağırış sakitcə failure kimi qeyd olunur və aşağıdakı Web discovery davam edir.
-      if(platformProfiles.length && ['Instagram','Facebook'].includes(socialPlatform)){
-        try{
-          const metaScan=await callMonitor({mode:'meta_public_profile_scan',organization_id:org.id,social_sources:platformProfiles.slice(0,4)},45000,1);
-          console.log(`[${org.short_name}] ${socialPlatform} Meta profil scan: profiles=${Number(metaScan?.profiles||0)} items=${Number(metaScan?.items||0)} inserted=${Number(metaScan?.inserted||0)} failures=${Array.isArray(metaScan?.failures)?metaScan.failures.length:0}`);
-        }catch(e){ console.log(`[${org.short_name}] ${socialPlatform} Meta profil scan keçildi: ${e?.message||e}`); }
-      }
-      // Rəsmi/məlum profil URL-ləri varsa axtarış indeksindən əlavə olaraq profilin özündə
-      // görünən permalinkləri də best-effort oxuyuruq. Login/challenge olarsa sakitcə public
-      // discovery-yə davam edir; digər Web/YouTube axınını dayandırmır.
-      for(const profile of platformProfiles.slice(0,FULL_RADAR?4:2)){
-        if(gatewayBudgetLow()) break;
-        const direct=await directSocialProfileItems(profile,org).catch(()=>[]);
-        collected.push(...direct);
-        console.log(`[${org.short_name}] ${socialPlatform} məlum profil discovery: ${direct.length} | ${profile.url}`);
-      }
       for(const q of queries){
         if(gatewayBudgetLow()) break;
         try{

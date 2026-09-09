@@ -621,33 +621,34 @@ async function loadSourceIndex() {
       .limit(1000);
     if (!social.error) pushRows(social.data || []);
   }
-  sourceIndex = rows.sort((a,b)=>String(b?.created_at||'').localeCompare(String(a?.created_at||'')));
+  // Bu panel qlobal mənbə hovuzudur. Keçmiş testlərdə yaranmış organization_id-li
+  // sosial profil sətrləri burada göstərilmir və qlobal mənbə sayına qarışdırılmır.
+  sourceIndex = rows
+    .filter(row=>!row.organization_id)
+    .sort((a,b)=>String(b?.created_at||'').localeCompare(String(a?.created_at||'')));
 }
 
 function renderSources() {
   const el = document.querySelector('#source-list');
   if (!el) return;
   const counts = new Map();
-  const globalCounts = new Map();
-  const orgCounts = new Map();
   for (const row of sourceIndex) {
-    // Platform adı köhnə/səhv yazılıbsa belə URL-dən kanonik sosial platformanı tanıyırıq.
-    // Beləliklə Instagram/TikTok/LinkedIn/X sətri bazada olduğu halda paneldən itmir.
+    // Platform dəyəri səhv case/adla yazılıbsa URL domenindən kanonik adı müəyyənləşdiririk.
     const key = normalizeSourcePlatform(canonicalSourcePlatform(row.platform,row.url));
     counts.set(key,(counts.get(key)||0)+1);
-    const target=row.organization_id?orgCounts:globalCounts;
-    target.set(key,(target.get(key)||0)+1);
   }
-  const order = ['youtube','facebook','instagram','tiktok','linkedin','x','web','digər'];
-  el.innerHTML = order.filter(key=>counts.get(key)).map(key=>{
-    const g=globalCounts.get(key)||0, o=orgCounts.get(key)||0;
-    const meta=o ? `${g} qlobal + ${o} təşkilat profili` : `${g||counts.get(key)} qlobal mənbə`;
+  const order = ['youtube','facebook','instagram','tiktok','linkedin','x','web'];
+  // Bütün əsas platformalar həmişə görünür; mənbə əlavə edilməyibsə sadəcə 0 göstərilir.
+  // Beləliklə Instagram/LinkedIn bazada olduqda UI-dən itmir və ayrıca "təşkilat profili"
+  // kimi qarışıq saylar göstərilmir.
+  el.innerHTML = order.map(key=>{
+    const total=counts.get(key)||0;
     return `
-    <details class="source-platform-group" data-source-platform-group data-platform-key="${key}" data-total="${counts.get(key)}">
-      <summary><span><strong>${sourcePlatformLabel(key)}</strong><small>${meta}</small></span><span class="badge info">${counts.get(key)}</span></summary>
-      <div class="source-platform-body" data-source-platform-body><div class="empty compact">Açdıqda yüklənəcək.</div></div>
+    <details class="source-platform-group" data-source-platform-group data-platform-key="${key}" data-total="${total}">
+      <summary><span><strong>${sourcePlatformLabel(key)}</strong><small>${total} qlobal mənbə</small></span><span class="badge info">${total}</span></summary>
+      <div class="source-platform-body" data-source-platform-body><div class="empty compact">${total?'Açdıqda yüklənəcək.':'Mənbə yoxdur.'}</div></div>
     </details>`;
-  }).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
+  }).join('');
 
   el.querySelectorAll('[data-source-platform-group]').forEach(group => {
     group.addEventListener('toggle', () => {
@@ -671,9 +672,8 @@ async function loadSourcePlatformGroup(group, offset=0, append=false) {
   group.dataset.loading = '0';
   const html = rows.map(x => {
     const rawUrl = String(x.url || '');
-    const scope=x.organization_id ? ' • təşkilata bağlı sosial profil/mənbə' : ' • qlobal';
     return `<div class="source-item">
-      <div class="source-item-main"><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl || 'URL yoxdur')}</a><small>${escapeHtml(canonicalSourcePlatform(x.platform,rawUrl) || sourcePlatformLabel(platformKey))}${scope}</small></div>
+      <div class="source-item-main"><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl || 'URL yoxdur')}</a><small>${escapeHtml(canonicalSourcePlatform(x.platform,rawUrl) || sourcePlatformLabel(platformKey))} • qlobal</small></div>
       <span class="source-item-actions"><span class="badge source-status-badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span><button class="icon-btn source-delete" type="button" title="Mənbəni sil" aria-label="Mənbəni sil" data-source-delete="${x.id}">×</button></span>
     </div>`;
   }).join('');
