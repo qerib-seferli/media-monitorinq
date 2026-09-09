@@ -98,18 +98,21 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
+          # 4 təşkilatı eyni Edge invocation-a yükləmək Supabase 546 / WORKER_RESOURCE_LIMIT
+          # yaradırdı. Qlobal YouTube rotasiyası artıq bir invocation-da yalnız 1 təşkilat
+          # emal edir. Növbəti saatlarda rotation bucket dəyişdiyi üçün əhatə davam edir;
+          # canlı youtube-monitor shard-ları isə əsas sürətli əhatəni ayrıca saxlayır.
           ROTATION_BUCKET=$(( $(date +%s) / 3600 ))
+          URL="https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
+          BODY="{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":false,\"force_youtube\":true,\"include_archived\":false,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":1,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1,\"verify_existing\":false}"
           curl --fail-with-body --silent --show-error \
             --connect-timeout 15 \
-            --max-time 120 \
-            --retry 1 \
-            --retry-delay 5 \
-            --retry-all-errors \
+            --max-time 90 \
+            --retry 0 \
             -X POST \
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d "{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":false,\"force_youtube\":true,\"include_archived\":false,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":4,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1,\"verify_existing\":false}" \
-            "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
+            -d "$BODY" "$URL"
 
   meta-monitor:
     # Meta */15-də digər canlı Edge job-larla eyni anda işləyəndə Supabase 546
