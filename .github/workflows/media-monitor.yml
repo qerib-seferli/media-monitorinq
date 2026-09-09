@@ -4,6 +4,8 @@ on:
   schedule:
     # Canlı monitorinq əsas prioritetdir. Ağır arxiv işləri eyni dəqiqədə başlamır.
     - cron: '*/15 * * * *'
+    # Meta ayrıca 5 dəqiqəlik yüngül rotasiya ilə işləyir; */15 canlı run-la eyni dəqiqəyə düşmür.
+    - cron: '3-58/5 * * * *'
     - cron: '7 * * * *'
     - cron: '17 * * * *'
     - cron: '37 * * * *'
@@ -110,7 +112,10 @@ jobs:
             "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
 
   meta-monitor:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
+    # Meta */15-də digər canlı Edge job-larla eyni anda işləyəndə Supabase 546
+    # WORKER_RESOURCE_LIMIT verə bilirdi. Ona görə Meta ayrıca, üst-üstə düşməyən
+    # 5 dəqiqəlik rotasiyada işləyir. Manual workflow testində də eyni yüngül limit qalır.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '3-58/5 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 4
     concurrency:
@@ -130,21 +135,39 @@ jobs:
         env:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
-          # Meta Graph API materialları əvvəl 3 shard tərəfindən eyni anda 3 dəfə
-          # endirilirdi. İndi hər 15 dəqiqəlik run-da Meta yalnız 1 dəfə çağırılır,
-          # əvvəlki ümumi təşkilat əhatəsi isə 2+2+2 əvəzinə tək çağırışda 6 təşkilatla qorunur.
-          ROTATION_BUCKET=$(( $(date +%s) / 900 ))
-          BODY="{\"mode\":\"meta_monitor\",\"debug\":false,\"include_archived\":false,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":6,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"meta_page_limit\":1}"
-          curl --fail-with-body --silent --show-error \
+          # Meta API hər invocation-da yalnız 1 dəfə çağırılır. Edge Function daxilində
+          # 6 təşkilatın 12k-lıq açar söz bankını eyni run-da emal etmək əvəzinə hər 5
+          # dəqiqədə 2 təşkilat rotasiya olunur. Beləliklə 15 dəqiqədə yenə 6 təşkilat
+          # əhatə olunur, amma bir Edge invocation-un pik yaddaş/CPU yükü xeyli azalır.
+          ROTATION_BUCKET=$(( $(date +%s) / 300 ))
+          URL="https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
+          BODY="{\"mode\":\"meta_monitor\",\"debug\":false,\"include_archived\":false,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":2,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"meta_page_limit\":1}"
+
+          if curl --fail-with-body --silent --show-error \
             --connect-timeout 15 \
             --max-time 95 \
-            --retry 1 \
-            --retry-delay 4 \
+            --retry 0 \
             -X POST \
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
-            -d "$BODY" \
-            "https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
+            -d "$BODY" "$URL"; then
+            exit 0
+          fi
+
+          # Tam workflow manual başladıldıqda digər Edge job-larla paralel yük yenə
+          # təsadüfən yüksək ola bilər. 546 və ya keçici Edge xətasında ağır sorğunu
+          # təkrarlamaq əvəzinə yalnız 1 təşkilatlıq təhlükəsiz fallback işləyir.
+          echo "Meta 2 təşkilatlıq run uğursuz oldu; 1 təşkilatlıq təhlükəsiz fallback işləyir."
+          sleep 5
+          FALLBACK="{\"mode\":\"meta_monitor\",\"debug\":false,\"include_archived\":false,\"organization_shard_count\":1,\"organization_shard_index\":0,\"organization_batch\":1,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"meta_page_limit\":1}"
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 15 \
+            --max-time 85 \
+            --retry 0 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-monitor-secret: $MONITOR_SECRET" \
+            -d "$FALLBACK" "$URL"
 
   web-fast-watch:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
