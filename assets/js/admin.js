@@ -608,18 +608,28 @@ async function loadSourceIndex() {
     pushRows(batch);
     if (batch.length < pageSize) break;
   }
-  // Sosial platformaları ayrıca URL üzrə də oxuyuruq. Bəzi köhnə qeydlərdə platform
-  // dəyəri fərqli case/adla yazıla bilər və ya böyük source siyahısının paginasiya pəncərəsindən
-  // kənarda qala bilər. URL domeni burada kanonik həqiqət kimi istifadə olunur; buna görə
-  // Instagram/TikTok/LinkedIn/X bazada olduğu halda paneldən itmir.
+  // Sosial platforma qeydlərini ayrıca platform adı üzrə də oxuyuruq.
+  // Məqsəd yalnız admin mənbə sayğacının DB-də mövcud Instagram/LinkedIn kimi
+  // qlobal qeydləri buraxmamasıdır; worker, YouTube və Web axtarış məntiqinə toxunmur.
+  const socialPlatforms = ['Facebook','Instagram','TikTok','LinkedIn','X'];
+  for (const platform of socialPlatforms) {
+    const socialByPlatform = await supabase.from('sources')
+      .select('id,organization_id,platform,url,is_active,created_at')
+      .ilike('platform',platform)
+      .order('created_at',{ascending:false})
+      .limit(1000);
+    if (!socialByPlatform.error) pushRows(socialByPlatform.data || []);
+  }
+
+  // Köhnə/səhv platform adı ilə yazılmış sosial URL-lər üçün domen fallback-i saxlanılır.
   const socialDomains = ['facebook.com','instagram.com','tiktok.com','linkedin.com','x.com','twitter.com'];
   for (const domain of socialDomains) {
-    const social = await supabase.from('sources')
+    const socialByUrl = await supabase.from('sources')
       .select('id,organization_id,platform,url,is_active,created_at')
       .ilike('url',`%${domain}%`)
       .order('created_at',{ascending:false})
       .limit(1000);
-    if (!social.error) pushRows(social.data || []);
+    if (!socialByUrl.error) pushRows(socialByUrl.data || []);
   }
   // Bu panel qlobal mənbə hovuzudur. Keçmiş testlərdə yaranmış organization_id-li
   // sosial profil sətrləri burada göstərilmir və qlobal mənbə sayına qarışdırılmır.
