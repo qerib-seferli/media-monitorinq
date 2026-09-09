@@ -2758,3 +2758,63 @@ body.media-viewer-open{
   }
 }
 \n\n/* =========================================================\n   v76 — Ətraflı modal boyunca sabit PWA başlığı\n   Şəkil viewer açılıb-bağlansa da başlıq dəyişmir.\n   ========================================================= */\n@media(max-width:720px){\n  body.detail-modal-open .topbar:not(.viewer-topbar-clone),\n  body.media-viewer-open .topbar:not(.viewer-topbar-clone){\n    visibility:hidden!important;\n  }\n\n  body.detail-modal-open>.viewer-topbar-clone,\n  body.media-viewer-open>.viewer-topbar-clone{\n    display:grid!important;\n    position:fixed!important;\n    top:max(6px,env(safe-area-inset-top))!important;\n    left:8px!important;\n    right:8px!important;\n    width:auto!important;\n    max-width:none!important;\n    margin:0!important;\n    z-index:7000!important;\n    background:#08192a!important;\n    -webkit-backdrop-filter:none!important;\n    backdrop-filter:none!important;\n    box-shadow:var(--shadow)!important;\n    pointer-events:none!important;\n    visibility:visible!important;\n  }\n\n  body.detail-modal-open .bottom-nav,\n  body.media-viewer-open .bottom-nav{\n    z-index:7100!important;\n    background:#08192a!important;\n  }\n}\n
+/* =========================================================
+   v86 — Sosial detal pəncərəsi: geniş, kompakt və mobil-safe
+   ========================================================= */
+.social-metrics{display:flex;flex-wrap:wrap;gap:6px;margin:7px 0 2px}
+.social-metric{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid rgba(148,163,184,.14);border-radius:999px;background:rgba(255,255,255,.025);color:#aebed1;font-size:10px;line-height:1;white-space:nowrap}
+.mention-card .social-metrics{margin-top:6px}
+#detail-bg .detail-modal-head .social-metrics{margin-top:8px}
+#detail-bg .detail-modal-head h2{font-size:18px!important;line-height:1.34!important;margin:7px 0 0!important;letter-spacing:-.015em!important;overflow-wrap:anywhere}
+#detail-bg .detail-grid{margin:11px 0!important}
+#detail-bg .detail-grid>div{padding:9px 10px!important}
+#detail-bg .detail-actions{margin:10px 0!important}
+#detail-bg .detail-state{margin:10px 0!important}
+#detail-bg .detail-original{margin:11px 0!important}
+#detail-bg .detail-original summary{padding:10px 12px!important;font-size:12px!important}
+#detail-bg .detail-original .detail-text{padding:12px!important;font-size:12px!important;line-height:1.58!important;color:#aebed1!important}
+#detail-bg .social-detail-grid{margin-top:8px!important}
+#detail-bg .detail-media-help{font-size:10px!important;margin:4px 0 8px!important}
+#detail-bg .detail-media-wrap figcaption{font-size:9px!important}
+
+@media(min-width:721px){
+  #detail-bg.modal-backdrop{padding:28px 36px!important}
+  #detail-bg .detail-modal{
+    width:min(1080px,calc(100vw - 72px))!important;
+    max-width:1080px!important;
+    max-height:86vh!important;
+    padding:0 22px 20px!important;
+    border-radius:22px!important;
+  }
+  #detail-bg .detail-modal-head{padding:15px 0 10px!important}
+  #detail-bg .detail-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+  #detail-bg .social-detail-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+  #detail-bg .detail-actions{justify-content:flex-start!important}
+  #detail-bg .detail-media-gallery{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  #detail-bg .detail-media-gallery .detail-media-wrap:first-child{grid-column:auto!important}
+  #detail-bg .detail-media-gallery .detail-media{height:280px!important;max-height:360px!important;object-fit:contain!important}
+}
+
+@media(max-width:720px){
+  #detail-bg .detail-modal{padding:0 10px 10px!important;border-radius:16px!important}
+  #detail-bg .detail-modal-head{padding:9px 0 7px!important}
+  #detail-bg .detail-modal-head h2{font-size:15px!important;line-height:1.32!important;margin-top:6px!important}
+  #detail-bg .detail-modal-head .badge{font-size:9px!important;padding:4px 7px!important}
+  #detail-bg .detail-modal-head .icon-btn{width:36px!important;height:36px!important;flex-basis:36px!important}
+  #detail-bg .detail-grid{gap:7px!important;margin:9px 0!important}
+  #detail-bg .detail-grid>div{padding:8px!important}
+  #detail-bg .detail-grid strong{font-size:9px!important}
+  #detail-bg .detail-grid p{font-size:10px!important;margin-top:4px!important}
+  #detail-bg .detail-actions{gap:6px!important;margin:8px 0!important}
+  #detail-bg .detail-actions .btn{font-size:10px!important;padding:8px 9px!important;border-radius:10px!important}
+  #detail-bg .detail-state{padding:8px 9px!important;margin:8px 0!important}
+  #detail-bg .detail-state p{font-size:9px!important}
+  #detail-bg .detail-original{margin:8px 0!important}
+  #detail-bg .detail-original summary{padding:8px 9px!important;font-size:10px!important}
+  #detail-bg .detail-original .detail-text{padding:9px!important;font-size:10px!important;line-height:1.5!important}
+  #detail-bg h3{font-size:12px!important;margin:12px 0 6px!important}
+  #detail-bg .social-metric{font-size:8px!important;padding:3px 5px!important}
+  #detail-bg .detail-media-gallery{gap:7px!important}
+  #detail-bg .detail-media-wrap img{max-height:34dvh!important}
+  .mention-card .social-metric{font-size:8px!important;padding:3px 5px!important}
+}

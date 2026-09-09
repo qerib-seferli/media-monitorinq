@@ -751,6 +751,108 @@ Deno.serve(async (req) => {
       }
     }
 
+
+
+    if (options.mode === 'social_enrich_backfill_targets') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'social_enrich_backfill_targets',error:'Təşkilat tapılmadı'},200);
+      try {
+        const limit=Math.max(1,Math.min(8,Number(options.social_limit||4)));
+        const result:any=await admin.from('mentions')
+          .select('id,title,summary,original_text,source_url,source_platform,published_at,detected_at,author_name,raw_payload,mention_media(media_type,url)')
+          .eq('organization_id',org.id)
+          .gt('relevance_score',0)
+          .in('source_platform',['Facebook','Instagram','TikTok','LinkedIn','X','Twitter'])
+          .not('source_url','is',null)
+          .order('detected_at',{ascending:false})
+          .limit(60);
+        if(result?.error) throw result.error;
+        const targets:any[]=[];
+        for(const row of (Array.isArray(result?.data)?result.data:[])){
+          const raw:any=row?.raw_payload||{};
+          const media=Array.isArray(row?.mention_media)?row.mention_media:[];
+          const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase())&&Boolean(m?.url)) || Boolean(raw?.image_url);
+          const needs=!row?.published_at || !row?.author_name || !hasCover || raw?.social_enriched!==true || raw?.date_parser_version<3;
+          if(!needs) continue;
+          targets.push({title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:row.published_at||null,author:row.author_name||null,raw,source_platform:row.source_platform||''});
+          if(targets.length>=limit) break;
+        }
+        return json({ok:true,run_id:runId,mode:'social_enrich_backfill_targets',organization:org.short_name,targets,scanned:Array.isArray(result?.data)?result.data.length:0},200);
+      }catch(e){
+        return json({ok:false,run_id:runId,mode:'social_enrich_backfill_targets',error:errorInfo(e).message},200);
+      }
+    }
+
+    if (options.mode === 'social_enrich') {
+      const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
+      if (!org) return json({ok:false,run_id:runId,mode:'social_enrich',error:'Təşkilat tapılmadı'},200);
+      if (!options.source_url) return json({ok:false,run_id:runId,mode:'social_enrich',error:'source_url tələb olunur'},200);
+      try {
+        const current:any = await admin.from('mentions')
+          .select('id,title,original_text,published_at,raw_payload,relevance_score,priority_score,source_platform')
+          .eq('organization_id',org.id)
+          .eq('source_url',options.source_url)
+          .limit(1)
+          .maybeSingle();
+        if (current?.error) throw current.error;
+        if (!current?.data?.id) return json({ok:true,run_id:runId,mode:'social_enrich',updated:false,skipped:'mention-not-found'},200);
+
+        const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 2400);
+        const positiveKeywords = installKeywordContext(org, activeKeywordRows);
+        const villageNames:string[] = org.district_id
+          ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
+          : [];
+        // Profil adı təsadüfən rayon adı ilə üst-üstə düşə bilər. Enrichment zamanı
+        // real post məzmununu trusted_org_profile bypass-i olmadan yenidən yoxlayırıq.
+        // Bununla "Abşeron Absheron" kimi əlaqəsiz səhifə materialı gizlədilir,
+        // rəsmi təşkilat adı/meliorasiya siqnalı olan real post isə qalır.
+        const candidate:Item={
+          title:options.title||current.data.title||'',
+          text:options.text||current.data.original_text||'',
+          url:options.canonical_url||options.source_url,
+          published_at:options.published_at||current.data.published_at||null,
+          author:options.author||null,
+          raw:{...((current.data.raw_payload||{}) as any),...((options.raw_patch||{}) as any),trusted_org_profile:false,parent_is_relevant:false,kind:'social_enrich'}
+        };
+        const match=evaluateMatch(org,candidate,positiveKeywords.map((x:string)=>x.toLocaleLowerCase('az-AZ')),villageNames);
+        const rawPatch:any={...((current.data.raw_payload||{}) as any),...((options.raw_patch||{}) as any),social_enriched:true,enrichment_checked_at:new Date().toISOString(),canonical_url:options.canonical_url||options.source_url};
+        if(options.like_count!==undefined&&options.like_count!==null) rawPatch.like_count=Number(options.like_count);
+        if(options.comments_count!==undefined&&options.comments_count!==null) rawPatch.comments_count=Number(options.comments_count);
+        const trustedDate=Boolean(options.published_at && Number(options.date_parser_version||0)>=3 && String(options.published_date_source||'').startsWith('social:'));
+        rawPatch.published_from_page=trustedDate;
+        rawPatch.published_date_status=trustedDate?'verified':'not-found';
+        rawPatch.published_date_source=trustedDate?options.published_date_source:null;
+        rawPatch.date_parser_version=trustedDate?Number(options.date_parser_version||3):3;
+
+        const patch:any={
+          last_seen_at:new Date().toISOString(),last_verified_at:new Date().toISOString(),source_status:'active',raw_payload:rawPatch
+        };
+        const cleanText=clean(options.text||'');
+        if(options.title) patch.title=String(options.title).slice(0,500);
+        if(cleanText.length>=5){patch.original_text=String(options.text).slice(0,120000);patch.summary=cleanText.slice(0,700);}
+        if(options.author) patch.author_name=String(options.author).slice(0,300);
+        if(trustedDate) patch.published_at=options.published_at;
+        if(!match.accepted){
+          patch.relevance_score=0; patch.priority_score=0; rawPatch.enrichment_rejected=true; rawPatch.enrichment_reject_reason=match.reason;
+        } else {
+          rawPatch.enrichment_rejected=false;
+        }
+        const externalImages=[...new Set([options.image_url,...(Array.isArray(options.image_urls)?options.image_urls:[])].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,2);
+        if(externalImages.length){rawPatch.image_url=externalImages[0];rawPatch.image_urls=externalImages;}
+        const updated:any=await admin.from('mentions').update(patch).eq('id',current.data.id);
+        if(updated?.error) throw updated.error;
+        if(match.accepted && externalImages.length){
+          const mediaResult:any=await admin.from('mention_media').select('url,media_type').eq('mention_id',current.data.id);
+          const existingUrls=new Set((Array.isArray(mediaResult?.data)?mediaResult.data:[]).map((x:any)=>String(x?.url||'')));
+          const missing=externalImages.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()}));
+          if(missing.length){const mediaInsert:any=await admin.from('mention_media').insert(missing);if(mediaInsert?.error)console.error('social-enrich-media',mediaInsert.error);}
+        }
+        return json({ok:true,run_id:runId,mode:'social_enrich',updated:true,accepted_after_enrich:match.accepted,reason:match.reason,mention_id:current.data.id,media_count:externalImages.length,published_at:trustedDate?options.published_at:null},200);
+      } catch(e) {
+        return json({ok:false,run_id:runId,mode:'social_enrich',updated:false,error:errorInfo(e).message},200);
+      }
+    }
+
     if (options.mode === 'news_enrich') {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'news_enrich',error:'Təşkilat tapılmadı'},200);
@@ -972,7 +1074,7 @@ Deno.serve(async (req) => {
       const samples:any[] = [];
       const acceptedItems:Item[] = [];
       for (const incoming of dedupeItems(options.news_items || []).slice(0,250)) {
-        const item:Item={...incoming,published_at:reliableWebPublishedDate(incoming)};
+        const item:Item={...incoming,published_at:source.platform==='Web'?reliableWebPublishedDate(incoming):(incoming?.published_at||null)};
         const match = evaluateMatch(org,item,lowerKeywords,villageNames);
         if (!match.accepted) await autoLearnKeywordBank(admin,org,item,match);
         if (match.accepted) accepted++; else rejected++;
