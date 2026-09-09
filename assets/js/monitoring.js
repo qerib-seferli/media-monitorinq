@@ -161,7 +161,11 @@ function cleanSocialDisplayText(value=''){
   return text.replace(/^[“"]|[”"]$/g,'').trim();
 }
 function socialAuthor(m,raw={}){
-  return String(m?.author_name||raw.author_name||raw.channel_title||raw.author||raw.creator||raw.publisher||raw.username||raw.page_name||raw.account_name||raw.owner_name||'').trim();
+  const p=canonicalPlatform(m?.source_platform);
+  let value=String(m?.author_name||raw.author_name||raw.channel_title||raw.author||raw.creator||raw.publisher||raw.username||raw.page_name||raw.account_name||raw.owner_name||'').trim();
+  value=value.replace(/\s+(?:on\s+)?(?:Facebook|Instagram|TikTok|LinkedIn|X)\s*$/i,'').trim();
+  if(p) value=value.replace(new RegExp(`\\s*(?:[-–—|]\\s*)?${String(p).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`,'i'),'').trim();
+  return value;
 }
 function compactDisplayTitle(m){
   const raw=m?.raw_payload||{}; const p=canonicalPlatform(m?.source_platform);
@@ -241,11 +245,17 @@ async function load({reset=false}={}){
 function speechText(m){
   const raw=m?.raw_payload||{};
   if(isComment(m)){
-    const commentText=String(m?.original_text||raw?.text_original||raw?.comment_text||'').trim();
+    const commentText=cleanSocialDisplayText(String(m?.original_text||raw?.text_original||raw?.comment_text||''));
     const videoTitle=String(raw?.video_title||'').trim();
-    return [m?.title,videoTitle?`Video: ${videoTitle}`:'',commentText].filter(Boolean).join('. ');
+    return [videoTitle?`Video: ${videoTitle}`:'',commentText].filter(Boolean).join('. ');
   }
-  return [m?.title,m?.original_text].filter(Boolean).join('. ');
+  const p=canonicalPlatform(m?.source_platform);
+  const original=cleanSocialDisplayText(m?.original_text||raw?.text_original||raw?.text||raw?.message||raw?.caption||raw?.description||'');
+  if(['Facebook','Instagram','TikTok','LinkedIn','X'].includes(p)){
+    const author=socialAuthor(m,raw);
+    return [author?`${author}`:'',original].filter(Boolean).join('. ');
+  }
+  return [m?.title,original].filter(Boolean).join('. ');
 }
 function bestSpeechVoice(){
   const voices=window.speechSynthesis?.getVoices?.()||[];
@@ -284,17 +294,26 @@ async function openDetail(id){
   const raw=m.raw_payload||{}; const comment=isComment(m); const platformLabel=canonicalPlatform(m.source_platform); const sourceUrl=mentionSourceUrl(m);
   const storedMedia=orderedMedia(m).filter(x=>x?.url);
   const rawImageValues=[...(Array.isArray(raw.image_urls)?raw.image_urls:[]),raw.image_url,raw.thumbnail_url,raw.picture,raw.preview_url].filter(Boolean);
+  const rawVideoValues=[...(Array.isArray(raw.video_urls)?raw.video_urls:[]),raw.video_url,raw.playable_url,raw.playable_url_quality_hd].filter(Boolean);
   const rawImages=rawImageValues.map(url=>({url,media_type:'preview_external'}));
+  const rawVideos=rawVideoValues.map(url=>({url,media_type:'video_external'}));
   const ytId=String(raw.video_id||'');
   const fallbackYoutube=String(m.source_platform||'').toLowerCase()==='youtube'&&ytId?[{url:`https://i.ytimg.com/vi/${ytId}/maxresdefault.jpg`,media_type:'preview_external'}]:[];
-  const mediaRows=[...storedMedia,...rawImages,...fallbackYoutube].filter((x,i,a)=>x?.url&&a.findIndex(y=>String(y?.url)===String(x.url))===i);
+  const mediaRows=[...storedMedia,...rawImages,...rawVideos,...fallbackYoutube].filter((x,i,a)=>x?.url&&a.findIndex(y=>String(y?.url)===String(x.url))===i);
   const screenshotRow=mediaRows.find(x=>String(x?.media_type||'').toLowerCase()==='screenshot');
-  const coverRow=mediaRows.find(x=>String(x?.media_type||'').toLowerCase()!=='screenshot' && /^https?:\/\//i.test(String(x?.url||'')));
-  // Ətraflı görünüşdə əvvəl real paylaşım/video/xəbər qapağı,
-  // sonra arxiv ekran görüntüsü göstərilir.
-  const displayMedia=[coverRow,screenshotRow].filter(Boolean);
+  const socialFirst=mediaRows.filter(x=>String(x?.media_type||'').toLowerCase()!=='screenshot');
+  const displayMedia=[...socialFirst,...mediaRows.filter(x=>String(x?.media_type||'').toLowerCase()==='screenshot')];
   const hasScreenshot=Boolean(screenshotRow);
-  const media=displayMedia.map(x=>`<figure class="detail-media-wrap">${mediaImg(x.url)}<figcaption>${escapeHtml(String(x.media_type||'media')==='screenshot'?'Arxiv ekran görüntüsü':'Video / xəbərin qapaq şəkli')}</figcaption></figure>`).join('');
+  const mediaItemHtml=(x,i)=>{
+    const type=String(x?.media_type||'').toLowerCase();
+    const isVideo=type.includes('video')||/\.(?:mp4|m4v|webm)(?:$|\?)/i.test(String(x.url||''));
+    const body=isVideo
+      ? `<video class="detail-media detail-media-video" controls preload="metadata" playsinline src="${escapeHtml(x.url)}"></video>`
+      : mediaImg(x.url);
+    const label=type==='screenshot'?'Arxiv ekran görüntüsü':(isVideo?'Paylaşım videosu':'Paylaşım şəkli');
+    return `<figure class="detail-media-wrap${i===0?' is-active':''}" data-media-slide="${i}">${body}<figcaption>${escapeHtml(label)}</figcaption></figure>`;
+  };
+  const media=displayMedia.length?`<div class="detail-media-carousel"><div class="detail-media-track">${displayMedia.map(mediaItemHtml).join('')}</div>${displayMedia.length>1?`<button class="detail-media-nav prev" type="button" aria-label="Əvvəlki media">‹</button><button class="detail-media-nav next" type="button" aria-label="Növbəti media">›</button><div class="detail-media-count"><span>1</span> / ${displayMedia.length}</div>`:''}</div>`:'';
   const screenshotState=platformLabel==='Web'&&!hasScreenshot?`<div class="card detail-state"><p class="muted">Arxiv ekran görüntüsü hələ hazırlanır. Yeni qəbul olunan Web materialları tam mətn və media ilə birlikdə tamamlanır; köhnə arxiv növbə ilə yenilənir.</p></div>`:'';
   const originalText=cleanSocialDisplayText(m.original_text||raw.text_original||raw.comment_text||raw.text||raw.message||raw.caption||raw.description||'');
   const displayTitle=compactDisplayTitle(m);
@@ -318,6 +337,19 @@ async function openDetail(id){
   document.querySelector('#detail-bg').onclick=e=>{if(e.target.id==='detail-bg')document.querySelector('#detail-close').click();};
   document.querySelector('#detail-speak').onclick=e=>speak(m,e.currentTarget);
   document.querySelectorAll('[data-media]').forEach(x=>x.onclick=()=>openViewer(x.dataset.media));
+  const slides=[...document.querySelectorAll('#detail-bg [data-media-slide]')];
+  if(slides.length>1){
+    let mediaIndex=0;
+    const counter=document.querySelector('#detail-bg .detail-media-count span');
+    const showMedia=(next)=>{
+      mediaIndex=(next+slides.length)%slides.length;
+      slides.forEach((el,i)=>{el.classList.toggle('is-active',i===mediaIndex); if(i!==mediaIndex) el.querySelector('video')?.pause?.();});
+      if(counter)counter.textContent=String(mediaIndex+1);
+    };
+    document.querySelector('#detail-bg .detail-media-nav.prev')?.addEventListener('click',()=>showMedia(mediaIndex-1));
+    document.querySelector('#detail-bg .detail-media-nav.next')?.addEventListener('click',()=>showMedia(mediaIndex+1));
+    showMedia(0);
+  }
 }
 
 let scale=1,currentUrl='',tx=0,ty=0,startX=0,startY=0,baseX=0,baseY=0,isDragging=false,pinchStart=0,pinchScale=1,pinchMidX=0,pinchMidY=0,pinchBaseX=0,pinchBaseY=0;

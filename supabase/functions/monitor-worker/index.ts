@@ -772,7 +772,7 @@ Deno.serve(async (req) => {
           const raw:any=row?.raw_payload||{};
           const media=Array.isArray(row?.mention_media)?row.mention_media:[];
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase())&&Boolean(m?.url)) || Boolean(raw?.image_url);
-          const needs=!row?.published_at || !row?.author_name || !hasCover || raw?.social_enriched!==true || raw?.date_parser_version<3;
+          const needs=!row?.published_at || !row?.author_name || !hasCover || raw?.social_enriched!==true || raw?.date_parser_version<4;
           if(!needs) continue;
           targets.push({title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:row.published_at||null,author:row.author_name||null,raw,source_platform:row.source_platform||''});
           if(targets.length>=limit) break;
@@ -822,7 +822,7 @@ Deno.serve(async (req) => {
         rawPatch.published_from_page=trustedDate;
         rawPatch.published_date_status=trustedDate?'verified':'not-found';
         rawPatch.published_date_source=trustedDate?options.published_date_source:null;
-        rawPatch.date_parser_version=trustedDate?Number(options.date_parser_version||3):3;
+        rawPatch.date_parser_version=trustedDate?Number(options.date_parser_version||4):4;
 
         const patch:any={
           last_seen_at:new Date().toISOString(),last_verified_at:new Date().toISOString(),source_status:'active',raw_payload:rawPatch
@@ -837,15 +837,19 @@ Deno.serve(async (req) => {
         } else {
           rawPatch.enrichment_rejected=false;
         }
-        const externalImages=[...new Set([options.image_url,...(Array.isArray(options.image_urls)?options.image_urls:[])].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,2);
+        const externalImages=[...new Set([options.image_url,...(Array.isArray(options.image_urls)?options.image_urls:[])].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,12);
         if(externalImages.length){rawPatch.image_url=externalImages[0];rawPatch.image_urls=externalImages;}
+        const externalVideos=[...new Set([rawPatch.video_url,...(Array.isArray(rawPatch.video_urls)?rawPatch.video_urls:[])].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,6);
+        if(externalVideos.length){rawPatch.video_url=externalVideos[0];rawPatch.video_urls=externalVideos;}
         const updated:any=await admin.from('mentions').update(patch).eq('id',current.data.id);
         if(updated?.error) throw updated.error;
         if(match.accepted && externalImages.length){
           const mediaResult:any=await admin.from('mention_media').select('url,media_type').eq('mention_id',current.data.id);
           const existingUrls=new Set((Array.isArray(mediaResult?.data)?mediaResult.data:[]).map((x:any)=>String(x?.url||'')));
           const missing=externalImages.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()}));
-          if(missing.length){const mediaInsert:any=await admin.from('mention_media').insert(missing);if(mediaInsert?.error)console.error('social-enrich-media',mediaInsert.error);}
+          const missingVideos=externalVideos.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'video_external',url,captured_at:new Date().toISOString()}));
+          const mediaToInsert=[...missing,...missingVideos];
+          if(mediaToInsert.length){const mediaInsert:any=await admin.from('mention_media').insert(mediaToInsert);if(mediaInsert?.error)console.error('social-enrich-media',mediaInsert.error);}
         }
         return json({ok:true,run_id:runId,mode:'social_enrich',updated:true,accepted_after_enrich:match.accepted,reason:match.reason,mention_id:current.data.id,media_count:externalImages.length,published_at:trustedDate?options.published_at:null},200);
       } catch(e) {
@@ -3559,6 +3563,7 @@ type RunOptions = {
   news_author:string;
   image_url:string;
   image_urls:string[];
+  raw_patch:Record<string,any>;
   canonical_url:string;
   published_date_source:string;
   date_parser_version:number;
@@ -3609,6 +3614,7 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   news_author:'',
   image_url:'',
   image_urls:[],
+  raw_patch:{},
   canonical_url:'',
   published_date_source:'',
   date_parser_version:0,
@@ -3675,6 +3681,7 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       news_author:String(body?.author || '').slice(0,500),
       image_url:String(body?.image_url || '').slice(0,2000),
       image_urls:[...new Set((Array.isArray(body?.image_urls)?body.image_urls:[]).map((x:any)=>String(x||'').slice(0,2000)).filter((x:string)=>/^https?:\/\//i.test(x)))].slice(0,12),
+      raw_patch:body?.raw_patch && typeof body.raw_patch==='object' ? body.raw_patch : {},
       canonical_url:String(body?.canonical_url || '').slice(0,2000),
       published_date_source:String(body?.published_date_source || '').slice(0,80),
       date_parser_version:Math.max(0,Number(body?.date_parser_version||0)),

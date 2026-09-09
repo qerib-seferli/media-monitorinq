@@ -365,6 +365,40 @@ function socialJsonString(html='',keys=[]){
   }
   return '';
 }
+function decodeSocialUrl(value=''){
+  return String(value||'')
+    .replace(/\\u0026/gi,'&').replace(/\\u002F/gi,'/').replace(/\\\//g,'/')
+    .replace(/&amp;/gi,'&').replace(/\\u003D/gi,'=').trim();
+}
+function socialMediaCandidates(html='',finalUrl=''){
+  const images=[]; const videos=[];
+  const add=(bucket,value)=>{
+    const raw=decodeSocialUrl(value); if(!raw||!/^https?:\/\//i.test(raw))return;
+    let u=raw; try{u=new URL(raw,finalUrl||undefined).toString();}catch{}
+    if(/(?:profile|avatar|emoji|static|logo|favicon)/i.test(u))return;
+    if(!bucket.includes(u))bucket.push(u);
+  };
+  add(images,socialMeta(html,'og:image')||socialMeta(html,'twitter:image')||'');
+  add(videos,socialMeta(html,'og:video')||socialMeta(html,'og:video:url')||socialMeta(html,'twitter:player:stream')||'');
+  const decoded=decodeSocialUrl(html);
+  const imagePatterns=[
+    /["'](?:display_url|display_src|thumbnail_src|image_url|image_uri|photo_image_uri|src)["']\s*:\s*["'](https?:\\?\/\\?\/[^"']+)["']/gi,
+    /(https?:\/\/[^"'<>\s]+(?:fbcdn\.net|cdninstagram\.com)[^"'<>\s]*\.(?:jpg|jpeg|png|webp)(?:\?[^"'<>\s]*)?)/gi
+  ];
+  for(const re of imagePatterns) for(const m of decoded.matchAll(re)) add(images,m[1]);
+  const videoPatterns=[
+    /["'](?:video_url|playable_url|playable_url_quality_hd|video_versions)["']\s*:\s*["'](https?:\\?\/\\?\/[^"']+)["']/gi,
+    /(https?:\/\/[^"'<>\s]+(?:fbcdn\.net|cdninstagram\.com)[^"'<>\s]*\.(?:mp4|m4v)(?:\?[^"'<>\s]*)?)/gi
+  ];
+  for(const re of videoPatterns) for(const m of decoded.matchAll(re)) add(videos,m[1]);
+  return {images:images.slice(0,12),videos:videos.slice(0,6)};
+}
+function cleanSocialAuthorValue(value='',platform=''){
+  let out=stripHtml(String(value||'')).replace(/\s+/g,' ').trim();
+  const p=String(platform||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  if(p) out=out.replace(new RegExp(`\\s*(?:[-–—|]\\s*)?${p}\\s*$`,'i'),'').trim();
+  return out.replace(/\s+(?:on\s+)?(?:Facebook|Instagram|TikTok|LinkedIn|X)\s*$/i,'').trim();
+}
 async function enrichSocialPage(item,platform=''){
   if(!item?.url) return item;
   try{
@@ -375,7 +409,8 @@ async function enrichSocialPage(item,platform=''){
     const p=normalizeSocialPlatform(platform)||socialPlatformFromUrl(finalUrl||item.url)||platform;
     const ogTitle=stripHtml(socialMeta(html,'og:title')||socialMeta(html,'twitter:title')||'');
     const ogDesc=stripHtml(socialMeta(html,'og:description')||socialMeta(html,'twitter:description')||'');
-    const ogImage=absoluteUrl(finalUrl,socialMeta(html,'og:image')||socialMeta(html,'twitter:image')||'')||null;
+    const mediaCandidates=socialMediaCandidates(html,finalUrl||item.url);
+    const ogImage=mediaCandidates.images[0]||absoluteUrl(finalUrl,socialMeta(html,'og:image')||socialMeta(html,'twitter:image')||'')||null;
     let author=''; let text=''; let likeCount=null,commentCount=null;
     let published=null,publishedSource='';
     const timeRaw=firstMatch(html,[
@@ -409,9 +444,9 @@ async function enrichSocialPage(item,platform=''){
       commentCount=socialJsonNumber(html,['comment_count','comments_count']);
     }
     const cleanText=String(text||item.text||'').replace(/\s+/g,' ').trim();
-    const cleanAuthor=String(author||item.author||'').trim();
+    const cleanAuthor=cleanSocialAuthorValue(author||item.author||'',p);
     const compactTitle=cleanAuthor?`${cleanAuthor} — ${p} paylaşımı`:(item.title||`${p} paylaşımı`);
-    return {...item,title:compactTitle,text:cleanText||item.text||'',image:ogImage||item.image||null,published_at:published||item.published_at||null,author:cleanAuthor||item.author||null,raw:{...(item.raw||{}),enriched:true,social_enriched:true,canonical_url:finalUrl||item.url,image_url:ogImage||undefined,image_urls:ogImage?[ogImage]:[],like_count:likeCount??item.raw?.like_count,comments_count:commentCount??item.raw?.comments_count,published_from_page:Boolean(published),published_date_status:published?'verified':'not-found',published_date_source:publishedSource||null,date_parser_version:3}};
+    return {...item,title:compactTitle,text:cleanText||item.text||'',image:ogImage||item.image||null,published_at:published||item.published_at||null,author:cleanAuthor||item.author||null,raw:{...(item.raw||{}),enriched:true,social_enriched:true,canonical_url:finalUrl||item.url,image_url:ogImage||undefined,image_urls:mediaCandidates.images,video_url:mediaCandidates.videos[0]||undefined,video_urls:mediaCandidates.videos,like_count:likeCount??item.raw?.like_count,comments_count:commentCount??item.raw?.comments_count,published_from_page:Boolean(published),published_date_status:published?'verified':'not-found',published_date_source:publishedSource||null,date_parser_version:4}};
   }catch{return item;}
 }
 
