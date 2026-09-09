@@ -175,6 +175,25 @@ function extractSocialProfilesFromHtml(html='', base=''){
   return [...new Map(out.map(x=>[`${x.platform}|${x.url.toLowerCase()}`,x])).values()];
 }
 
+function socialProfileMatchesOrg(profile={}, org={}){
+  const platform=normalizeSocialPlatform(profile?.platform)||socialPlatformFromUrl(profile?.url);
+  const hint=asciiToken(socialProfileSearchHint(profile?.url||'',platform)).replace(/profilephpid\d+/g,'');
+  if(!hint) return false;
+  const identities=[org?.short_name,org?.name,org?.district]
+    .map(x=>asciiToken(String(x||'')))
+    .filter(x=>x.length>=3);
+  const identityTokens=[...new Set(identities.flatMap(x=>x.split(/[^a-z0-9]+/).filter(t=>t.length>=3)))];
+  const protectedGeneric=new Set(['smsii','ii','hii','mmc','rb','idare','idaresi','sistemleri','istismari','su','meliorasiya','adsea']);
+  const meaningful=identityTokens.filter(t=>!protectedGeneric.has(t));
+  if(meaningful.some(t=>hint.includes(t))) return true;
+  // Qısa adın kompakt forması handle daxilində görünürsə güclü siqnaldır.
+  const shortCompact=asciiToken(String(org?.short_name||'')).replace(/[^a-z0-9]+/g,'');
+  if(shortCompact.length>=5 && hint.replace(/[^a-z0-9]+/g,'').includes(shortCompact)) return true;
+  // Mərkəzi ADSEA hesabı istisna olaraq təşkilat adı ilə birbaşa uyğunlaşdırılır.
+  if(identities.some(x=>x.includes('adsea')) && hint.includes('adsea')) return true;
+  return false;
+}
+
 function pilotSocialSeeds(org={}){
   const key=asciiToken(`${org?.short_name||''} ${org?.name||''}`);
   if(key.includes('berde') && key.includes('smsii')) return [
@@ -188,7 +207,9 @@ async function discoverOfficialSocialProfiles(org, allConfiguredSources=[]){
   const existing=(allConfiguredSources||[])
     .filter(s=>isSocialSource(s) && String(s?.organization_id||'')===String(org?.id||''))
     .map(s=>({platform:normalizeSocialPlatform(s?.platform)||socialPlatformFromUrl(s?.url),url:canonicalSocialProfileUrl(s?.url,normalizeSocialPlatform(s?.platform)||socialPlatformFromUrl(s?.url)),name:s?.name||''}))
-    .filter(x=>x.platform&&x.url);
+    // Keçmiş run-larda qlobal/shared saytın sosial linki səhvən bir neçə təşkilata bağlanmış ola bilər.
+    // Belə profilləri discovery-də istifadə etmirik; yalnız təşkilat adı/rayon/handle uyğunluğu olanı saxlayırıq.
+    .filter(x=>x.platform&&x.url&&socialProfileMatchesOrg(x,org));
   const found=[...existing,...pilotSocialSeeds(org)];
   // Yalnız təşkilatın ehtimal edilən rəsmi domenlərinə baxırıq; xəbər saytlarının sosial
   // linklərini səhvən təşkilata bağlamırıq.
@@ -198,7 +219,7 @@ async function discoverOfficialSocialProfiles(org, allConfiguredSources=[]){
     try{
       let html=await fetchText(base,{timeoutMs:5000,retries:0,minGapMs:120}).catch(()=> '');
       if(html.length<800) html=fetchRenderedHtml(base,10000)||html;
-      found.push(...extractSocialProfilesFromHtml(html,base));
+      found.push(...extractSocialProfilesFromHtml(html,base).filter(profile=>socialProfileMatchesOrg(profile,org)));
     }catch{}
   }
   const unique=[...new Map(found.filter(x=>x.platform&&x.url).map(x=>[`${x.platform}|${x.url.toLowerCase()}`,x])).values()];
@@ -1118,8 +1139,12 @@ function buildDomainQueries(org, domain, keyword='') {
 }
 function inferredOrgDomains(org) {
   const out=new Set();
+  // Qlobal 150 Web mənbəni təşkilatın rəsmi domeni saymırıq. Əks halda eyni qlobal
+  // saytın footer-indəki sosial link bütün təşkilatlara səhv profil kimi bağlanırdı.
+  // Yalnız organization_id-si məhz bu təşkilata bağlı Web mənbə rəsmi domen namizədi ola bilər.
   for (const source of (Array.isArray(org?.rss_sources)?org.rss_sources:[])) {
     if(isSocialSource(source)) continue;
+    if(!source?.organization_id || String(source.organization_id)!==String(org?.id||'')) continue;
     const d=domainFromUrl(source?.url||''); if(d && !/google\.com$|bing\.com$/i.test(d)) out.add(d);
   }
   const district=String(org?.district||'').trim().toLocaleLowerCase('az-AZ')
@@ -1621,6 +1646,16 @@ for (const org of plan.organizations) {
       const platformProfiles=socialProfileSources.filter(x=>x.platform===socialPlatform);
       const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank,platformProfiles);
       const collected=[];
+      // Meta token GitHub-a çıxmadan Supabase daxilində məlum rəsmi Facebook/Instagram
+      // profillərini ayrıca yoxlayırıq. Instagram professional hesablarında Business Discovery
+      // real media/permalink/tarix/metadatanı qaytara bilir; Facebook public Page icazəsi yoxdursa
+      // bu çağırış sakitcə failure kimi qeyd olunur və aşağıdakı Web discovery davam edir.
+      if(platformProfiles.length && ['Instagram','Facebook'].includes(socialPlatform)){
+        try{
+          const metaScan=await callMonitor({mode:'meta_public_profile_scan',organization_id:org.id,social_sources:platformProfiles.slice(0,4)},45000,1);
+          console.log(`[${org.short_name}] ${socialPlatform} Meta profil scan: profiles=${Number(metaScan?.profiles||0)} items=${Number(metaScan?.items||0)} inserted=${Number(metaScan?.inserted||0)} failures=${Array.isArray(metaScan?.failures)?metaScan.failures.length:0}`);
+        }catch(e){ console.log(`[${org.short_name}] ${socialPlatform} Meta profil scan keçildi: ${e?.message||e}`); }
+      }
       // Rəsmi/məlum profil URL-ləri varsa axtarış indeksindən əlavə olaraq profilin özündə
       // görünən permalinkləri də best-effort oxuyuruq. Login/challenge olarsa sakitcə public
       // discovery-yə davam edir; digər Web/YouTube axınını dayandırmır.

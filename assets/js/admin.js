@@ -608,14 +608,19 @@ async function loadSourceIndex() {
     pushRows(batch);
     if (batch.length < pageSize) break;
   }
-  // Sosial platformalar ayrıca da oxunur. Bu, köhnə cache/paginasiya vəziyyətində
-  // Facebook/Instagram/TikTok/LinkedIn/X qruplarından birinin paneldə itmə ehtimalını aradan qaldırır.
-  const social = await supabase.from('sources')
-    .select('id,organization_id,platform,url,is_active,created_at')
-    .in('platform',['Facebook','Instagram','TikTok','LinkedIn','X'])
-    .order('created_at',{ascending:false})
-    .limit(500);
-  if (!social.error) pushRows(social.data || []);
+  // Sosial platformaları ayrıca URL üzrə də oxuyuruq. Bəzi köhnə qeydlərdə platform
+  // dəyəri fərqli case/adla yazıla bilər və ya böyük source siyahısının paginasiya pəncərəsindən
+  // kənarda qala bilər. URL domeni burada kanonik həqiqət kimi istifadə olunur; buna görə
+  // Instagram/TikTok/LinkedIn/X bazada olduğu halda paneldən itmir.
+  const socialDomains = ['facebook.com','instagram.com','tiktok.com','linkedin.com','x.com','twitter.com'];
+  for (const domain of socialDomains) {
+    const social = await supabase.from('sources')
+      .select('id,organization_id,platform,url,is_active,created_at')
+      .ilike('url',`%${domain}%`)
+      .order('created_at',{ascending:false})
+      .limit(1000);
+    if (!social.error) pushRows(social.data || []);
+  }
   sourceIndex = rows.sort((a,b)=>String(b?.created_at||'').localeCompare(String(a?.created_at||'')));
 }
 

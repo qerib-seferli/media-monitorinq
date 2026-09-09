@@ -409,6 +409,35 @@ Deno.serve(async (req) => {
       return json({ok:true,run_id:runId,mode:'social_source_upsert',organization:org.short_name,received:rows.length,inserted:insertedCount,existing:existingCount,updated:updatedCount,sources:saved.slice(0,24)},200);
     }
 
+    // Təşkilata bağlı məlum sosial profillər üçün Meta-side dərin scan. Bu mode GitHub
+    // gateway-dən hər təşkilat üçün kiçik paketlə çağırılır; token GitHub-a çıxmır və Supabase
+    // secret-də qalır. Instagram professional profilləri Business Discovery ilə yoxlanır.
+    // Facebook public Page üçün icazə/app-review varsa Graph cavabı istifadə olunur; yoxdursa
+    // xəta run-u qırmır və Web discovery fallback olaraq qalır.
+    if (options.mode === 'meta_public_profile_scan') {
+      const org = orgs.find((x:any)=>String(x.id)===String(options.organization_id||''));
+      if (!org) return json({ok:false,run_id:runId,mode:'meta_public_profile_scan',error:'Təşkilat tapılmadı'},200);
+      const token = Deno.env.get('META_ACCESS_TOKEN') || '';
+      const appSecret = Deno.env.get('META_APP_SECRET') || '';
+      if (!token || !appSecret) return json({ok:false,run_id:runId,mode:'meta_public_profile_scan',setup_required:true,error:'Meta secret-ləri tam deyil.'},200);
+      try {
+        const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
+        const keywords = installKeywordContext(org, activeKeywordRows);
+        const villages = org.district_id ? await fetchDistrictPlaceNames(admin, org.district_id).catch(()=>[]) : [];
+        const aliases = await fetchOrganizationAliases(admin, org.id, 500).catch(()=>[]);
+        org.aliases = aliases;
+        const scan = await metaPublicProfileItems(token, appSecret, options.social_sources);
+        let inserted=0;
+        for(const wrapped of scan.items){
+          const source={id:null,platform:wrapped.platform,url:wrapped.profile_url||'',name:wrapped.source||wrapped.platform,is_active:true};
+          inserted += await safeSave(admin,org,source,wrapped.item,keywords,villages,errors,org.short_name,wrapped.source||wrapped.platform);
+        }
+        return json({ok:true,run_id:runId,mode:'meta_public_profile_scan',organization:org.short_name,profiles:scan.profiles,items:scan.items.length,instagram_items:scan.instagram_items,facebook_items:scan.facebook_items,inserted,failures:scan.failures,errors},200);
+      } catch(e) {
+        return json({ok:false,run_id:runId,mode:'meta_public_profile_scan',organization:org.short_name,error:errorInfo(e).message,errors},200);
+      }
+    }
+
     // Meta monitoru təşkilatların ağır sources/alias/service-point kontekstini yükləməzdən
     // əvvəl işləyir. Meta Graph API materiallarının uyğunluq yoxlaması üçün təşkilatın əsas
     // məlumatları, açar-söz bankı və rayon yaşayış məntəqələri kifayətdir. Bu erkən çıxış
@@ -566,6 +595,7 @@ Deno.serve(async (req) => {
             .filter((source:any)=>source?.is_active !== false)
             .map((source:any)=>({
               id:String(source?.id || ''),
+              organization_id:source?.organization_id ? String(source.organization_id) : null,
               platform:String(source?.platform || ''),
               url:String(source?.url || ''),
               name:String(source?.name || source?.platform || source?.url || '')
@@ -1407,7 +1437,11 @@ async function fetchOrganizationSources(admin:any, _organizationId:string, mode:
     if (result?.error) throw result.error;
     const batch = Array.isArray(result?.data) ? result.data : [];
     for(const row of batch){
-      const key=`${String(row?.platform||'').toLowerCase()}|${String(row?.url||'').replace(/\/+$/,'').toLowerCase()}`;
+      const platform=canonicalPlatform(String(row?.platform||inferPlatform(String(row?.url||''))));
+      const social=['Facebook','Instagram','TikTok','LinkedIn','X'].includes(platform);
+      // Sosial profil eyni URL ilə fərqli təşkilatlara aid ola bilər; organization_id-ni
+      // dedupe açarına daxil etməsək bir təşkilatın profili başqa təşkilatın planından itir.
+      const key=`${platform.toLowerCase()}|${String(row?.url||'').replace(/\/+$/,'').toLowerCase()}${social?`|${String(row?.organization_id||'global')}`:''}`;
       if(!row?.url || seen.has(key)) continue;
       seen.add(key); rows.push(row);
     }
@@ -1990,6 +2024,77 @@ async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1)
     }catch(e){failures.push({platform:'Instagram',page:pageName,...errorInfo(e)});}
   }
   return {items:out,pages:pages.length,instagram_accounts:instagramAccounts,facebook_items:facebookItems,instagram_items:instagramItems,failures};
+}
+
+
+function metaProfileUsername(value:string, platform:string):string {
+  try {
+    const u=new URL(String(value||''));
+    if(platform==='Instagram') return (u.pathname.split('/').filter(Boolean)[0]||'').replace(/^@/,'');
+    if(platform==='Facebook') {
+      const id=u.searchParams.get('id'); if(id) return id;
+      return u.pathname.split('/').filter(Boolean)[0]||'';
+    }
+  } catch {}
+  return '';
+}
+
+async function metaPublicProfileItems(userToken:string, appSecret:string, socialSources:{platform:string;url:string;name:string}[]):Promise<{items:any[];profiles:number;instagram_items:number;facebook_items:number;failures:any[]}> {
+  const items:any[]=[]; const failures:any[]=[];
+  const requested=(Array.isArray(socialSources)?socialSources:[]).filter(x=>['Instagram','Facebook'].includes(canonicalPlatform(x?.platform||inferPlatform(x?.url||''))));
+  if(!requested.length) return {items,profiles:0,instagram_items:0,facebook_items:0,failures};
+  let managedIgId=''; let managedPageToken='';
+  try {
+    const accounts=await metaGraph(`me/accounts?fields=id,name,access_token&limit=100`,userToken,appSecret);
+    for(const page of (Array.isArray(accounts?.data)?accounts.data:[])) {
+      const pageToken=String(page?.access_token||''); if(!pageToken) continue;
+      managedPageToken ||= pageToken;
+      if(!managedIgId){
+        try {
+          const link=await metaGraph(`${page.id}?fields=instagram_business_account{id,username}`,pageToken,appSecret);
+          if(link?.instagram_business_account?.id) managedIgId=String(link.instagram_business_account.id);
+        } catch {}
+      }
+      if(managedIgId && managedPageToken) break;
+    }
+  } catch(e) { failures.push({stage:'managed-assets',...errorInfo(e)}); }
+
+  let instagramItems=0, facebookItems=0, profiles=0;
+  for(const source of requested.slice(0,8)){
+    const platform=canonicalPlatform(source?.platform||inferPlatform(source?.url||''));
+    const profileUrl=String(source?.url||'');
+    if(platform==='Instagram'){
+      const username=metaProfileUsername(profileUrl,'Instagram');
+      if(!username || !managedIgId || !managedPageToken) continue;
+      try{
+        const fields=`business_discovery.username(${username}){id,username,name,followers_count,media.limit(50){id,caption,media_type,media_product_type,permalink,timestamp,comments_count,like_count,thumbnail_url}}`;
+        const data=await metaGraph(`${managedIgId}?fields=${encodeURIComponent(fields)}`,managedPageToken,appSecret);
+        const bd=data?.business_discovery; if(!bd?.id) continue; profiles++;
+        for(const media of (Array.isArray(bd?.media?.data)?bd.media.data:[])){
+          const caption=String(media?.caption||'');
+          const permalink=String(media?.permalink||profileUrl);
+          items.push({platform:'Instagram',profile_url:profileUrl,source:`Instagram: @${bd?.username||username}`,item:{
+            title:caption.slice(0,180)||`@${bd?.username||username} Instagram paylaşımı`,text:caption,url:permalink,published_at:media?.timestamp||null,image:media?.thumbnail_url||null,author:`@${bd?.username||username}`,
+            raw:{kind:'instagram_business_discovery_media',provider:'Meta Graph API Business Discovery',trusted_org_profile:true,profile_url:profileUrl,instagram_user_id:bd?.id||null,username:bd?.username||username,media_id:media?.id||null,media_type:media?.media_type||null,media_product_type:media?.media_product_type||null,comments_count:Number(media?.comments_count||0),like_count:Number(media?.like_count||0),followers_count:Number(bd?.followers_count||0)}
+          }}); instagramItems++;
+        }
+      }catch(e){failures.push({platform:'Instagram',profile:username,...errorInfo(e)});}
+    } else if(platform==='Facebook'){
+      const ref=metaProfileUsername(profileUrl,'Facebook'); if(!ref) continue;
+      try{
+        const data=await metaGraph(`${ref}?fields=id,name,posts.limit(50){id,message,created_time,permalink_url,shares,reactions.limit(0).summary(true),comments.limit(0).summary(true)}`,managedPageToken||userToken,appSecret);
+        if(!data?.id) continue; profiles++;
+        for(const post of (Array.isArray(data?.posts?.data)?data.posts.data:[])){
+          const text=String(post?.message||''); const permalink=String(post?.permalink_url||profileUrl);
+          items.push({platform:'Facebook',profile_url:profileUrl,source:`Facebook: ${data?.name||source?.name||ref}`,item:{
+            title:text.slice(0,180)||`${data?.name||'Facebook'} paylaşımı`,text,url:permalink,published_at:post?.created_time||null,author:data?.name||null,
+            raw:{kind:'facebook_public_page_post',provider:'Meta Graph API',trusted_org_profile:true,profile_url:profileUrl,page_id:data?.id||null,post_id:post?.id||null,reaction_count:Number(post?.reactions?.summary?.total_count||0),comment_count:Number(post?.comments?.summary?.total_count||0),share_count:Number(post?.shares?.count||0)}
+          }}); facebookItems++;
+        }
+      }catch(e){failures.push({platform:'Facebook',profile:ref,...errorInfo(e)});}
+    }
+  }
+  return {items,profiles,instagram_items:instagramItems,facebook_items:facebookItems,failures};
 }
 
 function canonicalPlatform(value:string) {
@@ -3784,6 +3889,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const kind=String(raw.kind||'');
   const isComment=kind.includes('comment');
   const trustedParentComment = isComment && raw.parent_is_relevant === true;
+  // Təşkilata organization_id ilə bağlanmış və ayrıca profil uyğunluğu yoxlanmış rəsmi
+  // sosial profil paylaşımı özü güclü aidiyyət siqnalıdır. Belə postun mətnində təşkilat adı
+  // hər dəfə təkrarlanmadığı üçün adi keyword filtri onu itirməməlidir.
+  const trustedOrgProfile = raw.trusted_org_profile === true;
 
   // Aidiyyəti video təşkilat filtrlərindən artıq keçibsə, onun bütün rəyləri saxlanılır.
   // Rəyin özündə "Bərdə" və ya "suvarma" sözünün təkrarlanmaması vacib məlumatı itirməsin.
@@ -3906,7 +4015,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const hardForeignScript = /[\u0370-\u03FF\u0590-\u05FF\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(`${item.title||''} ${item.text||''}`);
   const foreignScriptRejected = hardForeignScript && strongDirectMatches.length===0 && !locationHit && !coreTopicHit && !azerbaijanContext;
 
-  const accepted = !ownPortalNoise && !excludedByRule && !foreignScriptRejected && (trustedParentComment || (!negativeOnly && !foreignHit && (
+  const standardAccepted = !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
     strongDirectMatches.length>0 ||
     ambiguousDirectSafe ||
     safeCuratedBankHit ||
@@ -3915,6 +4024,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     historicalQueryTopicHit ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
   )));
+  const accepted = !ownPortalNoise && !foreignScriptRejected && (trustedOrgProfile || standardAccepted);
 
   const matches=[...new Set([
     ...directMatches,
