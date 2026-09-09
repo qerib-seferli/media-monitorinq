@@ -82,7 +82,20 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], pro
   if(!domains.length) return [];
   const identities=[org?.short_name,org?.name,...aliasBank.slice(0,12)].map(x=>String(x||'').trim()).filter(x=>x.length>=3);
   const district=String(org?.district||'').trim();
-  const keywordTerms=[...new Set((keywordBank||[]).map(x=>String(x||'').trim()).filter(x=>x.length>=4))].slice(0,20);
+  // news_plan artıq aktiv/prioritet bankla yanaşı ehtiyat bankından rotasiya
+  // pəncərəsi də verir. Burada `.slice(0,20)` etmək həmin böyük bankı faktiki olaraq
+  // ilk 20 sətrə kilidləyirdi. Platforma+təşkilat+shard üzrə fərqli başlanğıc seçib
+  // bütün verilmiş pəncərəni mərhələli gəzdiririk.
+  const allKeywordTerms=[...new Set((keywordBank||[]).map(x=>String(x||'').trim()).filter(x=>x.length>=4))];
+  const rotationKey=`${org?.id||org?.short_name||''}|${platform}|${SOURCE_SHARD_INDEX}|${QUERY_PASS}`;
+  const rotationSeed=[...rotationKey].reduce((n,ch)=>((n*33)+ch.charCodeAt(0))>>>0,5381);
+  const rotationBucket=Math.floor(Date.now()/(15*60*1000));
+  const keywordWindowSize=Math.min(allKeywordTerms.length,FULL_RADAR?32:16);
+  const keywordTerms=[];
+  if(allKeywordTerms.length){
+    const start=(rotationSeed + rotationBucket*Math.max(1,keywordWindowSize)) % allKeywordTerms.length;
+    for(let i=0;i<keywordWindowSize;i++) keywordTerms.push(allKeywordTerms[(start+i)%allKeywordTerms.length]);
+  }
   const base=[...new Set(identities)].slice(0,12);
   const priority=[];
   const extras=[];
@@ -102,7 +115,7 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], pro
       extras.push(`site:${domain} "${district.replace(/"/g,'')}" "ADSEA"`);
       extras.push(`site:${domain} "${district.replace(/"/g,'')}" (suvarma OR meliorasiya OR SMSİİ OR su)`);
     }
-    for(const topic of keywordTerms.slice(0,8)) extras.push(`site:${domain} "${String(topic).replace(/"/g,'')}" ${district?`"${district.replace(/"/g,'')}"`:''}`.trim());
+    for(const topic of keywordTerms) extras.push(`site:${domain} "${String(topic).replace(/"/g,'')}" ${district?`"${district.replace(/"/g,'')}"`:''}`.trim());
   }
   const must=[...new Set(priority)].filter(Boolean);
   const pool=[...new Set(extras)].filter(Boolean).filter(q=>!must.includes(q));
@@ -1593,7 +1606,7 @@ for (const org of plan.organizations) {
   const googleQueries = DEEP_BACKFILL
     ? deepArchiveQueries(org, googleBaseQueries).slice(0,8)
     : googleBaseQueries;
-  console.log(`[${org.short_name}] Discovery bankı: ${Number(org.keyword_count||keywordBank.length)} açar söz + ${Number(org.village_count||0)} kənd + ${Number(org.alias_count||0)} alias | bu keçid: keyword=${keywordQueries.length}, village=${villageQueries.length}, alias=${aliasQueries.length}`);
+  console.log(`[${org.short_name}] Discovery bankı: ${Number(org.keyword_count||keywordBank.length)} aktiv/rotasiya söz + ${Number(org.reserve_keyword_count||0)} ehtiyat bank (${Number(org.reserve_keyword_window||0)} bu pəncərədə) + ${Number(org.active_exclude_count||0)} aktiv filtr + ${Number(org.village_count||0)} kənd + ${Number(org.alias_count||0)} alias | bu keçid: keyword=${keywordQueries.length}, village=${villageQueries.length}, alias=${aliasQueries.length}`);
   console.log(`[${org.short_name}] Web discovery sorğuları: ${webQueries.join(' || ')}`);
   console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
 

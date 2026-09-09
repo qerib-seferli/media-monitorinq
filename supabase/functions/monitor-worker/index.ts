@@ -581,11 +581,18 @@ Deno.serve(async (req) => {
         // Hər təşkilatın aktiv açar söz bankını və kəndlərini ayrıca oxuyub GitHub
         // gateway-ə rotasiya olunan axtarış bankı veririk. Beləliklə admin paneldə
         // əlavə edilən açar sözlər növbəti discovery run-larında avtomatik işləyir.
-        const keywordRows = await fetchOrganizationKeywords(admin, String(org.id), 12000);
+        // Discovery yalnız aktiv/prioritet sözlərlə məhdudlaşmır. Admin paneldəki
+        // ehtiyat/arxiv bankından təhlükəsiz rotasiya pəncərəsi də götürülür; aktiv
+        // `exclude` qeydləri isə match/save mərhələsində tam filtr kimi qalır.
+        // Beləliklə böyük qlobal bank zamanla sosial/Web discovery-yə daxil olur,
+        // amma minlərlə sözü bir run-da axtarıb worker-i yükləmirik.
+        const keywordRows = await fetchOrganizationMatchKeywords(admin, org, 5000);
         const positiveKeywords = keywordRows
           .filter((k:any)=>String(k?.kind || '').toLowerCase() !== 'exclude')
           .map((k:any)=>String(k?.value || '').trim())
           .filter(Boolean);
+        const excludeCount = keywordRows
+          .filter((k:any)=>String(k?.kind || '').toLowerCase() === 'exclude').length;
 
         const villageNames:string[] = org.district_id
           ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
@@ -604,6 +611,9 @@ Deno.serve(async (req) => {
           village_count:villageNames.length,
           alias_count:Array.isArray(org.aliases)?org.aliases.length:0,
           keyword_count:positiveKeywords.length,
+          active_exclude_count:excludeCount,
+          reserve_keyword_count:Number(org.__reserve_keyword_count || 0),
+          reserve_keyword_window:Number(org.__reserve_keyword_window || 0),
           rss_sources:(Array.isArray(org.sources)?org.sources:[])
             .filter((source:any)=>source?.is_active !== false)
             .map((source:any)=>({
