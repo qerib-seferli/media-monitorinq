@@ -573,13 +573,17 @@ function sourcePlatformLabel(key) {
 }
 
 function sourcePlatformFromUrl(value='') {
-  const v=String(value||'').trim().toLowerCase();
-  if(/(^|\.)youtube\.com|youtu\.be/.test(v)) return 'YouTube';
-  if(/(^|\.)facebook\.com/.test(v)) return 'Facebook';
-  if(/(^|\.)instagram\.com/.test(v)) return 'Instagram';
-  if(/(^|\.)tiktok\.com/.test(v)) return 'TikTok';
-  if(/(^|\.)linkedin\.com/.test(v)) return 'LinkedIn';
-  if(/(^|\.)x\.com|(^|\.)twitter\.com/.test(v)) return 'X';
+  const raw=String(value||'').trim();
+  if(!raw) return '';
+  let host='';
+  try { host=new URL(raw).hostname.toLowerCase().replace(/^www\./,''); }
+  catch { host=raw.toLowerCase().replace(/^https?:\/\//,'').split('/')[0].replace(/^www\./,''); }
+  if(host==='youtube.com'||host.endsWith('.youtube.com')||host==='youtu.be'||host.endsWith('.youtu.be')) return 'YouTube';
+  if(host==='facebook.com'||host.endsWith('.facebook.com')) return 'Facebook';
+  if(host==='instagram.com'||host.endsWith('.instagram.com')) return 'Instagram';
+  if(host==='tiktok.com'||host.endsWith('.tiktok.com')) return 'TikTok';
+  if(host==='linkedin.com'||host.endsWith('.linkedin.com')) return 'LinkedIn';
+  if(host==='x.com'||host.endsWith('.x.com')||host==='twitter.com'||host.endsWith('.twitter.com')) return 'X';
   return '';
 }
 
