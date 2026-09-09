@@ -48,6 +48,51 @@ const ORG_ROTATION_BUCKET = process.env.NEWS_ORG_ROTATION_BUCKET !== undefined ?
 const GATEWAY_STARTED_AT = Date.now();
 const GATEWAY_BUDGET_MS = Math.max(60_000, Math.min(1_800_000, Number(process.env.NEWS_GATEWAY_BUDGET_MS || 0))) || 0;
 const GATEWAY_SAFETY_MS = 20_000;
+
+const SOCIAL_PLATFORM_DOMAINS = {
+  Facebook: ['facebook.com'],
+  Instagram: ['instagram.com'],
+  TikTok: ['tiktok.com'],
+  LinkedIn: ['linkedin.com'],
+  X: ['x.com','twitter.com']
+};
+function normalizeSocialPlatform(value=''){
+  const v=String(value||'').trim().toLowerCase();
+  if(v.includes('facebook')) return 'Facebook';
+  if(v.includes('instagram')) return 'Instagram';
+  if(v.includes('tiktok')) return 'TikTok';
+  if(v.includes('linkedin') || v.includes('linked in')) return 'LinkedIn';
+  if(v==='x' || v.includes('twitter')) return 'X';
+  return '';
+}
+function socialPlatformFromUrl(value=''){
+  const v=String(value||'').toLowerCase();
+  if(v.includes('facebook.com/')) return 'Facebook';
+  if(v.includes('instagram.com/')) return 'Instagram';
+  if(v.includes('tiktok.com/')) return 'TikTok';
+  if(v.includes('linkedin.com/')) return 'LinkedIn';
+  if(v.includes('x.com/') || v.includes('twitter.com/')) return 'X';
+  return '';
+}
+function isSocialSource(source={}){
+  return Boolean(normalizeSocialPlatform(source?.platform) || socialPlatformFromUrl(source?.url));
+}
+function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[]){
+  const domains=SOCIAL_PLATFORM_DOMAINS[platform]||[];
+  if(!domains.length) return [];
+  const identities=[org?.short_name,org?.name,...aliasBank.slice(0,4)].map(x=>String(x||'').trim()).filter(x=>x.length>=3);
+  const topic=keywordBank.find(x=>String(x||'').trim().length>=4) || '';
+  const district=String(org?.district||'').trim();
+  const base=[...new Set(identities)].slice(0,4);
+  const queries=[];
+  for(const domain of domains){
+    for(const ident of base.slice(0,2)) queries.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
+    if(district) queries.push(`site:${domain} "${district.replace(/"/g,'')}" (suvarma OR meliorasiya OR SMSİİ OR ADSEA)`);
+    if(topic) queries.push(`site:${domain} "${String(topic).replace(/"/g,'')}" ${district?`"${district.replace(/"/g,'')}"`:''}`.trim());
+  }
+  return [...new Set(queries)].slice(0,FULL_RADAR?6:2);
+}
+
 function gatewayBudgetLow() {
   return GATEWAY_BUDGET_MS > 0 && (Date.now() - GATEWAY_STARTED_AT) >= Math.max(1_000, GATEWAY_BUDGET_MS - GATEWAY_SAFETY_MS);
 }
@@ -1333,7 +1378,9 @@ for (const org of plan.organizations) {
   const broadWebItems=[];
   const domainWebItems=[];
   const directWebItems=[];
-  const configuredSources=[...(Array.isArray(org.rss_sources)?org.rss_sources:[])];
+  const allConfiguredSources=[...(Array.isArray(org.rss_sources)?org.rss_sources:[])];
+  const activeSocialPlatforms=[...new Set(allConfiguredSources.map(x=>normalizeSocialPlatform(x?.platform)||socialPlatformFromUrl(x?.url)).filter(Boolean))];
+  const configuredSources=allConfiguredSources.filter(source=>!isSocialSource(source));
   for(const domain of inferredOrgDomains(org)){
     if(!configuredSources.some(x=>domainFromUrl(x?.url||'')===domain)) configuredSources.push({platform:'Web',url:`https://${domain}/`,name:`${domain} birbaşa sayt`});
   }
@@ -1392,6 +1439,30 @@ for (const org of plan.organizations) {
         broadWebItems.push(...keepDiscoveryItems(await bingWeb(q,page)));
       }
     } catch (e) { totalFailures++; console.log(`[${org.short_name}] Bing discovery xəta (${q}):`, e?.message||e); }
+  }
+
+  const socialItemsByPlatform=new Map();
+  if(!SITEMAP_FOCUS && activeSocialPlatforms.length){
+    for(const socialPlatform of activeSocialPlatforms){
+      if(gatewayBudgetLow()) break;
+      const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank);
+      const collected=[];
+      for(const q of queries){
+        if(gatewayBudgetLow()) break;
+        try{
+          const rows=await bingWeb(q,0);
+          const exact=dedupe((rows||[]).filter(item=>socialPlatformFromUrl(item?.url||'')===socialPlatform));
+          for(const item of exact){
+            collected.push({...item,published_at:null,raw:{...(item?.raw||{}),kind:'public_social_discovery',social_platform:socialPlatform,discovery_query:q,provider:'Bing Web RSS'}});
+          }
+          console.log(`[${org.short_name}] ${socialPlatform} public discovery: ${exact.length} | ${q}`);
+        }catch(e){
+          totalFailures++;
+          console.log(`[${org.short_name}] ${socialPlatform} discovery xəta (${q}): ${e?.message||e}`);
+        }
+      }
+      socialItemsByPlatform.set(socialPlatform,dedupe(collected).slice(0,Math.min(40,MAX_INGEST_ITEMS)));
+    }
   }
 
   const shardPool=sourceShard(configuredSources);
@@ -1497,7 +1568,7 @@ for (const org of plan.organizations) {
     ...domainWebItems,
     ...googleItems,
     ...broadWebItems
-  ]);
+  ]).filter(item=>!socialPlatformFromUrl(item?.url||''));
   const unifiedWebItems=allWebCandidates
     .map(item=>DEEP_BACKFILL ? ({...item,raw:{...(item?.raw||{}),historical_backfill:true,recent_priority:RECENT_PRIORITY,archive_year_start:ARCHIVE_YEAR_START,archive_year_end:ARCHIVE_YEAR_END,archive_slice:archiveWindowForShard(`${org?.id||''}-${item?.url||item?.title||''}`).label}}) : item)
     .map((item,index)=>({item,index,score:relevanceRank(item)}))
@@ -1509,7 +1580,10 @@ for (const org of plan.organizations) {
 
   const screenshotQueue=[];
   const batches = [
-    {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems}
+    {platform:'Web',label:'Web / Xəbər — Google News + Bing + RSS / GitHub Gateway',items:unifiedWebItems,enrich:true},
+    ...[...socialItemsByPlatform.entries()]
+      .filter(([,items])=>Array.isArray(items)&&items.length)
+      .map(([platform,items])=>({platform,label:`${platform} — qlobal public discovery`,items,enrich:false}))
   ];
 
   for (const batch of batches) {
@@ -1533,6 +1607,7 @@ for (const org of plan.organizations) {
     // Yalnız filtrdən keçmiş materialların öz səhifəsini açıb tam mətni, tarix/müəllif
     // və əsas xəbər şəklini dəqiqləşdiririk. Beləliklə axtarış snippet-i orijinal mətn kimi saxlanmır.
     const acceptedTargets=Array.isArray(result?.accepted_targets)?result.accepted_targets:[];
+    if(batch.enrich===false) continue;
     for (const target of acceptedTargets.slice(0,MAX_ENRICH_ITEMS)) {
       const enriched=await enrichPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:target.image||null,author:target.author||null,raw:target.raw||{}});
       try {

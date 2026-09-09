@@ -1951,9 +1951,13 @@ document.querySelector('#source-form').onsubmit = async e => {
   const duplicateResult = await duplicateQuery;
   if (duplicateResult.error) return toast(duplicateResult.error.message,'error');
   if ((duplicateResult.count || 0) > 0) return toast(googleNews ? 'Qlobal Google News RSS artıq mövcuddur.' : 'Bu qlobal mənbə artıq mövcuddur.', 'error');
-  const { error } = await supabase.from('sources').insert({organization_id:null,platform,url,is_active:true});
+  const { data:created, error } = await supabase.from('sources').insert({organization_id:null,platform,url,is_active:true}).select('id,organization_id,platform,url,is_active,created_at').single();
   toast(error ? error.message : 'Qlobal mənbə əlavə edildi',error?'error':'success');
-  if(!error){e.target.reset();await refresh();}
+  if(!error){
+    e.target.reset();
+    if(created){ sourceIndex=[created,...sourceIndex.filter(x=>String(x.id)!==String(created.id))]; renderSources(); renderMetrics(); }
+    await refresh();
+  }
 };
 document.querySelector('#alias-form').onsubmit = async e => {
   e.preventDefault(); const parsed=parseOrganizationUnitSelection(document.querySelector('#alias-org').value); const alias=document.querySelector('#alias-value').value.trim(); const alias_type=document.querySelector('#alias-type').value; if((!parsed.organization_id&&!parsed.service_point_id)||!alias)return;
