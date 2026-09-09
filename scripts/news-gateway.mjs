@@ -48,6 +48,8 @@ const ORG_ROTATION_BUCKET = process.env.NEWS_ORG_ROTATION_BUCKET !== undefined ?
 const GATEWAY_STARTED_AT = Date.now();
 const GATEWAY_BUDGET_MS = Math.max(60_000, Math.min(1_800_000, Number(process.env.NEWS_GATEWAY_BUDGET_MS || 0))) || 0;
 const GATEWAY_SAFETY_MS = 20_000;
+const BRAVE_DISCOVERY_BUDGET = Math.max(0, Math.min(FULL_RADAR ? 12 : 4, Number(process.env.NEWS_BRAVE_REQUEST_BUDGET ?? (FULL_RADAR ? 8 : 2))));
+let braveRequestsUsed = 0;
 
 const SOCIAL_PLATFORM_DOMAINS = {
   Facebook: ['facebook.com'],
@@ -414,6 +416,46 @@ async function callMonitor(body, timeoutMs = 35000, retries = 2) {
   }
   throw lastError || new Error('monitor-worker çağırışı uğursuz oldu');
 }
+
+async function bravePublicDiscovery(queries=[], {count=10,freshness=''}={}){
+  const clean=[...new Set((queries||[]).map(q=>String(q||'').replace(/\s+/g,' ').trim()).filter(Boolean))];
+  const remaining=Math.max(0,BRAVE_DISCOVERY_BUDGET-braveRequestsUsed);
+  const selected=clean.slice(0,Math.min(remaining,2));
+  if(!selected.length) return {results:[],queries:0,skipped:true};
+  braveRequestsUsed += selected.length;
+  try{
+    const response=await callMonitor({mode:'brave_public_search',search_queries:selected,search_count:Math.max(1,Math.min(20,count)),search_freshness:freshness},30000,1);
+    if(response?.setup_required){
+      console.log('Brave Search secret tapılmadı; public discovery mövcud Bing/Web fallback ilə davam edir.');
+      return {results:[],queries:selected.length,setup_required:true};
+    }
+    if(Array.isArray(response?.errors)&&response.errors.length){
+      const first=response.errors[0];
+      console.log(`Brave Search xəbərdarlıq: ${first?.message||'naməlum xəta'}`);
+    }
+    return {results:Array.isArray(response?.results)?response.results:[],queries:selected.length,failures:Number(response?.failures||0)};
+  }catch(e){
+    console.log(`Brave Search gateway xəta: ${e?.message||e}`);
+    return {results:[],queries:selected.length,failures:1};
+  }
+}
+
+async function directSocialPostFromDiscoveredUrl(url,platform,org){
+  const provisional={
+    title:`${org?.short_name||org?.name||'Təşkilat'} — ${platform} paylaşımı`,
+    text:'',url,published_at:null,image:null,author:null,
+    raw:{kind:'public_social_direct_page',social_platform:platform,public_social:true,direct_source_fetch:true}
+  };
+  const enriched=await enrichPage(provisional).catch(()=>provisional);
+  const title=String(enriched?.title||'').trim();
+  const text=String(enriched?.text||'').trim();
+  // Brave cavabının snippet/title hissəsini bazaya daşımırıq. Yalnız sosial URL-nin öz
+  // səhifəsindən ayrıca oxuna bilən məzmun varsa ingest-ə verilir.
+  const hasDirectContent=Boolean(enriched?.raw?.enriched===true && (text.length>=30 || (title && title!==provisional.title)));
+  if(!hasDirectContent) return null;
+  return {...enriched,raw:{...(enriched.raw||{}),kind:'public_social_direct_page',social_platform:platform,public_social:true,direct_source_fetch:true}};
+}
+
 
 function chunks(items, size = 10) {
   const rows = Array.isArray(items) ? items : [];
@@ -1703,11 +1745,13 @@ for (const org of plan.organizations) {
       // boşluğu aradan qalxır və bir təşkilatın profili digərinə qarışmır.
       const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank,officialSocialProfiles);
       const collected=[];
+      let bingSocialHits=0;
       for(const q of queries){
         if(gatewayBudgetLow()) break;
         try{
           const rows=await bingWeb(q,0);
           const exact=dedupe((rows||[]).filter(item=>socialPlatformFromUrl(item?.url||'')===socialPlatform));
+          bingSocialHits += exact.length;
           for(const item of exact){
             const profileUrl=canonicalSocialProfileUrl(item?.url||'',socialPlatform);
             if(profileUrl && socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl},item,org)){
@@ -1722,6 +1766,38 @@ for (const org of plan.organizations) {
         }catch(e){
           totalFailures++;
           console.log(`[${org.short_name}] ${socialPlatform} discovery xəta (${q}): ${e?.message||e}`);
+        }
+      }
+      // Bing public index bu platforma üçün heç nə qaytarmayıbsa, Supabase Secret-də
+      // saxlanan Brave Search API-ni yalnız discovery fallback kimi işlədirik. Fast-watch-da
+      // sərt request büdcəsi var; beləliklə pulsuz aylıq kredit kor-koranə 11 min sözə xərclənmir.
+      // Hər platformada bir rotasiya olunan təşkilat-spesifik sorğu seçilir. Brave title/snippet
+      // bazaya yazılmır: profil URL-si deep-scan üçün reyestrə namizəd olur, post URL-si isə
+      // yalnız həmin sosial səhifənin özündən ayrıca oxuna bilirsə ingest edilir.
+      if(!bingSocialHits && queries.length && braveRequestsUsed<BRAVE_DISCOVERY_BUDGET && !gatewayBudgetLow()){
+        const platformPriority=['Facebook','Instagram','TikTok','X','LinkedIn'];
+        const priorityIndex=platformPriority.indexOf(socialPlatform);
+        const fastEligible=FULL_RADAR || priorityIndex<2 || braveRequestsUsed<Math.max(0,BRAVE_DISCOVERY_BUDGET-1);
+        if(fastEligible){
+          const bucket=Math.floor(Date.now()/(15*60*1000));
+          const pickIndex=(Math.max(0,priorityIndex)+bucket+SOURCE_SHARD_INDEX+QUERY_PASS)%queries.length;
+          const braveQuery=queries[pickIndex]||queries[0];
+          const brave=await bravePublicDiscovery([braveQuery],{count:12,freshness:RECENT_PRIORITY?'py':''});
+          const exactBrave=dedupe((brave.results||[]).filter(item=>socialPlatformFromUrl(item?.url||'')===socialPlatform));
+          let directAccepted=0;
+          for(const item of exactBrave){
+            const transient={title:item?.title||'',text:item?.description||'',url:item?.url||''};
+            const profileUrl=canonicalSocialProfileUrl(item?.url||'',socialPlatform);
+            if(profileUrl && socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl},transient,org)){
+              discoveredSocialProfiles.push({platform:socialPlatform,url:profileUrl,name:`${org.short_name||org.name} ${socialPlatform}`});
+            }
+            if(profileUrl && !isSocialPostUrl(item?.url||'',socialPlatform)) continue;
+            if(isSocialPostUrl(item?.url||'',socialPlatform)){
+              const direct=await directSocialPostFromDiscoveredUrl(item.url,socialPlatform,org);
+              if(direct){ collected.push(direct); directAccepted++; }
+            }
+          }
+          console.log(`[${org.short_name}] ${socialPlatform} Brave discovery: ${exactBrave.length} URL, direct=${directAccepted}, büdcə=${braveRequestsUsed}/${BRAVE_DISCOVERY_BUDGET} | ${braveQuery}`);
         }
       }
       socialItemsByPlatform.set(socialPlatform,dedupe(collected).slice(0,Math.min(40,MAX_INGEST_ITEMS)));

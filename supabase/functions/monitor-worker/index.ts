@@ -364,6 +364,54 @@ Deno.serve(async (req) => {
     // profil URL-lərini mövcud sources cədvəlində organization_id ilə saxlayır. Yeni cədvəl
     // və migration tələb etmir; qlobal facebook.com/instagram.com kökləri isə organization_id=NULL
     // olaraq platforma aktivləşdiricisi kimi qalır.
+    // Brave Search API public discovery proxy. API açarı yalnız Supabase Secret-də qalır;
+    // GitHub Actions-a ötürülmür. Bu mode heç nə bazaya yazmır və Brave cavabını raw_payload
+    // kimi saxlamır: yalnız həmin run daxilində sosial URL kəşfi üçün kiçik, müvəqqəti nəticə
+    // paketi qaytarır. Beləliklə Search API public discovery kanalı mövcud sərt ingest filtrindən
+    // ayrılmır və YouTube/Web/Meta axınlarına toxunmur.
+    if (options.mode === 'brave_public_search') {
+      const braveKey = Deno.env.get('BRAVE_SEARCH_API_KEY') || '';
+      if (!braveKey) return json({ok:false,run_id:runId,mode:'brave_public_search',setup_required:true,error:'BRAVE_SEARCH_API_KEY tapılmadı.'},200);
+      const queries = (Array.isArray(options.search_queries) ? options.search_queries : [])
+        .map((q:string)=>String(q||'').replace(/\s+/g,' ').trim()).filter((q:string)=>Boolean(q)).slice(0,8);
+      if (!queries.length) return json({ok:true,run_id:runId,mode:'brave_public_search',queries:0,results:[],failures:0,errors:[]},200);
+      const results:any[]=[];
+      let localFailures=0;
+      for (const query of queries) {
+        if (Date.now() >= stopAt-2500) break;
+        try {
+          const endpoint=new URL('https://api.search.brave.com/res/v1/web/search');
+          endpoint.searchParams.set('q',query.slice(0,600));
+          endpoint.searchParams.set('count',String(Math.max(1,Math.min(20,options.search_count||10))));
+          if(options.search_freshness) endpoint.searchParams.set('freshness',options.search_freshness);
+          const controller=new AbortController();
+          const timer=setTimeout(()=>controller.abort(),7000);
+          let response:Response;
+          try{
+            response=await fetch(endpoint.toString(),{headers:{'accept':'application/json','x-subscription-token':braveKey},signal:controller.signal});
+          } finally { clearTimeout(timer); }
+          if(!response.ok){
+            const text=await response.text().catch(()=> '');
+            const err:any=new Error(`Brave HTTP ${response.status}${text?`: ${text.slice(0,220)}`:''}`); err.status=response.status; throw err;
+          }
+          const data:any=await response.json();
+          const rows=Array.isArray(data?.web?.results)?data.web.results:[];
+          for(const row of rows.slice(0,20)){
+            const url=String(row?.url||'').trim(); if(!/^https?:\/\//i.test(url)) continue;
+            results.push({query,url,title:String(row?.title||'').slice(0,500),description:String(row?.description||'').slice(0,1800),age:row?.age?String(row.age).slice(0,120):null,page_age:row?.page_age?String(row.page_age).slice(0,120):null});
+          }
+        } catch(e) {
+          localFailures++;
+          const info=errorInfo(e); errors.push({stage:'brave-public-search',organization:null,source:query,...info});
+          // Quota/rate limit zamanı qalan sorğuları boş yerə təkrarlamırıq.
+          if([402,429].includes(Number(info.status||0))) break;
+        }
+      }
+      const seen=new Set<string>();
+      const unique=results.filter((row:any)=>{const key=String(row.url||'').replace(/#.*$/,'').replace(/\/$/,'').toLowerCase();if(!key||seen.has(key))return false;seen.add(key);return true;});
+      return json({ok:localFailures===0,run_id:runId,mode:'brave_public_search',queries:queries.length,results:unique.slice(0,120),failures:localFailures,errors},200);
+    }
+
     if (options.mode === 'social_source_upsert') {
       const org = orgs.find((x:any)=>String(x.id)===String(options.organization_id||''));
       if (!org) return json({ok:false,run_id:runId,mode:'social_source_upsert',error:'Təşkilat tapılmadı'},200);
@@ -1588,7 +1636,7 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   // nəticələri kəskin artıra bilər; buna görə pozitiv arxiv sözlərindən hər təşkilat/run
   // üçün fərqli pəncərə götürülür. Saatlıq rotasiya ilə bütün ehtiyat bank mərhələli dolaşır.
   const reserveLimit=Math.max(350,Math.min(1200,Math.floor(maxPos*.32)));
-  const reserveCountResult:any=await admin.from('keywords').select('id',{count:'exact',head:true}).is('organization_id',null).eq('is_active',false);
+  const reserveCountResult:any=await admin.from('keywords').select('id',{count:'exact',head:true}).is('organization_id',null).or('is_active.eq.false,is_active.is.null');
   const reserveCount=Math.max(0,Number(reserveCountResult?.count||0));
   let reserveRows:any[]=[];
   if(reserveCount>0){
@@ -1597,7 +1645,7 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
     const start=maxStart?radarTextHash(`${organizationId||'global'}:${bucket}`)%(maxStart+1):0;
     const rr:any=await admin.from('keywords')
       .select('organization_id,value,kind,is_active,created_at')
-      .is('organization_id',null).eq('is_active',false)
+      .is('organization_id',null).or('is_active.eq.false,is_active.is.null')
       .order('created_at',{ascending:true}).range(start,Math.min(reserveCount-1,start+reserveLimit-1));
     if(!rr?.error) reserveRows=Array.isArray(rr?.data)?rr.data:[];
   }
@@ -3337,6 +3385,9 @@ type RunOptions = {
   radar_stage:string;
   meta_page_limit:number;
   social_sources:{platform:string;url:string;name:string}[];
+  search_queries:string[];
+  search_count:number;
+  search_freshness:string;
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -3383,7 +3434,10 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   github_run_id:0,
   radar_stage:'',
   meta_page_limit:1,
-  social_sources:[]
+  social_sources:[],
+  search_queries:[],
+  search_count:10,
+  search_freshness:''
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -3450,7 +3504,10 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
         platform:String(x?.platform||'').slice(0,40),
         url:String(x?.url||'').slice(0,2000),
         name:String(x?.name||'').slice(0,240)
-      })).filter((x:any)=>/^https?:\/\//i.test(x.url))
+      })).filter((x:any)=>/^https?:\/\//i.test(x.url)),
+      search_queries:[...new Set((Array.isArray(body?.search_queries)?body.search_queries:[]).map((x:any)=>String(x||'').replace(/\s+/g,' ').trim()).filter((x:string)=>Boolean(x)))].slice(0,8),
+      search_count:Math.max(1,Math.min(20,Number(body?.search_count||10))),
+      search_freshness:['pd','pw','pm','py'].includes(String(body?.search_freshness||''))?String(body.search_freshness):''
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};
