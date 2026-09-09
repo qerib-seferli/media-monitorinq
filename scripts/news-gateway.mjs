@@ -112,6 +112,18 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], pro
       if(hint) priority.push(`site:${domain} "${hint.replace(/"/g,'')}"`);
     }
     for(const ident of base.slice(0,2)) priority.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
+    // Direct post/reel/status URL-ləri profil landing səhifələrindən daha dəyərlidir.
+    // Hər platforma üçün bir güclü post-path sorğusu priority pəncərəsinə daxil edilir.
+    // Beləliklə Brave büdcəsi yalnız profil səhifələrinə xərclənmir.
+    const strongest=base[0]||district||'';
+    if(strongest){
+      const q=String(strongest).replace(/"/g,'');
+      if(platform==='Facebook') priority.push(`site:facebook.com/posts "${q}"`);
+      else if(platform==='Instagram') priority.push(`site:instagram.com/p "${q}"`);
+      else if(platform==='TikTok') priority.push(`site:tiktok.com/video "${q}"`);
+      else if(platform==='LinkedIn') priority.push(`site:linkedin.com/posts "${q}"`);
+      else if(platform==='X') priority.push(`site:x.com/status "${q}"`);
+    }
     for(const ident of base.slice(2)) extras.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
     if(district){
       extras.push(`site:${domain} "${district.replace(/"/g,'')}" "ADSEA"`);
@@ -480,6 +492,23 @@ async function directSocialPostFromDiscoveredUrl(url,platform,org){
   const hasDirectContent=Boolean(enriched?.raw?.enriched===true && (text.length>=30 || (title && title!==provisional.title)));
   if(!hasDirectContent) return null;
   return {...enriched,raw:{...(enriched.raw||{}),kind:'public_social_direct_page',social_platform:platform,public_social:true,direct_source_fetch:true}};
+}
+
+function socialLinkOnlyDiscoveryItem(url,platform,org,query=''){
+  if(!isSocialPostUrl(url,platform)) return null;
+  return {
+    title:`${org?.short_name||org?.name||'Təşkilat'} — ${platform} paylaşım linki`,
+    text:'',url,published_at:null,image:null,author:null,
+    raw:{
+      kind:'public_social_link_discovery',
+      social_platform:platform,
+      public_social:true,
+      discovery_only:true,
+      content_unavailable:true,
+      discovery_query:String(query||'').slice(0,500),
+      provider:'public search discovery'
+    }
+  };
 }
 
 
@@ -1804,7 +1833,15 @@ for (const org of plan.organizations) {
             // Profilin öz landing səhifəsi mention deyil. Post/reel/status URL-ləri isə
             // normal sərt aidiyyət filtrinə göndərilir və yalnız uyğun olan saxlanılır.
             if(profileUrl && !isSocialPostUrl(item?.url||'',socialPlatform)) continue;
-            collected.push({...item,published_at:null,raw:{...(item?.raw||{}),kind:'public_social_discovery',social_platform:socialPlatform,discovery_query:q,provider:'Bing Web RSS',public_social:true}});
+            if(isSocialPostUrl(item?.url||'',socialPlatform)){
+              const transient={title:item?.title||'',text:item?.text||item?.description||'',url:item?.url||''};
+              // Axtarış nəticəsinin title/snippet-i bazaya yazılmır. Yalnız həmin nəticə
+              // təşkilata sərt uyğun gəlirsə direct post URL-sini ayrıca material kimi saxlayırıq.
+              if(socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl||item.url},transient,org)){
+                const direct=await directSocialPostFromDiscoveredUrl(item.url,socialPlatform,org);
+                collected.push(direct||socialLinkOnlyDiscoveryItem(item.url,socialPlatform,org,q));
+              }
+            }
           }
           console.log(`[${org.short_name}] ${socialPlatform} public discovery: ${exact.length} | ${q}`);
         }catch(e){
@@ -1842,8 +1879,11 @@ for (const org of plan.organizations) {
             }
             if(profileUrl && !isSocialPostUrl(item?.url||'',socialPlatform)) continue;
             if(isSocialPostUrl(item?.url||'',socialPlatform)){
+              const candidateOk=socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl||item.url},transient,org);
+              if(!candidateOk) continue;
               const direct=await directSocialPostFromDiscoveredUrl(item.url,socialPlatform,org);
-              if(direct){ collected.push(direct); directAccepted++; }
+              const linkOnly=direct?null:socialLinkOnlyDiscoveryItem(item.url,socialPlatform,org,braveQuery);
+              if(direct||linkOnly){ collected.push(direct||linkOnly); directAccepted += direct?1:0; }
             }
           }
           console.log(`[${org.short_name}] ${socialPlatform} Brave discovery: ${exactBrave.length} URL, direct=${directAccepted}, büdcə=${braveRequestsUsed}/${BRAVE_DISCOVERY_BUDGET} | ${braveQuery}`);

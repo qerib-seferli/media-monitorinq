@@ -1616,6 +1616,19 @@ async function fetchOrganizationKeywords(admin:any, organizationId:string, maxRo
   return rows.slice(0,maxRows);
 }
 
+let reserveDistrictNamesCache:string[]|null=null;
+async function reserveDistrictNames(admin:any):Promise<string[]> {
+  if(Array.isArray(reserveDistrictNamesCache)) return reserveDistrictNamesCache;
+  try{
+    const r:any=await admin.from('districts').select('name').limit(500);
+    const names=(Array.isArray(r?.data)?r.data:[])
+      .map((x:any)=>normalizeForMatch(String(x?.name||'')))
+      .filter((x:string)=>x.length>=4);
+    reserveDistrictNamesCache=[...new Set(names)];
+  }catch{ reserveDistrictNamesCache=[]; }
+  return reserveDistrictNamesCache;
+}
+
 async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=3200):Promise<any[]> {
   const organizationId=String(org?.id || '');
   const maxPos=Math.max(300,Math.min(6000,Number(maxPositive||3200)));
@@ -1652,24 +1665,59 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   const reserveCount=reserveFalseCount+reserveNullCount;
   let reserveRows:any[]=[];
   const bucket=Math.floor(Date.now()/3600000);
+
+  // Paneldə göstərilən reserveCount bütün bankın ümumi sayıdır. Discovery pəncərəsi isə
+  // yalnız qlobal + cari təşkilata aid reserve sözlərindən seçilməlidir; başqa rayonun
+  // təşkilat-səviyyəli sözləri heç vaxt cari təşkilata qarışmır.
+  const countScopedInactive=async(state:'false'|'null')=>{
+    let q:any=admin.from('keywords').select('id',{count:'exact',head:true});
+    q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
+    if(organizationId) q=q.or(`organization_id.is.null,organization_id.eq.${organizationId}`);
+    else q=q.is('organization_id',null);
+    const r:any=await q;
+    return r?.error?0:Math.max(0,Number(r?.count||0));
+  };
+  const scopedFalseCount=await countScopedInactive('false');
+  const scopedNullCount=await countScopedInactive('null');
+  const scopedCount=scopedFalseCount+scopedNullCount;
   const takeInactiveWindow=async(state:'false'|'null',count:number,limit:number)=>{
     if(count<=0||limit<=0)return [];
     const maxStart=Math.max(0,count-limit);
     const start=maxStart?radarTextHash(`${organizationId||'global'}:reserve:${state}:${bucket}`)%(maxStart+1):0;
     let q:any=admin.from('keywords').select('organization_id,value,kind,is_active,created_at');
     q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
+    if(organizationId) q=q.or(`organization_id.is.null,organization_id.eq.${organizationId}`);
+    else q=q.is('organization_id',null);
     q=q.order('created_at',{ascending:true}).range(start,Math.min(count-1,start+limit-1));
     const rr:any=await q;
     return rr?.error?[]:(Array.isArray(rr?.data)?rr.data:[]);
   };
-  if(reserveCount>0){
-    const falseLimit=reserveFalseCount?Math.max(1,Math.round(reserveLimit*(reserveFalseCount/reserveCount))):0;
-    const nullLimit=reserveNullCount?Math.max(1,reserveLimit-falseLimit):0;
+  if(scopedCount>0){
+    const falseLimit=scopedFalseCount?Math.max(1,Math.round(reserveLimit*(scopedFalseCount/scopedCount))):0;
+    const nullLimit=scopedNullCount?Math.max(1,reserveLimit-falseLimit):0;
     reserveRows=[
-      ...await takeInactiveWindow('false',reserveFalseCount,Math.min(reserveFalseCount,falseLimit)),
-      ...await takeInactiveWindow('null',reserveNullCount,Math.min(reserveNullCount,nullLimit))
+      ...await takeInactiveWindow('false',scopedFalseCount,Math.min(scopedFalseCount,falseLimit)),
+      ...await takeInactiveWindow('null',scopedNullCount,Math.min(scopedNullCount,nullLimit))
     ];
   }
+
+  // Köhnə qlobal bankda rayon adı ilə yazılmış lokal ifadələr ola bilər. Məsələn
+  // “Bərdə Mollalılar ...” qlobal sətrə düşübsə onu Quba/Naxçıvan discovery-sinə
+  // vermirik. Həqiqətən ümumi terminlər (kanal, suvarma, meliorasiya və s.) qalır.
+  const currentDistrict=normalizeForMatch(String(org?.districts?.name||org?.district||''));
+  const districtNames=await reserveDistrictNames(admin);
+  reserveRows=reserveRows.filter((row:any)=>{
+    const rowOrg=String(row?.organization_id||'');
+    if(rowOrg && rowOrg!==organizationId) return false;
+    if(rowOrg===organizationId) return true;
+    const nv=normalizeForMatch(String(row?.value||''));
+    if(!nv) return false;
+    for(const d of districtNames){
+      if(d===currentDistrict) continue;
+      if(nv.includes(d)) return false;
+    }
+    return true;
+  });
 
   const seen=new Set<string>(); const rows:any[]=[];
   const push=(row:any)=>{
