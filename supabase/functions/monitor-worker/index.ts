@@ -1632,40 +1632,42 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   const globalRows=await pageRows(()=>admin.from('keywords').select('organization_id,value,kind,is_active,created_at').is('organization_id',null).eq('is_active',true).order('created_at',{ascending:false}),Math.min(12000,maxPos+5000));
   const orgRows=organizationId?await pageRows(()=>admin.from('keywords').select('organization_id,value,kind,is_active,created_at').eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:false}),Math.min(6000,maxPos+1500)):[];
 
-  // Deaktiv/arxiv qeydləri artıq ölü baza deyil. Hamısını bir anda aktivləşdirmək əlaqəsiz
-  // nəticələri kəskin artıra bilər; buna görə pozitiv arxiv sözlərindən hər təşkilat/run
-  // üçün fərqli pəncərə götürülür. Saatlıq rotasiya ilə bütün ehtiyat bank mərhələli dolaşır.
+  // Deaktiv/arxiv qeydləri artıq ölü baza deyil. Admin paneldə “Ehtiyat rotasiya bankı”
+  // bütün keywords cədvəli üzrə `cəmi - aktiv` kimi hesablanır. Əvvəl worker yalnız
+  // qlobal + cari təşkilata bağlı deaktiv sətrləri saydığı üçün paneldə 9 min+ ehtiyat
+  // görünsə də bəzi təşkilatlarda 0 görünürdü. Ehtiyat pozitiv bankı discovery üçündür
+  // və hər sorğu onsuz da cari rayon/təşkilat siqnalı ilə scope olunur; buna görə bütün
+  // deaktiv bankdan kiçik deterministik pəncərə götürürük. Deaktiv `exclude` qeydləri
+  // heç vaxt filtrə daxil edilmir — yalnız aktiv exclude bankı veto kimi işləyir.
   const reserveLimit=Math.max(350,Math.min(1200,Math.floor(maxPos*.32)));
-  // Admin panel “Ehtiyat rotasiya bankı”nı bütün keywords cədvəli üzrə hesablayır.
-  // Köhnə məntiq yalnız organization_id=NULL ehtiyatlarını saydığı üçün təşkilata
-  // bağlı deaktiv qeydlər olduqda paneldə minlərlə ehtiyat görünsə də worker 0 deyirdi.
-  // Qlobal + cari təşkilat ehtiyatlarını ayrıca sayıb eyni rotasiya pəncərəsində birləşdiririk.
-  const reserveFilter=(q:any)=>q.or('is_active.eq.false,is_active.is.null');
-  const globalReserveCountResult:any=await reserveFilter(admin.from('keywords').select('id',{count:'exact',head:true}).is('organization_id',null));
-  const orgReserveCountResult:any=organizationId
-    ? await reserveFilter(admin.from('keywords').select('id',{count:'exact',head:true}).eq('organization_id',organizationId))
-    : {count:0,error:null};
-  const globalReserveCount=Math.max(0,Number(globalReserveCountResult?.count||0));
-  const orgReserveCount=Math.max(0,Number(orgReserveCountResult?.count||0));
-  const reserveCount=globalReserveCount+orgReserveCount;
+  const countInactive=async(state:'false'|'null')=>{
+    let q:any=admin.from('keywords').select('id',{count:'exact',head:true});
+    q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
+    const r:any=await q;
+    if(r?.error) return 0;
+    return Math.max(0,Number(r?.count||0));
+  };
+  const reserveFalseCount=await countInactive('false');
+  const reserveNullCount=await countInactive('null');
+  const reserveCount=reserveFalseCount+reserveNullCount;
   let reserveRows:any[]=[];
   const bucket=Math.floor(Date.now()/3600000);
-  const takeWindow=async(scope:'global'|'org',count:number,limit:number)=>{
+  const takeInactiveWindow=async(state:'false'|'null',count:number,limit:number)=>{
     if(count<=0||limit<=0)return [];
     const maxStart=Math.max(0,count-limit);
-    const start=maxStart?radarTextHash(`${organizationId||'global'}:${scope}:${bucket}`)%(maxStart+1):0;
+    const start=maxStart?radarTextHash(`${organizationId||'global'}:reserve:${state}:${bucket}`)%(maxStart+1):0;
     let q:any=admin.from('keywords').select('organization_id,value,kind,is_active,created_at');
-    q=scope==='global'?q.is('organization_id',null):q.eq('organization_id',organizationId);
-    q=q.or('is_active.eq.false,is_active.is.null').order('created_at',{ascending:true}).range(start,Math.min(count-1,start+limit-1));
+    q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
+    q=q.order('created_at',{ascending:true}).range(start,Math.min(count-1,start+limit-1));
     const rr:any=await q;
     return rr?.error?[]:(Array.isArray(rr?.data)?rr.data:[]);
   };
   if(reserveCount>0){
-    const globalLimit=globalReserveCount?Math.max(1,Math.round(reserveLimit*(globalReserveCount/reserveCount))):0;
-    const orgLimit=orgReserveCount?Math.max(1,reserveLimit-globalLimit):0;
+    const falseLimit=reserveFalseCount?Math.max(1,Math.round(reserveLimit*(reserveFalseCount/reserveCount))):0;
+    const nullLimit=reserveNullCount?Math.max(1,reserveLimit-falseLimit):0;
     reserveRows=[
-      ...await takeWindow('global',globalReserveCount,Math.min(globalReserveCount,globalLimit)),
-      ...await takeWindow('org',orgReserveCount,Math.min(orgReserveCount,orgLimit))
+      ...await takeInactiveWindow('false',reserveFalseCount,Math.min(reserveFalseCount,falseLimit)),
+      ...await takeInactiveWindow('null',reserveNullCount,Math.min(reserveNullCount,nullLimit))
     ];
   }
 
@@ -1681,8 +1683,9 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
   for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
   for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
-  for(const row of reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude')) push(row);
-  org.__reserve_exclude_candidates=reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude').map((x:any)=>String(x?.value||'').trim()).filter(Boolean);
+  for(const row of reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude')) push({...row,organization_id:null});
+  // Deaktiv exclude-lər ehtiyat pozitiv bankına çevrilmir və veto kimi də işlədilmir.
+  org.__reserve_exclude_candidates=[];
   org.__reserve_keyword_count=reserveCount;
   org.__reserve_keyword_window=reserveRows.length;
   return rows;

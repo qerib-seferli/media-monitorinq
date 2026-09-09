@@ -300,9 +300,35 @@ function socialPostLinksFromHtml(html='', profileUrl='', platform=''){
     out.push({url:clean,text});
   };
   for(const m of String(html||'').matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,1200}?)<\/a>/gi)) add(m[1],m[2]);
-  // React səhifələrində permalink bəzən anchor body-si olmadan JSON/attribute daxilində qalır.
-  const escaped=String(html||'').replace(/\\u0026/g,'&').replace(/\\\//g,'/');
-  for(const m of escaped.matchAll(/https?:\/\/(?:www\.)?(?:facebook\.com|instagram\.com|tiktok\.com|linkedin\.com|x\.com|twitter\.com)\/[^"'<>\s]+/gi)) add(m[0],'');
+  // React/Next səhifələrində permalink anchor olmadan JSON/attribute daxilində qala bilər.
+  // URL-ləri və platformanın stabil post identifikatorlarını ayrıca çıxarırıq. Bu,
+  // public profil HTML-i açıldığı halda dinamik UI-yə bağlı qalmadan real post URL-sini
+  // tapmağa imkan verir; title/snippet uydurulmur.
+  const escaped=String(html||'')
+    .replace(/\\u0026/g,'&').replace(/\\u002F/gi,'/').replace(/\\\//g,'/');
+  for(const m of escaped.matchAll(/https?:\/\/(?:www\.)?(?:facebook\.com|instagram\.com|tiktok\.com|linkedin\.com|x\.com|twitter\.com)\/[^"'<>\s\\]+/gi)) add(m[0],'');
+
+  if(platform==='Instagram') {
+    for(const m of escaped.matchAll(/(?:"shortcode"\s*:\s*"|\/p\/|\/reel\/)([A-Za-z0-9_-]{5,32})/gi)) {
+      const code=m[1]; if(code) add(`https://www.instagram.com/p/${code}/`,'');
+    }
+  } else if(platform==='TikTok') {
+    const handle=(canonicalSocialProfileUrl(profileUrl,'TikTok').split('/').filter(Boolean).pop()||'');
+    for(const m of escaped.matchAll(/\/video\/(\d{12,24})/gi)) if(handle) add(`https://www.tiktok.com/${handle}/video/${m[1]}`,'');
+  } else if(platform==='X') {
+    for(const m of escaped.matchAll(/\/status\/(\d{8,24})/gi)) {
+      const handle=(canonicalSocialProfileUrl(profileUrl,'X').split('/').filter(Boolean).pop()||'i');
+      add(`https://x.com/${handle}/status/${m[1]}`,'');
+    }
+  } else if(platform==='LinkedIn') {
+    for(const m of escaped.matchAll(/urn:li:(?:activity|share):(\d{8,24})/gi)) add(`https://www.linkedin.com/feed/update/urn:li:activity:${m[1]}/`,'');
+  } else if(platform==='Facebook') {
+    for(const m of escaped.matchAll(/(?:story_fbid[=\":]+|"top_level_post_id"\s*:\s*")(\d{8,30})/gi)) {
+      const profile=canonicalSocialProfileUrl(profileUrl,'Facebook');
+      const idMatch=/[?&]id=(\d+)/.exec(profile);
+      if(idMatch) add(`https://www.facebook.com/permalink.php?story_fbid=${m[1]}&id=${idMatch[1]}`,'');
+    }
+  }
   return [...new Map(out.map(x=>[x.url,x])).values()].slice(0,24);
 }
 
@@ -322,7 +348,7 @@ async function directSocialProfileItems(source,org){
   const links=socialPostLinksFromHtml(html,profileUrl,platform);
   return links.map((row,index)=>({
     title:`${org?.short_name||org?.name||'Təşkilat'} — ${platform} paylaşımı`,
-    text:row.text||`${org?.short_name||org?.name||''} rəsmi ${platform} profilində paylaşım`,
+    text:row.text||'',
     url:row.url,published_at:null,image:null,author:source?.name||org?.short_name||null,
     raw:{kind:'known_social_profile_post',provider:`${platform} public profile`,social_platform:platform,profile_url:profileUrl,trusted_org_profile:true,profile_discovery_rank:index+1}
   }));
@@ -1832,6 +1858,7 @@ for (const org of plan.organizations) {
       .filter(x=>x?.platform&&x?.url&&socialProfileCandidateMatchesOrg(x,{title:x?.name||'',text:'',url:x.url},org))
       .map(x=>[`${x.platform}|${String(x.url).toLowerCase()}`,x])
   ).values()].slice(0,8);
+  if(verifiedSocialProfiles.length) console.log(`[${org.short_name}] Təsdiqlənən sosial profil namizədləri: ${verifiedSocialProfiles.length} | ${verifiedSocialProfiles.map(x=>`${x.platform}:${x.url}`).join(' | ')}`);
 
   // Search engine-in tapdığı, amma təşkilat saytında əvvəl qeyd olunmamış rəsmi profil
   // varsa onu sources cədvəlinə təşkilat üzrə saxlayırıq. Admin panel qlobal mənbə
