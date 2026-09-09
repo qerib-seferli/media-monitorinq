@@ -84,34 +84,40 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], pro
   const district=String(org?.district||'').trim();
   const keywordTerms=[...new Set((keywordBank||[]).map(x=>String(x||'').trim()).filter(x=>x.length>=4))].slice(0,20);
   const base=[...new Set(identities)].slice(0,12);
-  const pool=[];
+  const priority=[];
+  const extras=[];
   for(const domain of domains){
-    // Təşkilatın artıq məlum olan sosial profili varsa əvvəl həmin handle/profile daxilində
-    // axtarırıq. Bu, `site:instagram.com "Bərdə SMSİİ"` kimi zəif indekslənən ümumi
-    // sorğulardan daha dəqiqdir və bütün təşkilatlarda eyni mexanizmlə işləyir.
+    // Hər run-da əvvəlcə ən güclü təşkilat identifikatorları və məlum rəsmi profil
+    // yoxlanır. Əlavə rayon/açar-söz sorğuları rotasiya olunur. Beləliklə 4 sorğulu
+    // fast-watch pəncərəsində təsadüfi ümumi açar sözlər təşkilat adını kənarda qoymur.
     for(const source of (profileSources||[])){
       if((normalizeSocialPlatform(source?.platform)||socialPlatformFromUrl(source?.url))!==platform) continue;
       const hint=socialProfileSearchHint(source?.url||'',platform);
-      if(hint) pool.push(`site:${domain}/${hint}`);
-      if(hint) pool.push(`site:${domain} "${hint.replace(/"/g,'')}"`);
+      if(hint) priority.push(`site:${domain}/${hint}`);
+      if(hint) priority.push(`site:${domain} "${hint.replace(/"/g,'')}"`);
     }
-    for(const ident of base) pool.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
+    for(const ident of base.slice(0,2)) priority.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
+    for(const ident of base.slice(2)) extras.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
     if(district){
-      pool.push(`site:${domain} "${district.replace(/"/g,'')}" "ADSEA"`);
-      pool.push(`site:${domain} "${district.replace(/"/g,'')}" (suvarma OR meliorasiya OR SMSİİ OR su)`);
+      extras.push(`site:${domain} "${district.replace(/"/g,'')}" "ADSEA"`);
+      extras.push(`site:${domain} "${district.replace(/"/g,'')}" (suvarma OR meliorasiya OR SMSİİ OR su)`);
     }
-    for(const topic of keywordTerms.slice(0,6)) pool.push(`site:${domain} "${String(topic).replace(/"/g,'')}" ${district?`"${district.replace(/"/g,'')}"`:''}`.trim());
+    for(const topic of keywordTerms.slice(0,8)) extras.push(`site:${domain} "${String(topic).replace(/"/g,'')}" ${district?`"${district.replace(/"/g,'')}"`:''}`.trim());
   }
-  const queries=[...new Set(pool)].filter(Boolean);
-  if(!queries.length) return [];
-  const limit=Math.min(queries.length,FULL_RADAR?10:4);
-  const key=`${org?.id||org?.short_name||''}|${platform}`;
-  const seed=[...key].reduce((n,ch)=>n+ch.charCodeAt(0),0);
-  const bucket=Math.floor(Date.now()/(15*60*1000));
-  const start=(seed+bucket*limit)%queries.length;
-  const out=[];
-  for(let i=0;i<limit;i++) out.push(queries[(start+i)%queries.length]);
-  return out;
+  const must=[...new Set(priority)].filter(Boolean);
+  const pool=[...new Set(extras)].filter(Boolean).filter(q=>!must.includes(q));
+  const limit=Math.min(must.length+pool.length,FULL_RADAR?12:6);
+  if(!limit) return [];
+  const out=must.slice(0,Math.min(limit,3));
+  const remaining=limit-out.length;
+  if(remaining>0 && pool.length){
+    const key=`${org?.id||org?.short_name||''}|${platform}`;
+    const seed=[...key].reduce((n,ch)=>n+ch.charCodeAt(0),0);
+    const bucket=Math.floor(Date.now()/(15*60*1000));
+    const start=(seed+bucket*remaining)%pool.length;
+    for(let i=0;i<remaining;i++) out.push(pool[(start+i)%pool.length]);
+  }
+  return [...new Set(out)].slice(0,limit);
 }
 
 function socialProfileSearchHint(value='', platform=''){

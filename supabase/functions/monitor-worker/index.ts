@@ -356,7 +356,7 @@ Deno.serve(async (req) => {
       districts:o?.district_id ? {name:districtNameById.get(String(o.district_id))||''} : null
     }));
 
-    if (!requestedOrganizationId && (options.include_archived || options.organization_batch > 0)) {
+    if (!requestedOrganizationId && options.mode !== 'meta_monitor' && (options.include_archived || options.organization_batch > 0)) {
       orgs = rotateOrganizationBatch(orgs, options.organization_shard_count, options.organization_shard_index, options.organization_batch, options.organization_rotation_bucket);
     }
 
@@ -453,23 +453,36 @@ Deno.serve(async (req) => {
       try {
         const meta = await metaManagedItems(token, appSecret, options.meta_page_limit);
         let metaInserted = 0;
+        let candidateOrganizations = 0;
         for (const org of orgs) {
           if (Date.now() >= stopAt) break;
+          const relevantEntries = meta.items.filter((entry:any)=>metaEntryLikelyForOrg(entry,org));
+          if (!relevantEntries.length) continue;
+          candidateOrganizations++;
           const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
           const keywords = installKeywordContext(org, activeKeywordRows);
           const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
           let villageNames:string[] = [];
           if (org.district_id) villageNames = await fetchDistrictPlaceNames(admin,String(org.district_id)).catch(()=>[]);
           let orgInserted = 0;
-          for (const entry of meta.items) {
+          for (const entry of relevantEntries) {
             if (Date.now() >= stopAt) break;
-            orgInserted += await safeSave(admin,org,{platform:entry.platform,url:entry.source},entry.item,lowerKeywords,villageNames,errors,org.short_name,entry.platform);
+            const kind=String(entry?.item?.raw?.kind||'');
+            const trustedItem:any={
+              ...entry.item,
+              raw:{
+                ...(entry?.item?.raw||{}),
+                meta_asset_matched:true,
+                ...(kind.includes('comment')?{parent_is_relevant:true}:{trusted_org_profile:true})
+              }
+            };
+            orgInserted += await safeSave(admin,org,{platform:entry.platform,url:entry.source},trustedItem,lowerKeywords,villageNames,errors,org.short_name,entry.platform);
           }
           metaInserted += orgInserted;
-          if (options.debug || orgInserted) details.push({organization:org.short_name,source:'Meta Graph API',items_checked:meta.items.length,inserted:orgInserted});
+          if (options.debug || orgInserted) details.push({organization:org.short_name,source:'Meta Graph API',items_checked:relevantEntries.length,inserted:orgInserted});
         }
         inserted += metaInserted;
-        return json({ok:true,run_id:runId,mode:'meta_monitor',checked:meta.items.length,new_mentions:metaInserted,pages:meta.pages,instagram_accounts:meta.instagram_accounts,facebook_items:meta.facebook_items,instagram_items:meta.instagram_items,failures:meta.failures,errors,details},200);
+        return json({ok:true,run_id:runId,mode:'meta_monitor',checked:meta.items.length,new_mentions:metaInserted,pages:meta.pages,instagram_accounts:meta.instagram_accounts,facebook_items:meta.facebook_items,instagram_items:meta.instagram_items,candidate_organizations:candidateOrganizations,visible_assets:meta.visible_assets,failures:meta.failures,errors,details},200);
       } catch (e) {
         return json({ok:false,run_id:runId,mode:'meta_monitor',stage:currentStage,error:errorInfo(e).message,errors,details},200);
       }
@@ -1973,14 +1986,15 @@ async function metaGraph(path:string, token:string, appSecret:string):Promise<an
   return body;
 }
 
-async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1):Promise<{items:any[];pages:number;instagram_accounts:number;facebook_items:number;instagram_items:number;failures:any[]}> {
-  const out:any[]=[]; const failures:any[]=[];
+async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1):Promise<{items:any[];pages:number;instagram_accounts:number;facebook_items:number;instagram_items:number;visible_assets:any[];failures:any[]}> {
+  const out:any[]=[]; const failures:any[]=[]; const visibleAssets:any[]=[];
   const accounts=await metaGraph(`me/accounts?fields=id,name,access_token&limit=100`,userToken,appSecret);
   const pages=Array.isArray(accounts?.data)?accounts.data:[];
   let instagramAccounts=0, facebookItems=0, instagramItems=0;
   for(const page of pages){
     const pageId=String(page?.id||''); const pageName=String(page?.name||'Facebook Page'); const pageToken=String(page?.access_token||'');
     if(!pageId||!pageToken) continue;
+    visibleAssets.push({platform:'Facebook',id:pageId,name:pageName});
     try{
       let path=`${pageId}/posts?fields=id,message,created_time,permalink_url,shares,reactions.limit(0).summary(true),comments.limit(50){id,message,created_time,from,like_count,comments.limit(50){id,message,created_time,from,like_count}}&limit=50`;
       for(let pg=0;pg<pageLimit && path;pg++){
@@ -2004,6 +2018,7 @@ async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1)
     try{
       const link=await metaGraph(`${pageId}?fields=instagram_business_account{id,username,name}`,pageToken,appSecret);
       const ig=link?.instagram_business_account; if(!ig?.id) continue; instagramAccounts++;
+      visibleAssets.push({platform:'Instagram',id:String(ig.id),username:String(ig.username||''),name:String(ig.name||'')});
       let path=`${ig.id}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp,comments_count,like_count,thumbnail_url,comments.limit(50){id,text,timestamp,username,like_count,replies.limit(50){id,text,timestamp,username,like_count}}&limit=50`;
       for(let pg=0;pg<pageLimit && path;pg++){
         const data=await metaGraph(path,pageToken,appSecret);
@@ -2023,7 +2038,23 @@ async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1)
       }
     }catch(e){failures.push({platform:'Instagram',page:pageName,...errorInfo(e)});}
   }
-  return {items:out,pages:pages.length,instagram_accounts:instagramAccounts,facebook_items:facebookItems,instagram_items:instagramItems,failures};
+  return {items:out,pages:pages.length,instagram_accounts:instagramAccounts,facebook_items:facebookItems,instagram_items:instagramItems,visible_assets:visibleAssets,failures};
+}
+
+function metaEntryLikelyForOrg(entry:any,org:any):boolean {
+  const raw:any=entry?.item?.raw||{};
+  const owner=normalizeForMatch(`${entry?.source||''} ${raw?.page_name||''} ${raw?.username||''}`);
+  const body=normalizeForMatch(`${entry?.item?.title||''} ${entry?.item?.text||''}`);
+  const names=[String(org?.name||''),String(org?.short_name||'')].map(normalizeForMatch).filter((x:string)=>x.length>=4);
+  if(names.some((name:string)=>owner.includes(name) || body.includes(name))) return true;
+  const compactOwner=owner.replace(/\s+/g,'');
+  for(const name of names){
+    const compact=name.replace(/\s+/g,'');
+    if(compact.length>=6 && compactOwner.includes(compact)) return true;
+  }
+  const district=normalizeForMatch(String(org?.districts?.name||''));
+  const topic=/(?:smsii|suvarma|meliorasiya|su techizati|sukanal|kanalizasiya|subartezian|artezian|nasos|adsea)/.test(`${owner} ${body}`);
+  return Boolean(district && district.length>=4 && topic && (owner.includes(district) || body.includes(district)));
 }
 
 
@@ -4024,7 +4055,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     historicalQueryTopicHit ||
     (isComment && positiveTopic && (districtHit || villageHits.length>0))
   )));
-  const accepted = !ownPortalNoise && !foreignScriptRejected && (trustedOrgProfile || standardAccepted);
+  const accepted = !ownPortalNoise && !foreignScriptRejected && ((!excludedByRule && trustedOrgProfile) || standardAccepted);
 
   const matches=[...new Set([
     ...directMatches,
