@@ -661,6 +661,8 @@ Deno.serve(async (req) => {
           keyword_count:positiveKeywords.length,
           active_exclude_count:excludeCount,
           reserve_keyword_count:Number(org.__reserve_keyword_count || 0),
+          reserve_positive_count:Number(org.__reserve_positive_count || 0),
+          reserve_exclude_count:Number(org.__reserve_exclude_count || 0),
           reserve_keyword_window:Number(org.__reserve_keyword_window || 0),
           rss_sources:(Array.isArray(org.sources)?org.sources:[])
             .filter((source:any)=>source?.is_active !== false)
@@ -1623,7 +1625,7 @@ async function reserveDistrictNames(admin:any):Promise<string[]> {
     const r:any=await admin.from('districts').select('name').limit(500);
     const names=(Array.isArray(r?.data)?r.data:[])
       .map((x:any)=>normalizeForMatch(String(x?.name||'')))
-      .filter((x:string)=>x.length>=4);
+      .filter((x:string)=>x.length>=3);
     reserveDistrictNamesCache=[...new Set(names)];
   }catch{ reserveDistrictNamesCache=[]; }
   return reserveDistrictNamesCache;
@@ -1663,6 +1665,17 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   const reserveFalseCount=await countInactive('false');
   const reserveNullCount=await countInactive('null');
   const reserveCount=reserveFalseCount+reserveNullCount;
+  // Ehtiyat bankda həm pozitiv, həm də köhnə exclude sətrləri ola bilər. Ümumi sayı
+  // saxlayırıq, amma discovery-yə yalnız pozitiv frazalar daxil olur; köhnə/deaktiv
+  // exclude-lər nə axtarış sözü, nə də aktiv veto kimi istifadə edilir.
+  const countInactiveExclude=async(state:'false'|'null')=>{
+    let q:any=admin.from('keywords').select('id',{count:'exact',head:true}).eq('kind','exclude');
+    q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
+    const r:any=await q;
+    return r?.error?0:Math.max(0,Number(r?.count||0));
+  };
+  const reserveExcludeCount=(await countInactiveExclude('false'))+(await countInactiveExclude('null'));
+  const reservePositiveCount=Math.max(0,reserveCount-reserveExcludeCount);
   let reserveRows:any[]=[];
   const bucket=Math.floor(Date.now()/3600000);
 
@@ -1706,18 +1719,22 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   // vermirik. Həqiqətən ümumi terminlər (kanal, suvarma, meliorasiya və s.) qalır.
   const currentDistrict=normalizeForMatch(String(org?.districts?.name||org?.district||''));
   const districtNames=await reserveDistrictNames(admin);
-  reserveRows=reserveRows.filter((row:any)=>{
+  const geographicallyValidForOrg=(row:any)=>{
     const rowOrg=String(row?.organization_id||'');
     if(rowOrg && rowOrg!==organizationId) return false;
     if(rowOrg===organizationId) return true;
     const nv=normalizeForMatch(String(row?.value||''));
     if(!nv) return false;
+    // Köhnə qlobal bankda “berdede ...”, “qax ...” kimi rayon-spesifik frazalar
+    // aktiv də ola bilər. Cari rayon deyilsə həm aktiv, həm reserve pozitiv bankdan
+    // çıxarılır; məlumat DB-də qalır, sadəcə başqa təşkilatın discovery-sinə qarışmır.
     for(const d of districtNames){
       if(d===currentDistrict) continue;
       if(nv.includes(d)) return false;
     }
     return true;
-  });
+  };
+  reserveRows=reserveRows.filter(geographicallyValidForOrg);
 
   const seen=new Set<string>(); const rows:any[]=[];
   const push=(row:any)=>{
@@ -1729,13 +1746,17 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   // ehtiyat/arxiv pozitiv bankının rotasiya pəncərəsi işləyir.
   for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
   for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
-  for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
+  for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude' && geographicallyValidForOrg(x)).slice(0,maxPos)) push(row);
   for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
-  for(const row of reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude')) push({...row,organization_id:null});
+  // organization_id-ni saxlayırıq: təşkilata bağlı reserve fraza qlobal keyword kimi
+  // maskalanmır və evaluateMatch onu məhz həmin təşkilatın bankı kimi görür.
+  for(const row of reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude')) push(row);
   // Deaktiv exclude-lər ehtiyat pozitiv bankına çevrilmir və veto kimi də işlədilmir.
   org.__reserve_exclude_candidates=[];
   org.__reserve_keyword_count=reserveCount;
-  org.__reserve_keyword_window=reserveRows.length;
+  org.__reserve_positive_count=reservePositiveCount;
+  org.__reserve_exclude_count=reserveExcludeCount;
+  org.__reserve_keyword_window=reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').length;
   return rows;
 }
 

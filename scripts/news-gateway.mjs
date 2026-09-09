@@ -108,8 +108,20 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], pro
     for(const source of (profileSources||[])){
       if((normalizeSocialPlatform(source?.platform)||socialPlatformFromUrl(source?.url))!==platform) continue;
       const hint=socialProfileSearchHint(source?.url||'',platform);
-      if(hint) priority.push(`site:${domain}/${hint}`);
-      if(hint) priority.push(`site:${domain} "${hint.replace(/"/g,'')}"`);
+      if(!hint) continue;
+      // Məlum/təsdiqlənmiş profil artıq varsa Brave büdcəsini ümumi profil axtarışına
+      // yox, birbaşa həmin profilin post/reel/status URL-lərinə yönəldirik. Bu, source
+      // reyestrindən real mention-a keçidin ən vacib hissəsidir.
+      if(platform==='Facebook') priority.push(`site:facebook.com/${hint}/posts`);
+      else if(platform==='Instagram') {
+        priority.push(`site:instagram.com/${hint}/p`);
+        priority.push(`site:instagram.com/${hint}/reel`);
+      }
+      else if(platform==='TikTok') priority.push(`site:tiktok.com/${hint}/video`);
+      else if(platform==='LinkedIn') priority.push(`site:linkedin.com/posts "${hint.replace(/"/g,'')}"`);
+      else if(platform==='X') priority.push(`site:x.com/${hint}/status`);
+      priority.push(`site:${domain}/${hint}`);
+      priority.push(`site:${domain} "${hint.replace(/"/g,'')}"`);
     }
     for(const ident of base.slice(0,2)) priority.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
     // Direct post/reel/status URL-ləri profil landing səhifələrindən daha dəyərlidir.
@@ -240,7 +252,12 @@ function socialProfileCandidateMatchesOrg(profile={}, item={}, org={}){
   if(identities.some(x=>hay.includes(x))) return true;
   const district=asciiToken(String(org?.district||''));
   const topicSignal=/(?:smsii|su meliorasiya|meliorasiya sistem|suvarma sistem|su kanal|sukanal|adsea)/.test(hay);
-  return Boolean(district && district.length>=4 && hay.includes(district) && topicSignal);
+  // Profil reyestrinə sadəcə rayon adı + su mövzusu gördüyümüz təsadüfi hesabları
+  // yazmırıq. Bu elastik fallback yalnız konkret post/reel/status URL-si üçün işləyir;
+  // profilin özü isə handle və ya title/snippet-də təşkilat identifikatoru tələb edir.
+  const platform=normalizeSocialPlatform(profile?.platform)||socialPlatformFromUrl(profile?.url||item?.url||'');
+  const concretePost=isSocialPostUrl(item?.url||'',platform);
+  return Boolean(concretePost && district && district.length>=4 && hay.includes(district) && topicSignal);
 }
 
 function isSocialPostUrl(value='', platform=''){
@@ -248,8 +265,8 @@ function isSocialPostUrl(value='', platform=''){
     const u=new URL(String(value||''));
     const p=platform||socialPlatformFromUrl(u.toString());
     const path=u.pathname;
-    if(p==='Instagram') return /\/(?:p|reel|reels)\/[^/?#]+/i.test(path);
-    if(p==='Facebook') return /\/(?:posts|videos|reel|reels)\/|story_fbid=|permalink\.php/i.test(u.toString());
+    if(p==='Instagram') return /\/(?:p|reel|reels|tv)\/[^/?#]+/i.test(path);
+    if(p==='Facebook') return /\/(?:posts|videos|reel|reels|watch|share\/(?:p|r))\/|story_fbid=|story\.php|permalink\.php|[?&](?:fbid|v)=\d+/i.test(u.toString());
     if(p==='TikTok') return /\/video\/\d+/i.test(path);
     if(p==='LinkedIn') return /\/posts\/|\/feed\/update\//i.test(path);
     if(p==='X') return /\/status\/\d+/i.test(path);
@@ -301,8 +318,8 @@ function socialPostLinksFromHtml(html='', profileUrl='', platform=''){
   const add=(href,near='')=>{
     const abs=absoluteUrl(profileUrl,href); if(!abs || socialPlatformFromUrl(abs)!==platform) return;
     let ok=false;
-    if(platform==='Instagram') ok=/\/p\/[^/?#]+\/?|\/reel\/[^/?#]+\/?/i.test(new URL(abs).pathname);
-    else if(platform==='Facebook') ok=/\/posts\/|\/videos\/|\/reel\/|story_fbid=|permalink\.php/i.test(abs);
+    if(platform==='Instagram') ok=/\/(?:p|reel|reels|tv)\/[^/?#]+\/?/i.test(new URL(abs).pathname);
+    else if(platform==='Facebook') ok=/\/(?:posts|videos|reel|reels|watch|share\/(?:p|r))\/|story_fbid=|story\.php|permalink\.php|[?&](?:fbid|v)=\d+/i.test(abs);
     else if(platform==='TikTok') ok=/\/video\/\d+/i.test(abs);
     else if(platform==='LinkedIn') ok=/\/posts\/|\/feed\/update\//i.test(abs);
     else if(platform==='X') ok=/\/status\/\d+/i.test(abs);
@@ -1703,7 +1720,7 @@ for (const org of plan.organizations) {
   const googleQueries = DEEP_BACKFILL
     ? deepArchiveQueries(org, googleBaseQueries).slice(0,8)
     : googleBaseQueries;
-  console.log(`[${org.short_name}] Discovery bankı: ${Number(org.keyword_count||keywordBank.length)} aktiv/rotasiya söz + ${Number(org.reserve_keyword_count||0)} ehtiyat bank (${Number(org.reserve_keyword_window||0)} bu pəncərədə) + ${Number(org.active_exclude_count||0)} aktiv filtr + ${Number(org.village_count||0)} kənd + ${Number(org.alias_count||0)} alias | bu keçid: keyword=${keywordQueries.length}, village=${villageQueries.length}, alias=${aliasQueries.length}`);
+  console.log(`[${org.short_name}] Discovery bankı: ${Number(org.keyword_count||keywordBank.length)} aktiv/rotasiya söz + ${Number(org.reserve_keyword_count||0)} ehtiyat bank [pozitiv=${Number(org.reserve_positive_count||0)}, köhnə-filtr=${Number(org.reserve_exclude_count||0)}] (${Number(org.reserve_keyword_window||0)} pozitiv bu pəncərədə) + ${Number(org.active_exclude_count||0)} aktiv filtr + ${Number(org.village_count||0)} kənd + ${Number(org.alias_count||0)} alias | bu keçid: keyword=${keywordQueries.length}, village=${villageQueries.length}, alias=${aliasQueries.length}`);
   console.log(`[${org.short_name}] Web discovery sorğuları: ${webQueries.join(' || ')}`);
   console.log(`[${org.short_name}] Google News sorğuları: ${googleQueries.join(' || ')}`);
 
@@ -1928,16 +1945,17 @@ for (const org of plan.organizations) {
     }catch(e){ console.log(`[${org.short_name}] Meta profil scan alınmadı, public discovery davam edir: ${e?.message||e}`); }
   }
 
-  // LinkedIn/TikTok/X və Meta-nın icazə vermədiyi hallarda məlum profilin açıq HTML-indən
-  // post permalink-lərini çıxarmağa çalışırıq. Yalnız verified profile və maksimum 2 profil
-  // işlənir ki, fast-watch vaxtı/YouTube/Web işinə təsir etməsin.
-  for(const profile of verifiedSocialProfiles.filter(x=>!['Facebook','Instagram'].includes(x.platform)).slice(0,2)){
+  // Meta API public profilə icazə verməsə də məlum/təsdiqlənmiş profilin açıq HTML/JSON
+  // hissəsindən real post permalink-lərini çıxarmağa çalışırıq. Facebook/Instagram da bu
+  // fallback-a daxildir; yalnız verified profile və maksimum 2 profil işlənir ki,
+  // fast-watch vaxtı/YouTube/Web işinə təsir etməsin.
+  for(const profile of verifiedSocialProfiles.slice(0,2)){
     if(gatewayBudgetLow()) break;
     const directItems=await directSocialProfileItems(profile,org).catch(()=>[]);
     if(!directItems.length) continue;
     const current=Array.isArray(socialItemsByPlatform.get(profile.platform))?socialItemsByPlatform.get(profile.platform):[];
     socialItemsByPlatform.set(profile.platform,dedupe([...directItems,...current]).slice(0,Math.min(40,MAX_INGEST_ITEMS)));
-    console.log(`[${org.short_name}] ${profile.platform} məlum profil postları: ${directItems.length} | ${profile.url}`);
+    console.log(`[${org.short_name}] ${profile.platform} məlum profil postları (public fallback): ${directItems.length} | ${profile.url}`);
   }
 
   const shardPool=sourceShard(configuredSources);
