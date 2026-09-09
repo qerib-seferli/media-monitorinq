@@ -8,6 +8,12 @@ const organizationFilter=document.querySelector('#organization-filter');
 await setupOrganizationFilter(c.profile, organizationFilter);
 const from=document.querySelector('#from'),to=document.querySelector('#to'),period=document.querySelector('#report-period');
 function ymd(d){const x=new Date(d.getTime()-d.getTimezoneOffset()*60000);return x.toISOString().slice(0,10)}
+function platformCountFilter(q,name){
+  const p=String(name||'').toLowerCase();
+  if(p==='web')return q.or('source_platform.ilike.Web,source_platform.ilike.Google News,source_platform.ilike.Bing News');
+  if(p==='x')return q.or('source_platform.ilike.X,source_platform.ilike.Twitter');
+  return q.ilike('source_platform',name);
+}
 function setPeriod(v){
   const now=new Date();let start=new Date(now);
   if(v==='today') start=new Date(now.getFullYear(),now.getMonth(),now.getDate());
@@ -45,19 +51,19 @@ async function load(){
       counted(q=>q.eq('sentiment','negative')),
       counted(q=>q.eq('sentiment','positive')),
       counted(q=>q.gte('priority_score',81)),
-      counted(q=>q.ilike('source_platform','youtube')),
-      counted(q=>q.ilike('source_platform','facebook')),
-      counted(q=>q.ilike('source_platform','instagram')),
-      counted(q=>q.ilike('source_platform','tiktok')),
-      counted(q=>q.ilike('source_platform','linkedin')),
-      counted(q=>q.ilike('source_platform','x')),
-      counted(q=>q.in('source_platform',['Web','Google News'])),
+      counted(q=>platformCountFilter(q,'YouTube')),
+      counted(q=>platformCountFilter(q,'Facebook')),
+      counted(q=>platformCountFilter(q,'Instagram')),
+      counted(q=>platformCountFilter(q,'TikTok')),
+      counted(q=>platformCountFilter(q,'LinkedIn')),
+      counted(q=>platformCountFilter(q,'X')),
+      counted(q=>platformCountFilter(q,'Web')),
       counted(q=>q.gte('priority_score',61).lt('priority_score',81)),
       counted(q=>q.gte('priority_score',31).lt('priority_score',61)),
       counted(q=>q.lt('priority_score',31))
     ]);
     document.querySelector('#metrics').innerHTML=[['Ümumi',total],['Mənfi',neg],['Müsbət',pos],['Kritik',critical]].map(([l,n])=>`<div class="card metric"><div class="label">${l}</div><div class="num">${n}</div></div>`).join('');
-    const platforms=[['YouTube',youtube],['Facebook',facebook],['Instagram',instagram],['TikTok',tiktok],['LinkedIn',linkedin],['X',xPlatform],['Web',web]].filter(([,v])=>v>0);
+    const platforms=[['YouTube',youtube],['Web',web],['Facebook',facebook],['Instagram',instagram],['LinkedIn',linkedin],['TikTok',tiktok],['X',xPlatform]];
     document.querySelector('#platforms').innerHTML=platforms.map(([k,v])=>`<div class="report-row"><span>${k}</span><strong>${v}</strong></div>`).join('')||'<div class="empty">Məlumat yoxdur</div>';
     const buckets=[['81–100',critical],['61–80',p61],['31–60',p31],['0–30',p30]];
     document.querySelector('#priorities').innerHTML=buckets.map(([k,v])=>`<div class="report-row"><span>${k}</span><strong>${v}</strong></div>`).join('');

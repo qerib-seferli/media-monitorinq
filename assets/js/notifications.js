@@ -14,7 +14,8 @@ const list = document.querySelector('#notification-list');
 const globalExcludes=await loadGlobalExcludes();
 const PAGE_SIZE=20;
 let rows=[], mentionMap=new Map(), page=0, loading=false, done=false, filter='all';
-const isComment=m=>String(m?.raw_payload?.kind||'').includes('comment');
+function canonicalPlatform(value=''){const p=String(value||'').trim().toLowerCase();if(p.includes('youtube'))return 'YouTube';if(p.includes('facebook'))return 'Facebook';if(p.includes('instagram'))return 'Instagram';if(p.includes('tiktok'))return 'TikTok';if(p.includes('linkedin'))return 'LinkedIn';if(p==='x'||p.includes('twitter'))return 'X';if(p==='web'||p.includes('google news')||p.includes('bing'))return 'Web';return String(value||'Web').trim()||'Web';}
+const isComment=m=>{const k=String(m?.raw_payload?.kind||'').toLowerCase();return k.includes('comment')||k.includes('reply');};
 const sourceStatus=m=>String(m?.source_status||'active');
 
 const sentinel=document.createElement('div');
@@ -48,7 +49,7 @@ function card(item){
   const removed=sourceStatus(mention)==='removed' || String(item.kind||'').toLowerCase()==='removed';
   const unavailable=sourceStatus(mention)==='unavailable';
   const statusChip=removed?`<span class="notification-status-chip removed">${comment?'Şərh silinib':'Material silinib'}</span>`:unavailable?'<span class="notification-status-chip unavailable">Əlçatan deyil</span>':'';
-  const content = `<span class="notification-icon ${removed?'danger':toneOf(item)}${comment?' comment-icon':''}">${comment?'✉':(removed||toneOf(item)==='danger'?'!':'i')}</span><span class="notification-copy"><span class="notification-title-row"><strong>${escapeHtml(item.title || 'Bildiriş')}</strong>${statusChip}</span><span class="notification-body">${escapeHtml(item.body || '')}</span><span class="notification-meta-row"><time>${fmtDate(mention?.published_at||item.created_at)}</time>${comment?'<span class="mini-type-chip">YouTube rəyi</span>':''}</span></span><span class="notification-arrow">${href?'›':''}</span>`;
+  const content = `<span class="notification-icon ${removed?'danger':toneOf(item)}${comment?' comment-icon':''}">${comment?'✉':(removed||toneOf(item)==='danger'?'!':'i')}</span><span class="notification-copy"><span class="notification-title-row"><strong>${escapeHtml(item.title || 'Bildiriş')}</strong>${statusChip}</span><span class="notification-body">${escapeHtml(item.body || '')}</span><span class="notification-meta-row"><time>${fmtDate(mention?.published_at||item.created_at)}</time>${comment?`<span class="mini-type-chip">${escapeHtml(canonicalPlatform(mention?.source_platform))} rəyi</span>`:''}</span></span><span class="notification-arrow">${href?'›':''}</span>`;
   return href ? `<a class="notification-card${comment?' is-comment':''}" href="${href}">${content}</a>` : `<article class="notification-card${comment?' is-comment':''}">${content}</article>`;
 }
 function render(){
@@ -70,7 +71,7 @@ async function loadNext({reset=false}={}){
     const batch=data||[];
     const ids=[...new Set(batch.map(x=>x.mention_id).filter(Boolean))];
     if(ids.length){
-      const {data:mentions=[],error:mentionError}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,source_url,organizations(short_name)').in('id',ids);
+      const {data:mentions=[],error:mentionError}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,source_url,source_platform,organizations(short_name)').in('id',ids);
       if(mentionError) throw mentionError;
       mentions.forEach(x=>mentionMap.set(x.id,x));
     }
