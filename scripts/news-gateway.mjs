@@ -80,17 +80,31 @@ function isSocialSource(source={}){
 function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[]){
   const domains=SOCIAL_PLATFORM_DOMAINS[platform]||[];
   if(!domains.length) return [];
-  const identities=[org?.short_name,org?.name,...aliasBank.slice(0,4)].map(x=>String(x||'').trim()).filter(x=>x.length>=3);
-  const topic=keywordBank.find(x=>String(x||'').trim().length>=4) || '';
+  const identities=[org?.short_name,org?.name,...aliasBank.slice(0,12)].map(x=>String(x||'').trim()).filter(x=>x.length>=3);
   const district=String(org?.district||'').trim();
-  const base=[...new Set(identities)].slice(0,4);
-  const queries=[];
+  const keywordTerms=[...new Set((keywordBank||[]).map(x=>String(x||'').trim()).filter(x=>x.length>=4))].slice(0,20);
+  const base=[...new Set(identities)].slice(0,12);
+  const pool=[];
   for(const domain of domains){
-    for(const ident of base.slice(0,2)) queries.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
-    if(district) queries.push(`site:${domain} "${district.replace(/"/g,'')}" (suvarma OR meliorasiya OR SMSİİ OR ADSEA)`);
-    if(topic) queries.push(`site:${domain} "${String(topic).replace(/"/g,'')}" ${district?`"${district.replace(/"/g,'')}"`:''}`.trim());
+    for(const ident of base) pool.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
+    if(district){
+      pool.push(`site:${domain} "${district.replace(/"/g,'')}" "ADSEA"`);
+      pool.push(`site:${domain} "${district.replace(/"/g,'')}" (suvarma OR meliorasiya OR SMSİİ OR su)`);
+    }
+    for(const topic of keywordTerms.slice(0,6)) pool.push(`site:${domain} "${String(topic).replace(/"/g,'')}" ${district?`"${district.replace(/"/g,'')}"`:''}`.trim());
   }
-  return [...new Set(queries)].slice(0,FULL_RADAR?6:2);
+  const queries=[...new Set(pool)].filter(Boolean);
+  if(!queries.length) return [];
+  // Fast-watch hər dəfə yalnız eyni ilk iki adı soruşmasın. 15 dəqiqəlik rotasiya ilə
+  // cari ad, köhnə/alternativ ad, rayon+ADSEA və açar söz sorğuları mərhələli işləyir.
+  const limit=Math.min(queries.length,FULL_RADAR?8:3);
+  const key=`${org?.id||org?.short_name||''}|${platform}`;
+  const seed=[...key].reduce((n,ch)=>n+ch.charCodeAt(0),0);
+  const bucket=Math.floor(Date.now()/(15*60*1000));
+  const start=(seed+bucket*limit)%queries.length;
+  const out=[];
+  for(let i=0;i<limit;i++) out.push(queries[(start+i)%queries.length]);
+  return out;
 }
 
 function gatewayBudgetLow() {
@@ -1453,7 +1467,7 @@ for (const org of plan.organizations) {
           const rows=await bingWeb(q,0);
           const exact=dedupe((rows||[]).filter(item=>socialPlatformFromUrl(item?.url||'')===socialPlatform));
           for(const item of exact){
-            collected.push({...item,published_at:null,raw:{...(item?.raw||{}),kind:'public_social_discovery',social_platform:socialPlatform,discovery_query:q,provider:'Bing Web RSS'}});
+            collected.push({...item,published_at:null,raw:{...(item?.raw||{}),kind:'public_social_discovery',social_platform:socialPlatform,discovery_query:q,provider:'Bing Web RSS',public_social:true}});
           }
           console.log(`[${org.short_name}] ${socialPlatform} public discovery: ${exact.length} | ${q}`);
         }catch(e){

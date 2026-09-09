@@ -40,19 +40,24 @@ async function load(){
   try{
     // Hesabat üçün minlərlə nəticəni brauzerə çəkmirik; Supabase yalnız sayları qaytarır.
     // 1000-lik səhifələmə əvvəl böyük egress yaradırdı.
-    const [total,neg,pos,critical,youtube,web,p61,p31,p30]=await Promise.all([
+    const [total,neg,pos,critical,youtube,facebook,instagram,tiktok,linkedin,xPlatform,web,p61,p31,p30]=await Promise.all([
       counted(),
       counted(q=>q.eq('sentiment','negative')),
       counted(q=>q.eq('sentiment','positive')),
       counted(q=>q.gte('priority_score',81)),
       counted(q=>q.ilike('source_platform','youtube')),
+      counted(q=>q.ilike('source_platform','facebook')),
+      counted(q=>q.ilike('source_platform','instagram')),
+      counted(q=>q.ilike('source_platform','tiktok')),
+      counted(q=>q.ilike('source_platform','linkedin')),
+      counted(q=>q.ilike('source_platform','x')),
       counted(q=>q.in('source_platform',['Web','Google News'])),
       counted(q=>q.gte('priority_score',61).lt('priority_score',81)),
       counted(q=>q.gte('priority_score',31).lt('priority_score',61)),
       counted(q=>q.lt('priority_score',31))
     ]);
     document.querySelector('#metrics').innerHTML=[['Ümumi',total],['Mənfi',neg],['Müsbət',pos],['Kritik',critical]].map(([l,n])=>`<div class="card metric"><div class="label">${l}</div><div class="num">${n}</div></div>`).join('');
-    const platforms=[['YouTube',youtube],['Web',web]].filter(([,v])=>v>0);
+    const platforms=[['YouTube',youtube],['Facebook',facebook],['Instagram',instagram],['TikTok',tiktok],['LinkedIn',linkedin],['X',xPlatform],['Web',web]].filter(([,v])=>v>0);
     document.querySelector('#platforms').innerHTML=platforms.map(([k,v])=>`<div class="report-row"><span>${k}</span><strong>${v}</strong></div>`).join('')||'<div class="empty">Məlumat yoxdur</div>';
     const buckets=[['81–100',critical],['61–80',p61],['31–60',p31],['0–30',p30]];
     document.querySelector('#priorities').innerHTML=buckets.map(([k,v])=>`<div class="report-row"><span>${k}</span><strong>${v}</strong></div>`).join('');

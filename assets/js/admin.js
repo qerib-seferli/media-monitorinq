@@ -572,20 +572,51 @@ function sourcePlatformLabel(key) {
   return ({youtube:'YouTube',facebook:'Facebook',instagram:'Instagram',tiktok:'TikTok',linkedin:'LinkedIn',x:'X',web:'Web',digər:'Digər'})[key] || key;
 }
 
+function sourcePlatformFromUrl(value='') {
+  const v=String(value||'').trim().toLowerCase();
+  if(/(^|\.)youtube\.com|youtu\.be/.test(v)) return 'YouTube';
+  if(/(^|\.)facebook\.com/.test(v)) return 'Facebook';
+  if(/(^|\.)instagram\.com/.test(v)) return 'Instagram';
+  if(/(^|\.)tiktok\.com/.test(v)) return 'TikTok';
+  if(/(^|\.)linkedin\.com/.test(v)) return 'LinkedIn';
+  if(/(^|\.)x\.com|(^|\.)twitter\.com/.test(v)) return 'X';
+  return '';
+}
+
+function canonicalSourcePlatform(platform='',url='') {
+  return sourcePlatformFromUrl(url) || sourcePlatformLabel(normalizeSourcePlatform(platform));
+}
+
 async function loadSourceIndex() {
   const rows = [];
+  const seen = new Set();
+  const pushRows = (batch=[]) => {
+    for (const row of batch || []) {
+      const id=String(row?.id||'');
+      if(!id || seen.has(id)) continue;
+      seen.add(id); rows.push(row);
+    }
+  };
   const pageSize = 1000;
   for (let from = 0; from < 20000; from += pageSize) {
     const { data, error } = await supabase.from('sources')
-      .select('id,organization_id,platform,is_active')
+      .select('id,organization_id,platform,url,is_active,created_at')
       .order('created_at',{ascending:false})
       .range(from, from + pageSize - 1);
     if (error) { toast(error.message,'error'); break; }
     const batch = data || [];
-    rows.push(...batch);
+    pushRows(batch);
     if (batch.length < pageSize) break;
   }
-  sourceIndex = rows;
+  // Sosial platformalar ayrıca da oxunur. Bu, köhnə cache/paginasiya vəziyyətində
+  // Facebook/Instagram/TikTok/LinkedIn/X qruplarından birinin paneldə itmə ehtimalını aradan qaldırır.
+  const social = await supabase.from('sources')
+    .select('id,organization_id,platform,url,is_active,created_at')
+    .in('platform',['Facebook','Instagram','TikTok','LinkedIn','X'])
+    .order('created_at',{ascending:false})
+    .limit(500);
+  if (!social.error) pushRows(social.data || []);
+  sourceIndex = rows.sort((a,b)=>String(b?.created_at||'').localeCompare(String(a?.created_at||'')));
 }
 
 function renderSources() {
@@ -1942,15 +1973,31 @@ document.querySelector('#exclude-form').onsubmit = async e => {
 };
 document.querySelector('#source-form').onsubmit = async e => {
   e.preventDefault();
-  const platform = document.querySelector('#source-platform').value.trim();
+  const selectedPlatform = document.querySelector('#source-platform').value.trim();
   const url = document.querySelector('#source-url').value.trim();
+  const platform = canonicalSourcePlatform(selectedPlatform,url);
   const googleNews = url.includes('news.google.com/rss/');
   const urlNoSlash = url.replace(/\/+$/,'');
-  let duplicateQuery = supabase.from('sources').select('id',{count:'exact',head:true});
+  let duplicateQuery = supabase.from('sources').select('id,platform,url,is_active,organization_id,created_at');
   duplicateQuery = googleNews ? duplicateQuery.ilike('url','%news.google.com/rss/%') : duplicateQuery.in('url',[urlNoSlash,`${urlNoSlash}/`]);
   const duplicateResult = await duplicateQuery;
   if (duplicateResult.error) return toast(duplicateResult.error.message,'error');
-  if ((duplicateResult.count || 0) > 0) return toast(googleNews ? 'Qlobal Google News RSS artıq mövcuddur.' : 'Bu qlobal mənbə artıq mövcuddur.', 'error');
+  const existing=(duplicateResult.data||[])[0];
+  if (existing) {
+    // Eyni sosial URL əvvəldən səhv platforma adı ilə yazılıbsa, ikinci dublikat yaratmaq
+    // əvəzinə mövcud qlobal sətri kanonik platformaya düzəldib aktivləşdiririk.
+    const existingKey=normalizeSourcePlatform(existing.platform);
+    const wantedKey=normalizeSourcePlatform(platform);
+    if (wantedKey && wantedKey!=='web' && existingKey!==wantedKey) {
+      const fixed=await supabase.from('sources').update({platform,is_active:true,organization_id:null}).eq('id',existing.id).select('id,organization_id,platform,url,is_active,created_at').single();
+      if(fixed.error) return toast(fixed.error.message,'error');
+      toast(`${platform} qlobal mənbəsi düzəldildi və aktivləşdirildi.`,'success');
+      e.target.reset();
+      await refresh();
+      return;
+    }
+    return toast(googleNews ? 'Qlobal Google News RSS artıq mövcuddur.' : 'Bu qlobal mənbə artıq mövcuddur.', 'info');
+  }
   const { data:created, error } = await supabase.from('sources').insert({organization_id:null,platform,url,is_active:true}).select('id,organization_id,platform,url,is_active,created_at').single();
   toast(error ? error.message : 'Qlobal mənbə əlavə edildi',error?'error':'success');
   if(!error){
