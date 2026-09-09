@@ -1636,18 +1636,37 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   // nəticələri kəskin artıra bilər; buna görə pozitiv arxiv sözlərindən hər təşkilat/run
   // üçün fərqli pəncərə götürülür. Saatlıq rotasiya ilə bütün ehtiyat bank mərhələli dolaşır.
   const reserveLimit=Math.max(350,Math.min(1200,Math.floor(maxPos*.32)));
-  const reserveCountResult:any=await admin.from('keywords').select('id',{count:'exact',head:true}).is('organization_id',null).or('is_active.eq.false,is_active.is.null');
-  const reserveCount=Math.max(0,Number(reserveCountResult?.count||0));
+  // Admin panel “Ehtiyat rotasiya bankı”nı bütün keywords cədvəli üzrə hesablayır.
+  // Köhnə məntiq yalnız organization_id=NULL ehtiyatlarını saydığı üçün təşkilata
+  // bağlı deaktiv qeydlər olduqda paneldə minlərlə ehtiyat görünsə də worker 0 deyirdi.
+  // Qlobal + cari təşkilat ehtiyatlarını ayrıca sayıb eyni rotasiya pəncərəsində birləşdiririk.
+  const reserveFilter=(q:any)=>q.or('is_active.eq.false,is_active.is.null');
+  const globalReserveCountResult:any=await reserveFilter(admin.from('keywords').select('id',{count:'exact',head:true}).is('organization_id',null));
+  const orgReserveCountResult:any=organizationId
+    ? await reserveFilter(admin.from('keywords').select('id',{count:'exact',head:true}).eq('organization_id',organizationId))
+    : {count:0,error:null};
+  const globalReserveCount=Math.max(0,Number(globalReserveCountResult?.count||0));
+  const orgReserveCount=Math.max(0,Number(orgReserveCountResult?.count||0));
+  const reserveCount=globalReserveCount+orgReserveCount;
   let reserveRows:any[]=[];
+  const bucket=Math.floor(Date.now()/3600000);
+  const takeWindow=async(scope:'global'|'org',count:number,limit:number)=>{
+    if(count<=0||limit<=0)return [];
+    const maxStart=Math.max(0,count-limit);
+    const start=maxStart?radarTextHash(`${organizationId||'global'}:${scope}:${bucket}`)%(maxStart+1):0;
+    let q:any=admin.from('keywords').select('organization_id,value,kind,is_active,created_at');
+    q=scope==='global'?q.is('organization_id',null):q.eq('organization_id',organizationId);
+    q=q.or('is_active.eq.false,is_active.is.null').order('created_at',{ascending:true}).range(start,Math.min(count-1,start+limit-1));
+    const rr:any=await q;
+    return rr?.error?[]:(Array.isArray(rr?.data)?rr.data:[]);
+  };
   if(reserveCount>0){
-    const bucket=Math.floor(Date.now()/3600000);
-    const maxStart=Math.max(0,reserveCount-reserveLimit);
-    const start=maxStart?radarTextHash(`${organizationId||'global'}:${bucket}`)%(maxStart+1):0;
-    const rr:any=await admin.from('keywords')
-      .select('organization_id,value,kind,is_active,created_at')
-      .is('organization_id',null).or('is_active.eq.false,is_active.is.null')
-      .order('created_at',{ascending:true}).range(start,Math.min(reserveCount-1,start+reserveLimit-1));
-    if(!rr?.error) reserveRows=Array.isArray(rr?.data)?rr.data:[];
+    const globalLimit=globalReserveCount?Math.max(1,Math.round(reserveLimit*(globalReserveCount/reserveCount))):0;
+    const orgLimit=orgReserveCount?Math.max(1,reserveLimit-globalLimit):0;
+    reserveRows=[
+      ...await takeWindow('global',globalReserveCount,Math.min(globalReserveCount,globalLimit)),
+      ...await takeWindow('org',orgReserveCount,Math.min(orgReserveCount,orgLimit))
+    ];
   }
 
   const seen=new Set<string>(); const rows:any[]=[];

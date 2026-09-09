@@ -1736,7 +1736,25 @@ for (const org of plan.organizations) {
   const socialItemsByPlatform=new Map();
   const discoveredSocialProfiles=[...(Array.isArray(officialSocialProfiles)?officialSocialProfiles:[])];
   if(!SITEMAP_FOCUS && activeSocialPlatforms.length){
-    for(const socialPlatform of activeSocialPlatforms){
+    // Brave-in kiçik fast-watch büdcəsini platforma siyahısının təsadüfi sırası yeməsin.
+    // Hər 15 dəqiqəlik bucket + shard üçün iki platformalı pəncərə seçirik. Beləliklə
+    // Facebook/Instagram yüksək tezliklə yoxlanır, TikTok/X/LinkedIn isə növbəti
+    // pəncərələrdə mütləq növbə alır. Bing/public discovery isə bütün platformalarda
+    // əvvəlki kimi işləməyə davam edir; bu sıra yalnız Brave fallback prioritetidir.
+    const braveFastPairs=[
+      ['Facebook','Instagram'],
+      ['TikTok','X'],
+      ['LinkedIn','Facebook'],
+      ['Instagram','TikTok'],
+      ['X','LinkedIn']
+    ];
+    const braveBucket=Math.floor(Date.now()/(15*60*1000));
+    const bravePair=braveFastPairs[(braveBucket+SOURCE_SHARD_INDEX+QUERY_PASS)%braveFastPairs.length];
+    const socialLoop=[...activeSocialPlatforms].sort((a,b)=>{
+      const ai=bravePair.indexOf(a), bi=bravePair.indexOf(b);
+      return (ai<0?99:ai)-(bi<0?99:bi);
+    });
+    for(const socialPlatform of socialLoop){
       if(gatewayBudgetLow()) break;
       // Public discovery bütün internetdə indekslənmiş sosial nəticələri axtarır.
       // Profil landing-page tapılarsa onu material kimi saxlamırıq; əvvəl təşkilata
@@ -1777,10 +1795,15 @@ for (const org of plan.organizations) {
       if(!bingSocialHits && queries.length && braveRequestsUsed<BRAVE_DISCOVERY_BUDGET && !gatewayBudgetLow()){
         const platformPriority=['Facebook','Instagram','TikTok','X','LinkedIn'];
         const priorityIndex=platformPriority.indexOf(socialPlatform);
-        const fastEligible=FULL_RADAR || priorityIndex<2 || braveRequestsUsed<Math.max(0,BRAVE_DISCOVERY_BUDGET-1);
+        // Fast-watch-da Brave yalnız bu run üçün seçilmiş iki platformaya xərclənir.
+        // FULL_RADAR-da isə geniş büdcə ilə bütün aktiv platformalar işləyə bilər.
+        const fastEligible=FULL_RADAR || bravePair.includes(socialPlatform);
         if(fastEligible){
           const bucket=Math.floor(Date.now()/(15*60*1000));
-          const pickIndex=(Math.max(0,priorityIndex)+bucket+SOURCE_SHARD_INDEX+QUERY_PASS)%queries.length;
+          // İlk Brave sorğusu həmişə təşkilatın ən güclü identifikatorlarından gələn
+          // priority hissəsindən başlasın; sonrakı run-larda query pəncərəsi rotasiya edir.
+          const strongWindow=Math.min(3,queries.length);
+          const pickIndex=strongWindow ? (bucket+SOURCE_SHARD_INDEX+QUERY_PASS)%strongWindow : 0;
           const braveQuery=queries[pickIndex]||queries[0];
           const brave=await bravePublicDiscovery([braveQuery],{count:12,freshness:RECENT_PRIORITY?'py':''});
           const exactBrave=dedupe((brave.results||[]).filter(item=>socialPlatformFromUrl(item?.url||'')===socialPlatform));
