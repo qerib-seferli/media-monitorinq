@@ -557,7 +557,11 @@ async function loadKeywordGroup(group, offset=0, append=false) {
 }
 
 function normalizeSourcePlatform(value='') {
-  const v = String(value || '').trim().toLocaleLowerCase('az-AZ');
+  // Platform adları texniki identifikatorlardır; Azərbaycan dili locale-i burada
+  // işlədiləndə böyük `I` hərfi `ı`-ya çevrilir (Instagram -> ınstagram,
+  // LinkedIn -> linkedın) və sayğac həmin mənbələri tanımır. Platform adlarını
+  // locale-dən asılı olmayan ASCII lower-case ilə normallaşdırırıq.
+  const v = String(value || '').trim().toLowerCase();
   if (v.includes('youtube')) return 'youtube';
   if (v.includes('facebook')) return 'facebook';
   if (v.includes('instagram')) return 'instagram';
