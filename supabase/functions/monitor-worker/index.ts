@@ -360,6 +360,55 @@ Deno.serve(async (req) => {
       orgs = rotateOrganizationBatch(orgs, options.organization_shard_count, options.organization_shard_index, options.organization_batch, options.organization_rotation_bucket);
     }
 
+    // GitHub news-gateway təşkilatın rəsmi saytından və pilot seed-lərdən tapdığı sosial
+    // profil URL-lərini mövcud sources cədvəlində organization_id ilə saxlayır. Yeni cədvəl
+    // və migration tələb etmir; qlobal facebook.com/instagram.com kökləri isə organization_id=NULL
+    // olaraq platforma aktivləşdiricisi kimi qalır.
+    if (options.mode === 'social_source_upsert') {
+      const org = orgs.find((x:any)=>String(x.id)===String(options.organization_id||''));
+      if (!org) return json({ok:false,run_id:runId,mode:'social_source_upsert',error:'Təşkilat tapılmadı'},200);
+      const allowed=new Set(['Facebook','Instagram','TikTok','LinkedIn','X']);
+      const rows=(Array.isArray(options.social_sources)?options.social_sources:[]).slice(0,24);
+      let insertedCount=0,existingCount=0,updatedCount=0;
+      const saved:any[]=[];
+      for(const row of rows){
+        const rawUrl=String(row?.url||'').trim();
+        if(!rawUrl) continue;
+        const platform=canonicalPlatform(row?.platform||inferPlatform(rawUrl));
+        if(!allowed.has(platform)) continue;
+        if(inferPlatform(rawUrl)!==platform) continue;
+        let url=rawUrl;
+        try{const u=new URL(rawUrl);u.hash='';url=u.toString();}catch{continue;}
+        const noSlash=url.replace(/\/+$/,'');
+        const existing:any=await admin.from('sources')
+          .select('id,organization_id,platform,url,is_active')
+          .eq('organization_id',org.id)
+          .in('url',[noSlash,`${noSlash}/`])
+          .limit(1)
+          .maybeSingle();
+        if(existing?.error && !['PGRST116'].includes(String(existing.error?.code||''))) throw existing.error;
+        if(existing?.data){
+          existingCount++;
+          if(existing.data.is_active===false || canonicalPlatform(existing.data.platform)!==platform){
+            const ures:any=await admin.from('sources').update({platform,is_active:true}).eq('id',existing.data.id);
+            if(ures?.error) throw ures.error;
+            updatedCount++;
+          }
+          saved.push({id:existing.data.id,platform,url,existing:true});
+          continue;
+        }
+        const created:any=await admin.from('sources').insert({organization_id:org.id,platform,url,is_active:true}).select('id,organization_id,platform,url,is_active').single();
+        if(created?.error){
+          // Eyni profil paralel shard-da artıq əlavə olunubsa run-u qırmızı etmirik.
+          if(String(created.error?.code||'')==='23505'){existingCount++;continue;}
+          throw created.error;
+        }
+        insertedCount++;
+        saved.push(created.data);
+      }
+      return json({ok:true,run_id:runId,mode:'social_source_upsert',organization:org.short_name,received:rows.length,inserted:insertedCount,existing:existingCount,updated:updatedCount,sources:saved.slice(0,24)},200);
+    }
+
     // Meta monitoru təşkilatların ağır sources/alias/service-point kontekstini yükləməzdən
     // əvvəl işləyir. Meta Graph API materiallarının uyğunluq yoxlaması üçün təşkilatın əsas
     // məlumatları, açar-söz bankı və rayon yaşayış məntəqələri kifayətdir. Bu erkən çıxış
@@ -3141,6 +3190,7 @@ type RunOptions = {
   github_run_id:number;
   radar_stage:string;
   meta_page_limit:number;
+  social_sources:{platform:string;url:string;name:string}[];
 };
 
 const DEFAULT_RUN_OPTIONS:RunOptions = {
@@ -3186,7 +3236,8 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   scan_started_at:null,
   github_run_id:0,
   radar_stage:'',
-  meta_page_limit:1
+  meta_page_limit:1,
+  social_sources:[]
 };
 
 async function readRunOptions(req:Request):Promise<RunOptions> {
@@ -3248,7 +3299,12 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       scan_started_at:body?.scan_started_at ? String(body.scan_started_at).slice(0,64) : null,
       github_run_id:Math.max(0,Number(body?.github_run_id || 0)),
       radar_stage:String(body?.radar_stage || '').replace(/[^A-Za-z0-9_-]/g,'').slice(0,40),
-      meta_page_limit:Math.max(1,Math.min(4,Number(body?.meta_page_limit || 1)))
+      meta_page_limit:Math.max(1,Math.min(4,Number(body?.meta_page_limit || 1))),
+      social_sources:(Array.isArray(body?.social_sources)?body.social_sources:[]).slice(0,24).map((x:any)=>({
+        platform:String(x?.platform||'').slice(0,40),
+        url:String(x?.url||'').slice(0,2000),
+        name:String(x?.name||'').slice(0,240)
+      })).filter((x:any)=>/^https?:\/\//i.test(x.url))
     };
   } catch {
     return {...DEFAULT_RUN_OPTIONS};

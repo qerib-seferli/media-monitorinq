@@ -623,16 +623,26 @@ function renderSources() {
   const el = document.querySelector('#source-list');
   if (!el) return;
   const counts = new Map();
+  const globalCounts = new Map();
+  const orgCounts = new Map();
   for (const row of sourceIndex) {
-    const key = normalizeSourcePlatform(row.platform);
+    // Platform adı köhnə/səhv yazılıbsa belə URL-dən kanonik sosial platformanı tanıyırıq.
+    // Beləliklə Instagram/TikTok/LinkedIn/X sətri bazada olduğu halda paneldən itmir.
+    const key = normalizeSourcePlatform(canonicalSourcePlatform(row.platform,row.url));
     counts.set(key,(counts.get(key)||0)+1);
+    const target=row.organization_id?orgCounts:globalCounts;
+    target.set(key,(target.get(key)||0)+1);
   }
   const order = ['youtube','facebook','instagram','tiktok','linkedin','x','web','digər'];
-  el.innerHTML = order.filter(key=>counts.get(key)).map(key=>`
+  el.innerHTML = order.filter(key=>counts.get(key)).map(key=>{
+    const g=globalCounts.get(key)||0, o=orgCounts.get(key)||0;
+    const meta=o ? `${g} qlobal + ${o} təşkilat profili` : `${g||counts.get(key)} qlobal mənbə`;
+    return `
     <details class="source-platform-group" data-source-platform-group data-platform-key="${key}" data-total="${counts.get(key)}">
-      <summary><span><strong>${sourcePlatformLabel(key)}</strong><small>${counts.get(key)} qlobal mənbə</small></span><span class="badge info">${counts.get(key)}</span></summary>
+      <summary><span><strong>${sourcePlatformLabel(key)}</strong><small>${meta}</small></span><span class="badge info">${counts.get(key)}</span></summary>
       <div class="source-platform-body" data-source-platform-body><div class="empty compact">Açdıqda yüklənəcək.</div></div>
-    </details>`).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
+    </details>`;
+  }).join('') || '<div class="empty compact">Mənbə yoxdur.</div>';
 
   el.querySelectorAll('[data-source-platform-group]').forEach(group => {
     group.addEventListener('toggle', () => {
@@ -648,31 +658,23 @@ async function loadSourcePlatformGroup(group, offset=0, append=false) {
   if (!append) body.innerHTML = '<div class="empty compact">Yüklənir…</div>';
 
   const platformKey = group.dataset.platformKey;
-  const actualPlatforms = [...new Set(sourceIndex
-    .filter(x => normalizeSourcePlatform(x.platform) === platformKey)
-    .map(x => String(x.platform || 'Web')))].filter(Boolean);
-
-  let q = supabase.from('sources')
-    .select('id,organization_id,platform,url,is_active,created_at')
-    .order('created_at',{ascending:false})
-    .range(offset, offset + SOURCE_PAGE_SIZE - 1);
-  if (actualPlatforms.length === 1) q = q.eq('platform', actualPlatforms[0]);
-  else if (actualPlatforms.length > 1) q = q.in('platform', actualPlatforms);
-
-  const { data, error } = await q;
+  // Yenidən PostgREST eq/in sorğusu etməyirik: sourceIndex artıq bütün səhifələri və sosial
+  // fallback sorğusunu birləşdirib. Lokal filter həm cache/paginasiya yarışını, həm də platforma
+  // adının URL ilə fərqli yazılması halını aradan qaldırır.
+  const allRows=sourceIndex.filter(x=>normalizeSourcePlatform(canonicalSourcePlatform(x.platform,x.url))===platformKey);
+  const rows=allRows.slice(offset,offset+SOURCE_PAGE_SIZE);
   group.dataset.loading = '0';
-  if (error) { body.innerHTML = `<div class="empty compact">${escapeHtml(error.message)}</div>`; return; }
-
-  const rows = data || [];
   const html = rows.map(x => {
     const rawUrl = String(x.url || '');
+    const scope=x.organization_id ? ' • təşkilata bağlı sosial profil/mənbə' : ' • qlobal';
     return `<div class="source-item">
-      <div class="source-item-main"><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl || 'URL yoxdur')}</a><small>${escapeHtml(x.platform || sourcePlatformLabel(platformKey))}${x.organization_id ? ' • köhnə tenant mənbəsi, qlobal hovuzda istifadə olunur' : ' • qlobal'}</small></div>
+      <div class="source-item-main"><a target="_blank" rel="noopener" href="${escapeHtml(rawUrl || '#')}">${escapeHtml(rawUrl || 'URL yoxdur')}</a><small>${escapeHtml(canonicalSourcePlatform(x.platform,rawUrl) || sourcePlatformLabel(platformKey))}${scope}</small></div>
       <span class="source-item-actions"><span class="badge source-status-badge ${x.is_active === false ? 'danger' : 'ok'}">${x.is_active === false ? 'Söndürülüb' : 'Aktiv'}</span><button class="icon-btn source-delete" type="button" title="Mənbəni sil" aria-label="Mənbəni sil" data-source-delete="${x.id}">×</button></span>
     </div>`;
   }).join('');
 
-  const total = Number(group.dataset.total || 0);
+  const total = allRows.length;
+  group.dataset.total=String(total);
   const nextOffset = offset + rows.length;
   const more = nextOffset < total ? `<button class="btn ghost btn-sm source-load-more" type="button" data-source-more="${nextOffset}">Daha ${Math.min(SOURCE_PAGE_SIZE,total-nextOffset)} göstər</button>` : '';
   if (append) {

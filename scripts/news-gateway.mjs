@@ -77,7 +77,7 @@ function socialPlatformFromUrl(value=''){
 function isSocialSource(source={}){
   return Boolean(normalizeSocialPlatform(source?.platform) || socialPlatformFromUrl(source?.url));
 }
-function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[]){
+function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], profileSources=[]){
   const domains=SOCIAL_PLATFORM_DOMAINS[platform]||[];
   if(!domains.length) return [];
   const identities=[org?.short_name,org?.name,...aliasBank.slice(0,12)].map(x=>String(x||'').trim()).filter(x=>x.length>=3);
@@ -86,6 +86,15 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[]){
   const base=[...new Set(identities)].slice(0,12);
   const pool=[];
   for(const domain of domains){
+    // Təşkilatın artıq məlum olan sosial profili varsa əvvəl həmin handle/profile daxilində
+    // axtarırıq. Bu, `site:instagram.com "Bərdə SMSİİ"` kimi zəif indekslənən ümumi
+    // sorğulardan daha dəqiqdir və bütün təşkilatlarda eyni mexanizmlə işləyir.
+    for(const source of (profileSources||[])){
+      if((normalizeSocialPlatform(source?.platform)||socialPlatformFromUrl(source?.url))!==platform) continue;
+      const hint=socialProfileSearchHint(source?.url||'',platform);
+      if(hint) pool.push(`site:${domain}/${hint}`);
+      if(hint) pool.push(`site:${domain} "${hint.replace(/"/g,'')}"`);
+    }
     for(const ident of base) pool.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
     if(district){
       pool.push(`site:${domain} "${district.replace(/"/g,'')}" "ADSEA"`);
@@ -95,9 +104,7 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[]){
   }
   const queries=[...new Set(pool)].filter(Boolean);
   if(!queries.length) return [];
-  // Fast-watch hər dəfə yalnız eyni ilk iki adı soruşmasın. 15 dəqiqəlik rotasiya ilə
-  // cari ad, köhnə/alternativ ad, rayon+ADSEA və açar söz sorğuları mərhələli işləyir.
-  const limit=Math.min(queries.length,FULL_RADAR?8:3);
+  const limit=Math.min(queries.length,FULL_RADAR?10:4);
   const key=`${org?.id||org?.short_name||''}|${platform}`;
   const seed=[...key].reduce((n,ch)=>n+ch.charCodeAt(0),0);
   const bucket=Math.floor(Date.now()/(15*60*1000));
@@ -105,6 +112,148 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[]){
   const out=[];
   for(let i=0;i<limit;i++) out.push(queries[(start+i)%queries.length]);
   return out;
+}
+
+function socialProfileSearchHint(value='', platform=''){
+  try{
+    const u=new URL(String(value||''));
+    const parts=u.pathname.split('/').filter(Boolean);
+    if(platform==='Instagram' || platform==='TikTok' || platform==='LinkedIn' || platform==='X') return parts.slice(0,2).join('/');
+    if(platform==='Facebook'){
+      const id=u.searchParams.get('id');
+      if(id) return `profile.php?id=${id}`;
+      return parts.slice(0,2).join('/');
+    }
+  }catch{}
+  return '';
+}
+
+function canonicalSocialProfileUrl(value='', platform=''){
+  try{
+    const u=new URL(String(value||''));
+    const p=platform||socialPlatformFromUrl(u.toString());
+    if(!p) return '';
+    u.hash='';
+    for(const key of [...u.searchParams.keys()]) if(/^(utm_|fbclid$|gclid$|ref$|locale$)/i.test(key)) u.searchParams.delete(key);
+    if(p==='Instagram'){
+      const parts=u.pathname.split('/').filter(Boolean);
+      if(!parts.length || ['p','reel','reels','stories','explore','accounts'].includes(parts[0].toLowerCase())) return '';
+      return `https://www.instagram.com/${parts[0]}/`;
+    }
+    if(p==='Facebook'){
+      const id=u.searchParams.get('id');
+      if(/profile\.php$/i.test(u.pathname) && id) return `https://www.facebook.com/profile.php?id=${encodeURIComponent(id)}`;
+      const parts=u.pathname.split('/').filter(Boolean);
+      if(!parts.length || ['posts','watch','reel','reels','groups','share','shares','sharer.php','dialog','plugins','story.php','permalink.php','login'].includes(parts[0].toLowerCase())) return '';
+      return `https://www.facebook.com/${parts[0]}`;
+    }
+    if(p==='TikTok'){
+      const parts=u.pathname.split('/').filter(Boolean); if(!parts[0]?.startsWith('@')) return '';
+      return `https://www.tiktok.com/${parts[0]}`;
+    }
+    if(p==='LinkedIn'){
+      const parts=u.pathname.split('/').filter(Boolean); if(parts.length<2 || !['company','in','school'].includes(parts[0].toLowerCase())) return '';
+      return `https://www.linkedin.com/${parts[0]}/${parts[1]}/`;
+    }
+    if(p==='X'){
+      const parts=u.pathname.split('/').filter(Boolean); if(!parts.length || ['home','search','explore','i'].includes(parts[0].toLowerCase())) return '';
+      return `https://x.com/${parts[0]}`;
+    }
+  }catch{}
+  return '';
+}
+
+function extractSocialProfilesFromHtml(html='', base=''){
+  const out=[];
+  for(const m of String(html||'').matchAll(/href=["']([^"'#]+)["']/gi)){
+    const abs=absoluteUrl(base,m[1]);
+    const platform=socialPlatformFromUrl(abs);
+    if(!platform) continue;
+    const url=canonicalSocialProfileUrl(abs,platform);
+    if(url) out.push({platform,url,name:`${platform} rəsmi profil`});
+  }
+  return [...new Map(out.map(x=>[`${x.platform}|${x.url.toLowerCase()}`,x])).values()];
+}
+
+function pilotSocialSeeds(org={}){
+  const key=asciiToken(`${org?.short_name||''} ${org?.name||''}`);
+  if(key.includes('berde') && key.includes('smsii')) return [
+    {platform:'Instagram',url:'https://www.instagram.com/berde_smsii/',name:'Bərdə SMSİİ Instagram'},
+    {platform:'Facebook',url:'https://www.facebook.com/profile.php?id=61565938869736',name:'Bərdə SMSİİ Facebook'}
+  ];
+  return [];
+}
+
+async function discoverOfficialSocialProfiles(org, allConfiguredSources=[]){
+  const existing=(allConfiguredSources||[])
+    .filter(s=>isSocialSource(s) && String(s?.organization_id||'')===String(org?.id||''))
+    .map(s=>({platform:normalizeSocialPlatform(s?.platform)||socialPlatformFromUrl(s?.url),url:canonicalSocialProfileUrl(s?.url,normalizeSocialPlatform(s?.platform)||socialPlatformFromUrl(s?.url)),name:s?.name||''}))
+    .filter(x=>x.platform&&x.url);
+  const found=[...existing,...pilotSocialSeeds(org)];
+  // Yalnız təşkilatın ehtimal edilən rəsmi domenlərinə baxırıq; xəbər saytlarının sosial
+  // linklərini səhvən təşkilata bağlamırıq.
+  for(const domain of inferredOrgDomains(org).slice(0,2)){
+    if(gatewayBudgetLow()) break;
+    const base=`https://${domain}/`;
+    try{
+      let html=await fetchText(base,{timeoutMs:5000,retries:0,minGapMs:120}).catch(()=> '');
+      if(html.length<800) html=fetchRenderedHtml(base,10000)||html;
+      found.push(...extractSocialProfilesFromHtml(html,base));
+    }catch{}
+  }
+  const unique=[...new Map(found.filter(x=>x.platform&&x.url).map(x=>[`${x.platform}|${x.url.toLowerCase()}`,x])).values()];
+  const missing=unique.filter(x=>!existing.some(e=>e.platform===x.platform&&e.url.toLowerCase()===x.url.toLowerCase()));
+  if(missing.length){
+    try{
+      const r=await callMonitor({mode:'social_source_upsert',organization_id:org.id,social_sources:missing.slice(0,12)},35000,1);
+      console.log(`[${org.short_name}] Sosial profil reyestri: tapıldı=${unique.length}, yeni=${Number(r?.inserted||0)}, mövcud=${Number(r?.existing||0)}`);
+    }catch(e){ console.log(`[${org.short_name}] Sosial profil reyestri yazılmadı: ${e?.message||e}`); }
+  }
+  return unique;
+}
+
+function socialPostLinksFromHtml(html='', profileUrl='', platform=''){
+  const out=[];
+  const add=(href,near='')=>{
+    const abs=absoluteUrl(profileUrl,href); if(!abs || socialPlatformFromUrl(abs)!==platform) return;
+    let ok=false;
+    if(platform==='Instagram') ok=/\/p\/[^/?#]+\/?|\/reel\/[^/?#]+\/?/i.test(new URL(abs).pathname);
+    else if(platform==='Facebook') ok=/\/posts\/|\/videos\/|\/reel\/|story_fbid=|permalink\.php/i.test(abs);
+    else if(platform==='TikTok') ok=/\/video\/\d+/i.test(abs);
+    else if(platform==='LinkedIn') ok=/\/posts\/|\/feed\/update\//i.test(abs);
+    else if(platform==='X') ok=/\/status\/\d+/i.test(abs);
+    if(!ok) return;
+    const clean=canonicalUrlKey(abs);
+    const text=stripHtml(String(near||'')).replace(/\s+/g,' ').trim();
+    out.push({url:clean,text});
+  };
+  for(const m of String(html||'').matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,1200}?)<\/a>/gi)) add(m[1],m[2]);
+  // React səhifələrində permalink bəzən anchor body-si olmadan JSON/attribute daxilində qalır.
+  const escaped=String(html||'').replace(/\\u0026/g,'&').replace(/\\\//g,'/');
+  for(const m of escaped.matchAll(/https?:\/\/(?:www\.)?(?:facebook\.com|instagram\.com|tiktok\.com|linkedin\.com|x\.com|twitter\.com)\/[^"'<>\s]+/gi)) add(m[0],'');
+  return [...new Map(out.map(x=>[x.url,x])).values()].slice(0,24);
+}
+
+async function directSocialProfileItems(source,org){
+  const platform=normalizeSocialPlatform(source?.platform)||socialPlatformFromUrl(source?.url);
+  const profileUrl=canonicalSocialProfileUrl(source?.url,platform);
+  if(!platform || !profileUrl) return [];
+  let html='';
+  try{
+    html=await fetchText(profileUrl,{timeoutMs:6500,retries:0,minGapMs:120}).catch(()=> '');
+    if(html.length<1200 || /log in|daxil ol|security verification|not a bot/i.test(html)){
+      const rendered=fetchRenderedHtml(profileUrl,11000);
+      if(rendered && rendered.length>html.length) html=rendered;
+    }
+  }catch{}
+  if(!html) return [];
+  const links=socialPostLinksFromHtml(html,profileUrl,platform);
+  return links.map((row,index)=>({
+    title:`${org?.short_name||org?.name||'Təşkilat'} — ${platform} paylaşımı`,
+    text:row.text||`${org?.short_name||org?.name||''} rəsmi ${platform} profilində paylaşım`,
+    url:row.url,published_at:null,image:null,author:source?.name||org?.short_name||null,
+    raw:{kind:'known_social_profile_post',provider:`${platform} public profile`,social_platform:platform,profile_url:profileUrl,trusted_org_profile:true,profile_discovery_rank:index+1}
+  }));
 }
 
 function gatewayBudgetLow() {
@@ -970,6 +1119,7 @@ function buildDomainQueries(org, domain, keyword='') {
 function inferredOrgDomains(org) {
   const out=new Set();
   for (const source of (Array.isArray(org?.rss_sources)?org.rss_sources:[])) {
+    if(isSocialSource(source)) continue;
     const d=domainFromUrl(source?.url||''); if(d && !/google\.com$|bing\.com$/i.test(d)) out.add(d);
   }
   const district=String(org?.district||'').trim().toLocaleLowerCase('az-AZ')
@@ -1393,8 +1543,17 @@ for (const org of plan.organizations) {
   const domainWebItems=[];
   const directWebItems=[];
   const allConfiguredSources=[...(Array.isArray(org.rss_sources)?org.rss_sources:[])];
-  const activeSocialPlatforms=[...new Set(allConfiguredSources.map(x=>normalizeSocialPlatform(x?.platform)||socialPlatformFromUrl(x?.url)).filter(Boolean))];
+  // Köhnə Web mənbələri əvvəlki kimi qlobal hovuz olaraq qalır. Sosial profil sətrləri isə
+  // organization_id daşıyırsa yalnız həmin təşkilata aiddir; başqa rayonun profilini bu
+  // təşkilat üçün scan etmirik. organization_id=NULL olan facebook.com/instagram.com kökü
+  // yalnız platformanı aktivləşdirən qlobal flag rolunu oynayır.
+  const socialConfigForOrg=allConfiguredSources.filter(source=>isSocialSource(source) && (!source?.organization_id || String(source.organization_id)===String(org.id)));
   const configuredSources=allConfiguredSources.filter(source=>!isSocialSource(source));
+  const socialProfileSources=await discoverOfficialSocialProfiles(org,allConfiguredSources);
+  const activeSocialPlatforms=[...new Set([
+    ...socialConfigForOrg.map(x=>normalizeSocialPlatform(x?.platform)||socialPlatformFromUrl(x?.url)),
+    ...socialProfileSources.map(x=>x.platform)
+  ].filter(Boolean))];
   for(const domain of inferredOrgDomains(org)){
     if(!configuredSources.some(x=>domainFromUrl(x?.url||'')===domain)) configuredSources.push({platform:'Web',url:`https://${domain}/`,name:`${domain} birbaşa sayt`});
   }
@@ -1459,8 +1618,18 @@ for (const org of plan.organizations) {
   if(!SITEMAP_FOCUS && activeSocialPlatforms.length){
     for(const socialPlatform of activeSocialPlatforms){
       if(gatewayBudgetLow()) break;
-      const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank);
+      const platformProfiles=socialProfileSources.filter(x=>x.platform===socialPlatform);
+      const queries=socialDiscoveryQueries(org,socialPlatform,keywordBank,aliasQueryBank,platformProfiles);
       const collected=[];
+      // Rəsmi/məlum profil URL-ləri varsa axtarış indeksindən əlavə olaraq profilin özündə
+      // görünən permalinkləri də best-effort oxuyuruq. Login/challenge olarsa sakitcə public
+      // discovery-yə davam edir; digər Web/YouTube axınını dayandırmır.
+      for(const profile of platformProfiles.slice(0,FULL_RADAR?4:2)){
+        if(gatewayBudgetLow()) break;
+        const direct=await directSocialProfileItems(profile,org).catch(()=>[]);
+        collected.push(...direct);
+        console.log(`[${org.short_name}] ${socialPlatform} məlum profil discovery: ${direct.length} | ${profile.url}`);
+      }
       for(const q of queries){
         if(gatewayBudgetLow()) break;
         try{
