@@ -16,6 +16,7 @@ const period=document.querySelector('#period');
 const dateFrom=document.querySelector('#date-from');
 const dateTo=document.querySelector('#date-to');
 const sentinel=document.querySelector('#load-sentinel');
+const platformSwitcher=document.querySelector('#platform-switcher');
 const PAGE_SIZE=50;
 let rows=[], page=0, loading=false, done=false, requestToken=0;
 const globalExcludes=await loadGlobalExcludes();
@@ -40,6 +41,59 @@ function applyPlatformFilter(q,value){
   if(p==='Web')return q.or('source_platform.ilike.Web,source_platform.ilike.Google News,source_platform.ilike.Bing News');
   if(p==='X')return q.or('source_platform.ilike.X,source_platform.ilike.Twitter');
   return q.ilike('source_platform',p);
+}
+
+const PLATFORM_TABS=[
+  {id:'',label:'Hamısı',icon:'◉',className:'all'},
+  {id:'YouTube',label:'YouTube',icon:'▶',className:'youtube'},
+  {id:'Facebook',label:'Facebook',icon:'f',className:'facebook'},
+  {id:'Instagram',label:'Instagram',icon:'◎',className:'instagram'},
+  {id:'TikTok',label:'TikTok',icon:'♪',className:'tiktok'},
+  {id:'LinkedIn',label:'LinkedIn',icon:'in',className:'linkedin'},
+  {id:'X',label:'X',icon:'𝕏',className:'x'},
+  {id:'Web',label:'Web',icon:'⌁',className:'web'}
+];
+const PLATFORM_TYPES={
+  YouTube:[['','Hamısı'],['video','Videolar'],['short','Shorts'],['comment','Şərhlər'],['reply','Cavablar']],
+  Facebook:[['','Hamısı'],['post','Postlar'],['photo','Foto'],['video','Video / Reels'],['comment','Şərhlər']],
+  Instagram:[['','Hamısı'],['post','Postlar'],['reel','Reels'],['photo','Foto / Karusel'],['comment','Şərhlər']],
+  TikTok:[['','Hamısı'],['video','Videolar'],['comment','Şərhlər']],
+  LinkedIn:[['','Hamısı'],['post','Postlar'],['media','Media'],['comment','Şərhlər']],
+  X:[['','Hamısı'],['post','Postlar'],['reply','Cavablar'],['media','Media']],
+  Web:[['','Hamısı'],['news','Xəbərlər'],['official','Rəsmi saytlar'],['archive','Arxiv']]
+};
+let contentType='';
+function renderPlatformSwitcher(){
+  if(!platformSwitcher)return;
+  const selected=platform.value ? canonicalPlatform(platform.value) : '';
+  const main=PLATFORM_TABS.map(x=>`<button type="button" class="platform-pill ${x.className}${selected===x.id?' active':''}" data-platform-tab="${escapeHtml(x.id)}"><span>${x.icon}</span>${escapeHtml(x.label)}</button>`).join('');
+  const types=(PLATFORM_TYPES[selected]||[]).map(x=>`<button type="button" class="content-pill${contentType===x[0]?' active':''}" data-content-type="${escapeHtml(x[0])}">${escapeHtml(x[1])}</button>`).join('');
+  platformSwitcher.innerHTML=`<div class="platform-pill-row">${main}</div>${types?`<div class="content-pill-row">${types}</div>`:''}`;
+  platformSwitcher.querySelectorAll('[data-platform-tab]').forEach(btn=>btn.addEventListener('click',()=>{
+    platform.value=btn.dataset.platformTab||''; contentType=''; renderPlatformSwitcher(); load({reset:true});
+  }));
+  platformSwitcher.querySelectorAll('[data-content-type]').forEach(btn=>btn.addEventListener('click',()=>{
+    contentType=btn.dataset.contentType||''; renderPlatformSwitcher(); load({reset:true});
+  }));
+}
+function matchesContentType(m,type=contentType){
+  if(!type)return true;
+  const raw=m?.raw_payload||{};
+  const kind=String(raw.kind||raw.media_product_type||raw.media_type||raw.type||'').toLowerCase();
+  const url=String(m?.source_url||'').toLowerCase();
+  const text=`${kind} ${url}`;
+  if(type==='comment')return /comment|reply/.test(text);
+  if(type==='reply')return /reply/.test(text);
+  if(type==='short')return /shorts\//.test(url)||/short/.test(kind);
+  if(type==='reel')return /\/reel\//.test(url)||/reel/.test(kind);
+  if(type==='photo')return /photo|image|carousel|\/p\//.test(text)&&!/video|reel/.test(kind);
+  if(type==='video')return /video|reel|short/.test(text)&&!/comment|reply/.test(kind);
+  if(type==='media')return /image|photo|video|media|reel/.test(text);
+  if(type==='post')return !/comment|reply/.test(kind);
+  if(type==='news')return /google_news|bing_news|gdelt|news|rss|feed/.test(kind)||canonicalPlatform(m?.source_platform)==='Web';
+  if(type==='official')return /configured_site|official|direct_page/.test(kind);
+  if(type==='archive')return raw?.historical_backfill===true||/archive|sitemap/.test(kind);
+  return true;
 }
 function normalizeStoryTitle(v=''){return String(v||'').toLocaleLowerCase('az-AZ').normalize('NFKD').replace(/[əƏ]/g,'e').replace(/[ıİ]/g,'i').replace(/[şŞ]/g,'s').replace(/[çÇ]/g,'c').replace(/[öÖ]/g,'o').replace(/[üÜ]/g,'u').replace(/[ğĞ]/g,'g').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();}
 function canonicalMentionUrl(value=''){
@@ -244,7 +298,7 @@ async function load({reset=false}={}){
     // Müəyyən tarix aralığında yalnız təsdiqlənmiş paylaşım tarixi olan materiallar
     // görünür. "Bütün tarix" rejimində tarixsiz köhnə arxiv qeydləri də saxlanılır.
     const dateSafeBatch=period.value==='all' ? rawBatch : rawBatch.filter(hasReliablePublishedDate);
-    const batch=filterExcludedMentions(dateSafeBatch,globalExcludes);
+    const batch=filterExcludedMentions(dateSafeBatch,globalExcludes).filter(row=>matchesContentType(row));
     rows=sortRowsByPublication(mergeUnique(rows,batch));
     done=rawBatch.length<PAGE_SIZE;
     page++;
@@ -462,7 +516,7 @@ stage.addEventListener('touchmove',e=>{
 },{passive:false});
 stage.addEventListener('touchend',e=>{if(e.touches.length<2)pinchStart=0;if(e.touches.length===0)isDragging=false;});
 window.addEventListener('resize',applyTransform);
-const reset=()=>load({reset:true}); if(organizationFilter) organizationFilter.onchange=reset; platform.onchange=reset; sentiment.onchange=reset; period.onchange=()=>{presetDates(period.value);updateDateInputs();reset();}; dateFrom.onchange=()=>{period.value='custom';reset();};dateTo.onchange=()=>{period.value='custom';reset();};
+const reset=()=>load({reset:true}); if(organizationFilter) organizationFilter.onchange=reset; platform.onchange=()=>{contentType='';renderPlatformSwitcher();reset();}; sentiment.onchange=reset; period.onchange=()=>{presetDates(period.value);updateDateInputs();reset();}; dateFrom.onchange=()=>{period.value='custom';reset();};dateTo.onchange=()=>{period.value='custom';reset();};
 new IntersectionObserver(entries=>{if(entries[0]?.isIntersecting)load();},{rootMargin:'500px'}).observe(sentinel);
 if(commentOnly){
   const h1=document.querySelector('.monitor-head h1');
@@ -477,7 +531,7 @@ if(commentOnly){
   if(!period.value || period.value==='custom') period.value='month';
   presetDates(period.value);
 }
-updateDateInputs(); await load({reset:true});
+updateDateInputs(); renderPlatformSwitcher(); await load({reset:true});
 const openId=new URLSearchParams(location.search).get('id'); if(openId)await openDetail(openId);
 
 if(!isCentralScope(ctx.profile)) startLiveMonitor({organizationId:ctx.profile.organization_id,fullFirst:commentOnly,onNew:()=>load({reset:true})});

@@ -2884,7 +2884,7 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
         'quyu-hadisəsi-infrastruktur-deyil','kanal-quyu-insan-hadisəsi-infrastruktur-deyil',
         'balıqçılıq-mövzusu-infrastruktur-deyil','media-kanalı-su-kanalı-deyil',
         'mədəniyyət-turizm-mövzusu','nəqliyyat-mövzusu','başqa-regional-idarə',
-        'axtarılmamalı-mövzu-elastik-filtr','axtarılmamalı-mövzu','başqa-rayon-məlumatıdır'
+        'başqa-rayon-məlumatıdır'
       ]);
       // conservative=true olduqda qeyri-müəyyən 'no match' real arxivi silmir.
       // Yalnız açıq-aşkar yanlış material avtomatik gizlədilir.
@@ -2968,6 +2968,7 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
       continue;
     }
     const alreadyAccepted=raw?.monitor_acceptance?.accepted===true;
+    const stablePreviouslyAccepted=alreadyAccepted && raw?.monitor_acceptance?.stable===true;
     const item:Item={
       title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',
       published_at:row?.published_at||null,author:row?.author_name||null,
@@ -2993,7 +2994,7 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
       if(titleKey.length>=18)acceptedByTitle.set(titleKey,{id:String(row.id),text:String(row?.original_text||'')});
       const patch:any={raw_payload:{
         ...raw,
-        monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
+        monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches,acceptance_strength:match.acceptance_strength||'weak',stable:match.stable_acceptance===true},
         // Köhnə reject izi audit üçün raw_payload-da qala bilər, amma cari qərarın
         // accepted olduğu ayrıca və aydın saxlanılır. Tarix statusuna toxunulmur.
         ...(learned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})
@@ -3006,6 +3007,23 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
     }
     {
       const currentScore=Number(row?.relevance_score||0);
+      // Güclü sübutla əvvəllər qəbul edilmiş materialı söz bankının sonrakı
+      // dəyişməsi avtomatik sıfırlamır. Yalnız deterministik false-positive
+      // qaydaları (başqa rayon, insan hadisəsi, media/mədəniyyət/nəqliyyat noise)
+      // bu kilidi aça bilər.
+      const deterministicRejectReasons=new Set([
+        'quyu-hadisəsi-infrastruktur-deyil','kanal-quyu-insan-hadisəsi-infrastruktur-deyil',
+        'balıqçılıq-mövzusu-infrastruktur-deyil','media-kanalı-su-kanalı-deyil',
+        'mədəniyyət-turizm-mövzusu','nəqliyyat-mövzusu','başqa-regional-idarə',
+        'başqa-rayon-məlumatıdır'
+      ]);
+      if(currentScore>0 && stablePreviouslyAccepted && !deterministicRejectReasons.has(String(match.reason||''))){
+        const keep:any=await admin.from('mentions').update({
+          raw_payload:{...raw,monitor_recheck:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[],preserved_existing:true,stable_lock:true}}
+        }).eq('id',row.id);
+        if(!keep?.error)preserved++;
+        continue;
+      }
       // Cari sərt təşkilat+ərazi+mövzu filtri qeydi rədd edirsə, görünən Web
       // arxivində saxlamırıq. Əvvəlki v89 bərpa SQL-i relevance_score-u kütləvi
       // qaldırdığı üçün Trump, ölüm/itkin, başqa rayon və s. materiallar geri
@@ -3503,7 +3521,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
         ...((existing as any)?.raw_payload || {}),
         ...((item.raw as any) || item),
         ...(isWebNews&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
-        monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
+        monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches,acceptance_strength:match.acceptance_strength||'weak',stable:match.stable_acceptance===true},
         ...(matchedServicePoint?.id?{service_point_match:{id:matchedServicePoint.id,short_name:matchedServicePoint.short_name||null,name:matchedServicePoint.name||null,matched_at:new Date().toISOString()}}:{}),
         ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
         ...(String((item.raw as any)?.kind||'').includes('comment') && match.reason==='aidiyyəti-videonun-rəyi' && !(match.matches||[]).length ? {admin_review_status:'auto-ignored'} : {})
@@ -3550,7 +3568,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     raw_payload:{
       ...((item.raw as any) || item),
       ...(isWebNews&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
-      monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches},
+      monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches,acceptance_strength:match.acceptance_strength||'weak',stable:match.stable_acceptance===true},
       ...(ai?.__ai_meta ? {ai_analysis:ai.__ai_meta} : {}),
       ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
       ...(String((item.raw as any)?.kind||'').includes('comment') && match.reason==='aidiyyəti-videonun-rəyi' && !(match.matches||[]).length ? {admin_review_status:'auto-ignored'} : {})
@@ -4112,8 +4130,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const normalizedKeywords = Array.isArray(org.__normalized_keywords) ? org.__normalized_keywords : keywords.map(normalizeForMatch).filter(Boolean);
   const normalizedGlobalKeywords = Array.isArray(org.__normalized_global_keywords) ? org.__normalized_global_keywords : normalizedKeywords;
   const normalizedOrgKeywords = Array.isArray(org.__normalized_org_keywords) ? org.__normalized_org_keywords : [];
-  const excludeTerms = [
-    ...(Array.isArray(org.__normalized_excludes)?org.__normalized_excludes:(Array.isArray(org.__exclude_terms)?org.__exclude_terms:[])),
+  const databaseExcludeTerms = [
+    ...(Array.isArray(org.__normalized_excludes)?org.__normalized_excludes:(Array.isArray(org.__exclude_terms)?org.__exclude_terms:[]))
+  ].map(normalizeForMatch).filter(Boolean);
+  const systemExcludeTerms = [
     'maşın bazarı','avtomobil bazarı','ikinci əl maşın','toy','gəlin','bəy','nişan mərasimi',
     'futbol','idman yarışı','affa','region liqası','futbol liqası','futbol oyunu','konsert','şou','serial','film treyleri','restoran','otel',
     'it','pişik','heyvan bazarı','daşınmaz əmlak','ev satılır','kirayə ev','iş elanları',
@@ -4144,7 +4164,8 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   for (const name of direct) {
     for (const token of String(name||'').split(/\s+/).filter((x:string)=>x.length>=3)) protectedExcludeTerms.add(token);
   }
-  const effectiveExcludeTerms = excludeTerms.filter(term=>!protectedExcludeTerms.has(term));
+  const effectiveSystemExcludeTerms = systemExcludeTerms.filter(term=>!protectedExcludeTerms.has(term));
+  const effectiveDatabaseExcludeTerms = databaseExcludeTerms.filter(term=>!protectedExcludeTerms.has(term));
 
   const contains=(text:string,term:string)=>Boolean(term && (` ${text} `).includes(` ${term} `));
   const directMatches = direct.filter(term=>term.length >= 4 && contains(normalized,term));
@@ -4227,10 +4248,14 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // "futbol xəbərləri" kimi şəkilçi/söz forması dəyişiklikləri blokdan qaçmır.
   // Tək sözlü filtrlərdə isə yalnız söz sərhədi / təhlükəsiz kök uyğunluğu tətbiq olunur
   // ki, qısa bir filtr təsadüfən başqa sözün içində tapılıb düzgün xəbəri silməsin.
-  const flexibleExcludeMatches = webLike
-    ? effectiveExcludeTerms.map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12)
+  const flexibleSystemExcludeMatches = webLike
+    ? effectiveSystemExcludeTerms.map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12)
     : [];
-  const flexibleExcludeHits = flexibleExcludeMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
+  const flexibleDatabaseExcludeMatches = webLike
+    ? effectiveDatabaseExcludeTerms.map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12)
+    : [];
+  const flexibleSystemExcludeHits = flexibleSystemExcludeMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
+  const flexibleDatabaseExcludeHits = flexibleDatabaseExcludeMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
 
   // Təşkilatın rəsmi portalının ana səhifəsi / naviqasiya nəticəsi xəbər deyil.
   // Axtarış mühərrikləri bunu yüksək uyğunluqla qaytarsa da monitorinq və bildirişlərə salmırıq.
@@ -4272,8 +4297,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     ? (coreTopicHit || globalTopicHit)
     : (coreTopicHit || globalTopicHit || scopedKeywordHits.length>0 || organizationBankKeywordHits.length>0 || flexibleBankHits.length>0);
 
-  const exactExclusionHits = effectiveExcludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
-  const exclusionHits = [...new Set([...exactExclusionHits,...flexibleExcludeHits])].slice(0,12);
+  const exactSystemExclusionHits = effectiveSystemExcludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
+  const exactDatabaseExclusionHits = effectiveDatabaseExcludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
+  const systemExclusionHits = [...new Set([...exactSystemExclusionHits,...flexibleSystemExcludeHits])].slice(0,12);
+  const databaseExclusionHits = [...new Set([...exactDatabaseExclusionHits,...flexibleDatabaseExcludeHits])].slice(0,12);
 
   // Web üçün axtarılmamalı filtr sərt veto-dur: müsbət açar söz və ya rayon adı
   // tapılsa belə, aktiv exclude qaydasına düşən material istifadəçiyə göstərilmir.
@@ -4322,8 +4349,16 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     && directMatches.length===0;
   const contextualNoise = mediaChannelNoise || cultureTourismNoise || transportNoise || unrelatedRegionalOfficeNoise;
 
-  const excludedByRule = (webLike || isComment) && (exclusionHits.length > 0 || nonInfrastructureWellIncident || nonInfrastructureHumanIncident || fishingContext || contextualNoise);
-  const negativeOnly = !webLike && exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
+  // Aktiv DB exclude bankında köhnədən səhv kateqoriyaya düşmüş pozitiv frazalar ola bilər.
+  // Buna görə DB exclude-ləri yalnız zəif/naməlum uyğunluqda sərt veto edirik.
+  // Təşkilatın tam adı, təsdiqlənmiş profil və ya rayon+kök su/meliorasiya siqnalı varsa
+  // həmin material sırf köhnə exclude sətrinə görə yoxa çıxmır. Sistem daxili noise
+  // qaydaları isə həmişə sərt qalır.
+  const protectedPositiveEvidence = trustedOrgProfile || directMatches.length>0 || (locationHit && coreTopicHit);
+  const databaseExcludeVeto = databaseExclusionHits.length>0 && !protectedPositiveEvidence;
+  const exclusionHits = [...new Set([...systemExclusionHits,...databaseExclusionHits])].slice(0,12);
+  const excludedByRule = (webLike || isComment) && (systemExclusionHits.length > 0 || databaseExcludeVeto || nonInfrastructureWellIncident || nonInfrastructureHumanIncident || fishingContext || contextualNoise);
+  const negativeOnly = !webLike && (systemExclusionHits.length>0 || databaseExcludeVeto) && !positiveTopic && directMatches.length===0;
 
   const foreignDistricts = [
     'abseron','baki','berde','gence','sumqayit','mingecevir','sirvan','naftalan',
@@ -4373,6 +4408,17 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const hardForeignScript = /[\u0370-\u03FF\u0590-\u05FF\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(`${item.title||''} ${item.text||''}`);
   const foreignScriptRejected = hardForeignScript && strongDirectMatches.length===0 && !locationHit && !coreTopicHit && !azerbaijanContext;
 
+  const acceptanceStrength =
+    trustedParentComment || trustedOrgProfile ? 'trusted'
+    : strongDirectMatches.length>0 ? 'direct'
+    : (districtHit && coreTopicHit) || (villageHits.length>0 && coreTopicHit) ? 'location-topic'
+    : historicalQueryTopicHit ? 'archive-location-topic'
+    : ambiguousDirectSafe ? 'scoped-acronym'
+    : safeCuratedBankHit ? 'curated'
+    : safeFlexibleBankHit ? 'flexible'
+    : 'weak';
+  const stableAcceptance = ['trusted','direct','location-topic','archive-location-topic','scoped-acronym'].includes(acceptanceStrength);
+
   const standardAccepted = !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
     strongDirectMatches.length>0 ||
     ambiguousDirectSafe ||
@@ -4400,6 +4446,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     direct,
     matches,
     excluded_terms:exclusionHits,
+    system_excluded_terms:systemExclusionHits,
+    database_excluded_terms:databaseExclusionHits,
+    acceptance_strength:acceptanceStrength,
+    stable_acceptance:Boolean(accepted && stableAcceptance),
     reason:accepted
       ? (trustedParentComment?'aidiyyəti-videonun-rəyi'
         :directMatches.length?'təşkilat-adı-uyğunluğu'

@@ -2858,3 +2858,28 @@ body.media-viewer-open{
 .mention-card>.toolbar{min-width:0;max-width:100%;justify-content:flex-end}
 .mention-card>.toolbar .btn,.mention-card>.toolbar a.btn{white-space:nowrap;max-width:100%}
 @media(max-width:900px){.mention-card{grid-template-columns:78px minmax(0,1fr)!important}.mention-card>.toolbar{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.mention-card>.toolbar .btn,.mention-card>.toolbar a.btn{min-width:0;width:100%;overflow:hidden;text-overflow:ellipsis}}
+
+
+/* =========================================================
+   v91 — platforma-mərkəzli monitorinq + mobil kompaktlıq
+   ========================================================= */
+.platform-switcher{display:flex;flex-direction:column;gap:7px;margin:0 0 12px;min-width:0;max-width:100%}
+.platform-pill-row,.content-pill-row{display:flex;align-items:center;gap:7px;min-width:0;max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:thin;padding:1px 1px 4px}
+.platform-pill,.content-pill{border:1px solid var(--line);background:rgba(255,255,255,.018);color:#b7c8da;border-radius:12px;min-height:36px;padding:7px 11px;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;cursor:pointer;font:inherit;font-size:11px;transition:.15s ease;flex:0 0 auto}
+.platform-pill>span{width:21px;height:21px;display:grid;place-items:center;border-radius:7px;font-weight:800;background:rgba(255,255,255,.055)}
+.platform-pill:hover,.content-pill:hover{border-color:rgba(241,202,103,.36);background:rgba(255,255,255,.035)}
+.platform-pill.active,.content-pill.active{border-color:rgba(241,202,103,.62);background:rgba(241,202,103,.08);color:#f4d784;box-shadow:0 0 0 1px rgba(241,202,103,.06) inset}
+.platform-pill.youtube>span{color:#ff4b55}.platform-pill.facebook>span{color:#5b9dff}.platform-pill.instagram>span{color:#e778c8}.platform-pill.tiktok>span{color:#7fe9df}.platform-pill.linkedin>span{color:#68a9e8}.platform-pill.x>span{color:#f2f5f7}.platform-pill.web>span{color:#70d8b4}
+.content-pill-row{padding-left:2px}.content-pill{min-height:30px;border-radius:999px;padding:5px 10px;font-size:10px}
+.mention-card{box-sizing:border-box}.mention-card>div:nth-child(2){min-width:0}.mention-card .mention-meta{max-width:100%;overflow:hidden}.mention-card .muted{min-width:0}
+@media(max-width:720px){
+  .platform-switcher{margin:2px -2px 9px;gap:5px}
+  .platform-pill-row,.content-pill-row{gap:6px;padding-bottom:3px}
+  .platform-pill{min-height:33px;padding:6px 9px;font-size:10px;border-radius:10px}
+  .platform-pill>span{width:19px;height:19px;border-radius:6px;font-size:10px}
+  .content-pill{min-height:28px;padding:5px 9px;font-size:9px}
+  .mention-card{overflow:hidden!important}
+  .mention-card>div:nth-child(2){overflow:hidden!important}
+  .mention-card h3,.mention-card p{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden!important}
+  .mention-card h3{-webkit-line-clamp:2}.mention-card p{-webkit-line-clamp:3}
+}
