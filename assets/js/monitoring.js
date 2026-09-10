@@ -93,7 +93,11 @@ function hasReliablePublishedDate(m){
   // istifadəçiyə "paylaşım tarixi" kimi göstərilmir.
   if(platform==='web'||platform.includes('google news')){
     const source=String(raw?.published_date_source||'');
-    return raw?.published_from_page===true && raw?.published_date_status==='verified' && Number(raw?.date_parser_version||0)>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);
+    const pageVerified=raw?.published_from_page===true && raw?.published_date_status==='verified' && Number(raw?.date_parser_version||0)>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);
+    const provider=String(raw?.provider||'').toLowerCase();
+    const kind=String(raw?.kind||'').toLowerCase();
+    const feedReported=raw?.published_date_status==='source-reported' && source==='feed:published' && Number(raw?.date_parser_version||0)>=3 && (/(google news|bing|rss|gdelt|configured feed)/.test(provider) || ['google_news','bing_news','bing_web','gdelt_article','configured_feed'].includes(kind));
+    return pageVerified||feedReported;
   }
   if(['facebook','instagram','tiktok','linkedin','x'].includes(platform)){
     // Sosial paylaşım tarixi yalnız platformanın öz səhifəsindən / rəsmi API-dən

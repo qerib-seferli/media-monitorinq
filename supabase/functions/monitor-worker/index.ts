@@ -1050,12 +1050,13 @@ Deno.serve(async (req) => {
       const villageNames:string[] = org.district_id
         ? await fetchDistrictPlaceNames(admin, String(org.district_id))
         : [];
-      const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit||800,null,true);
-      // Full radarın AI mərhələsi yalnız görünən (>0) qeydləri yoxlamasın.
-      // Əvvəlki versiyalarda relevance_score=0 qalmış Web materiallarını da
-      // cari sərt uyğunluq qaydaları ilə yenidən qiymətləndiririk. Beləliklə
-      // düzgün materiallar silinmədən bərpa olunur, əlaqəsizlər isə gizli qalır.
-      const webRecovery = await refilterExistingWebMentions(admin,org,lowerKeywords,villageNames,Math.min(320,Math.max(120,Number(options.refilter_limit||180))));
+      // Final sabitlik qaydası: AI ələk hər radar run-da yalnız yüksək əminlikli
+      // false-positive qeydləri gizlədir. Sadəcə 'ərazi/mövzu uyğunluğu tapılmadı'
+      // kimi qeyri-müəyyən qərara görə əvvəl qəbul edilmiş real arxiv azaldılmır.
+      const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit||800,null,true,true);
+      // Sıfırlanmış Web arxivindən yalnız cari qaydaya aydın şəkildə uyğun gələnlər
+      // bərpa edilir; qəbul edilməyənlərə toxunulmur. Bu əməliyyat idempotentdir.
+      const webRecovery = await refilterExistingWebMentions(admin,org,lowerKeywords,villageNames,Math.min(420,Math.max(160,Number(options.refilter_limit||180))),true);
       return json({ok:true,run_id:runId,mode:'review_auto_sieve',organization:org.short_name,...result,web_recovery:webRecovery},200);
     }
 
@@ -2856,7 +2857,7 @@ async function storedYoutubeCommentBackfillStep(
   return {items:dedupeItems(out),videos_checked:checked,inserted_hint:0};
 }
 
-async function refilterExistingMentions(admin:any,org:any,keywords:string[],villages:string[],limit=250,before:string|null=null,markReviewed=false){
+async function refilterExistingMentions(admin:any,org:any,keywords:string[],villages:string[],limit=250,before:string|null=null,markReviewed=false,conservative=false){
   let query:any=admin.from('mentions')
     .select('id,title,original_text,source_url,source_platform,published_at,detected_at,author_name,raw_payload,relevance_score')
     .eq('organization_id',org.id)
@@ -2879,6 +2880,20 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
     if(learned?.kind==='exclude') excludeAdded++;
     const raw={...(row?.raw_payload||{})};
     if(!match.accepted){
+      const hardRejectReasons=new Set([
+        'quyu-hadisəsi-infrastruktur-deyil','kanal-quyu-insan-hadisəsi-infrastruktur-deyil',
+        'balıqçılıq-mövzusu-infrastruktur-deyil','media-kanalı-su-kanalı-deyil',
+        'mədəniyyət-turizm-mövzusu','nəqliyyat-mövzusu','başqa-regional-idarə',
+        'axtarılmamalı-mövzu-elastik-filtr','axtarılmamalı-mövzu','başqa-rayon-məlumatıdır'
+      ]);
+      // conservative=true olduqda qeyri-müəyyən 'no match' real arxivi silmir.
+      // Yalnız açıq-aşkar yanlış material avtomatik gizlədilir.
+      if(conservative && !hardRejectReasons.has(String(match.reason||''))){
+        if(markReviewed){
+          await admin.from('mentions').update({raw_payload:{...raw,monitor_recheck:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[],preserved_existing:true,conservative:true}}}).eq('id',row.id);
+        }
+        continue;
+      }
       const patch:any={
         relevance_score:0,
         raw_payload:{
@@ -2916,7 +2931,7 @@ function similarLongWebText(a:string,b:string):boolean{
   return containment>=0.82;
 }
 
-async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],villages:string[],limit=300){
+async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],villages:string[],limit=300,restoreOnly=false){
   // Web arxivi YouTube kimi yığılan tarixçədir: uyğun material bir dəfə təsdiqlənibsə
   // sonrakı run-larda açar söz bankının dəyişməsi onu monitorinqdən çıxarmır.
   // relevance_score=0 olmuş köhnə qeydlər də yenidən yoxlanır; cari məntiqə uyğundursa bərpa edilir.
@@ -2996,6 +3011,19 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
       // qaldırdığı üçün Trump, ölüm/itkin, başqa rayon və s. materiallar geri
       // görünə bilirdi. Qeyd SİLİNMİR: yalnız relevance/priority sıfırlanır və
       // audit səbəbi raw_payload-da qalır. Manual 'kept' istisnası qorunur.
+      const hardRejectReasons=new Set([
+        'quyu-hadisəsi-infrastruktur-deyil','kanal-quyu-insan-hadisəsi-infrastruktur-deyil',
+        'balıqçılıq-mövzusu-infrastruktur-deyil','media-kanalı-su-kanalı-deyil',
+        'mədəniyyət-turizm-mövzusu','nəqliyyat-mövzusu','başqa-regional-idarə',
+        'axtarılmamalı-mövzu-elastik-filtr','axtarılmamalı-mövzu','başqa-rayon-məlumatıdır'
+      ]);
+      // restoreOnly və ya qeyri-müəyyən rədd halında mövcud real Web arxivini
+      // avtomatik azaltmırıq. Açıq false-positive səbəbləri istisnadır.
+      if(currentScore>0 && (restoreOnly || !hardRejectReasons.has(String(match.reason||'')))){
+        const keep:any=await admin.from('mentions').update({raw_payload:{...raw,monitor_recheck:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[],preserved_existing:true,conservative:true}}}).eq('id',row.id);
+        if(!keep?.error)preserved++;
+        continue;
+      }
       if(currentScore>0){
         if(manualStatus==='kept'){
           const keep:any=await admin.from('mentions').update({raw_payload:{...raw,monitor_recheck:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[],preserved_manual_keep:true}}}).eq('id',row.id);
@@ -4400,7 +4428,14 @@ function radarTextHash(value:string):number { let h=2166136261; for(const c of S
 
 function trustedWebDateRaw(raw:any):boolean {
   const source=String(raw?.published_date_source||'');
-  return raw?.published_from_page===true && raw?.published_date_status==='verified' && Number(raw?.date_parser_version||0)>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);
+  const pageVerified=raw?.published_from_page===true && raw?.published_date_status==='verified' && Number(raw?.date_parser_version||0)>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);
+  // Google/Bing/RSS/GDELT feed-lərinin öz pubDate sahəsi discovery vaxtı deyil,
+  // mənbənin verdiyi paylaşım tarixidir. Səhifə parseri tarix tapa bilməyəndə bu
+  // dəyəri 'source-reported' kimi saxlayırıq; detected_at heç vaxt paylaşım tarixi olmur.
+  const provider=String(raw?.provider||'').toLowerCase();
+  const kind=String(raw?.kind||'').toLowerCase();
+  const feedReported=raw?.published_date_status==='source-reported' && source==='feed:published' && Number(raw?.date_parser_version||0)>=3 && (/(google news|bing|rss|gdelt|configured feed)/.test(provider) || ['google_news','bing_news','bing_web','gdelt_article','configured_feed'].includes(kind));
+  return pageVerified || feedReported;
 }
 function webDateNeedsVerification(raw:any,publishedAt:any,detectedAt:any):boolean {
   if(!publishedAt) return true;

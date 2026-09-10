@@ -920,7 +920,8 @@ function parseFeed(xml, rawKind, discoveryQuery, provider) {
       published_at: normalizeDate(pub),
       image: enclosure,
       author: source || null,
-      raw: {kind:rawKind,provider,discovery_query:discoveryQuery,source_url:sourceUrl||null}
+      raw: {kind:rawKind,provider,discovery_query:discoveryQuery,source_url:sourceUrl||null,
+        ...(normalizeDate(pub)?{feed_published_at:normalizeDate(pub),published_date_status:'source-reported',published_date_source:'feed:published',date_parser_version:3}: {})}
     };
   }).filter(x=>x.url && x.title);
 }
@@ -1249,9 +1250,19 @@ async function enrichPage(item) {
 }
 
 function reliablePublishedAt(enriched,target){
-  // Yalnız v2 parserin məqalənin öz scope-undan təsdiqlədiyi tarix bazaya yazılır.
-  if(enriched?.raw?.published_from_page!==true || Number(enriched?.raw?.date_parser_version||0)<2) return null;
-  return validatePublishedForTarget(enriched?.published_at,target||enriched);
+  // Birinci seçim məqalənin öz səhifəsindən təsdiqlənmiş tarixdir.
+  if(enriched?.raw?.published_from_page===true && Number(enriched?.raw?.date_parser_version||0)>=2){
+    const verified=validatePublishedForTarget(enriched?.published_at,target||enriched);
+    if(verified) return verified;
+  }
+  // Səhifə tarix vermirsə Google/Bing/RSS/GDELT-in pubDate sahəsini istifadə et.
+  // Bu detected_at deyil; mənbənin özünün təqdim etdiyi tarixdir və ayrıca
+  // source-reported statusu ilə audit olunur.
+  const raw=enriched?.raw||target?.raw||{};
+  if(raw?.published_date_source==='feed:published' && raw?.published_date_status==='source-reported'){
+    return validatePublishedForTarget(raw?.feed_published_at||target?.published_at||null,target||enriched);
+  }
+  return null;
 }
 
 async function probeSitemapCandidates(items, org, limit=SITEMAP_PROBE_LIMIT) {
