@@ -258,9 +258,10 @@ jobs:
           NEWS_ORG_ROTATION_MINUTES: '15'
           NEWS_DIRECT_ONLY: '0'
           NEWS_GATEWAY_BUDGET_MS: '540000'
-          # Yalnız archive-discovery shard 0 mövcud Web nəticələrini cari sərt filtrlə
-          # yenidən yoxlayır. Düzgün arxiv qalır, həqiqi yanlış material relevance_score=0 olur.
-          NEWS_REFILTER_EXISTING: '0'
+          # Hər archive shard öz rotasiyasına düşən təşkilatın görünən Web qeydlərini
+          # cari sərt təşkilat+ərazi+mövzu filtri ilə yenidən yoxlayır. Qeyd silinmir;
+          # yanlış material yalnız istifadəçi ekranından relevance_score=0 ilə gizlənir.
+          NEWS_REFILTER_EXISTING: '1'
           NEWS_BRAVE_REQUEST_BUDGET: '1'
           NEWS_BRAVE_ROTATE_SHARDS: '1'
           NEWS_SOURCE_SHARD_COUNT: '5'
