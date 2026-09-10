@@ -2838,3 +2838,13 @@ body.media-viewer-open{
   #detail-bg .detail-media-wrap[data-media-slide] .detail-media,#detail-bg .detail-media-video{max-height:38dvh!important}
   #detail-bg .detail-media-nav{width:34px;height:34px;font-size:24px}
 }
+
+
+/* =========================================================
+   v89 — sosial detail kompaktlığı və media fallback görünüşü
+   ========================================================= */
+#detail-bg .detail-modal-head h2{max-width:900px!important;font-weight:700!important}
+#detail-bg .detail-media-wrap.media-load-error{display:none!important}
+#detail-bg .detail-media-carousel:has(.detail-media-wrap.is-active.media-load-error) .detail-media-track::after{content:"Media faylı mənbə tərəfindən birbaşa göstərilmir. Orijinal paylaşımı aç düyməsi ilə baxa bilərsiniz.";display:block;padding:26px;color:var(--muted);font-size:12px;text-align:center}
+@media(min-width:721px){#detail-bg .detail-modal{width:min(1180px,calc(100vw - 64px))!important;max-width:1180px!important}}
+@media(max-width:720px){#detail-bg .detail-modal-head h2{font-size:14px!important;line-height:1.28!important;font-weight:700!important}.mention-card h3{font-size:13px!important}.mention-card p{font-size:11px!important;line-height:1.45!important}}

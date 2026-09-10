@@ -48,8 +48,17 @@ const ORG_ROTATION_BUCKET = process.env.NEWS_ORG_ROTATION_BUCKET !== undefined ?
 const GATEWAY_STARTED_AT = Date.now();
 const GATEWAY_BUDGET_MS = Math.max(60_000, Math.min(1_800_000, Number(process.env.NEWS_GATEWAY_BUDGET_MS || 0))) || 0;
 const GATEWAY_SAFETY_MS = 20_000;
-const BRAVE_DISCOVERY_BUDGET = Math.max(0, Math.min(FULL_RADAR ? 12 : 4, Number(process.env.NEWS_BRAVE_REQUEST_BUDGET ?? (FULL_RADAR ? 8 : 2))));
+const BRAVE_DISCOVERY_BUDGET = Math.max(0, Math.min(FULL_RADAR ? 6 : 2, Number(process.env.NEWS_BRAVE_REQUEST_BUDGET ?? (FULL_RADAR ? 2 : 0))));
+const BRAVE_ROTATE_SHARDS = !['0','false','no'].includes(String(process.env.NEWS_BRAVE_ROTATE_SHARDS ?? '1').toLowerCase());
 let braveRequestsUsed = 0;
+function braveShardEligible(){
+  if(!BRAVE_ROTATE_SHARDS || ORG_SHARD_COUNT<=1) return true;
+  // Ödənişli Brave fallback bütün 5/20 shard-da eyni anda işləməsin. Hər saat yalnız
+  // bir təşkilat shard-ı Brave istifadə edir; qalan shard-lar pulsuz Bing/public discovery
+  // ilə davam edir. Növbəti saat seçilmiş shard dəyişir və əhatə rotasiya olunur.
+  const bucket=Math.floor(Date.now()/(60*60*1000));
+  return ORG_SHARD_INDEX === (bucket % ORG_SHARD_COUNT);
+}
 
 const SOCIAL_PLATFORM_DOMAINS = {
   Facebook: ['facebook.com'],
@@ -382,7 +391,7 @@ function socialMediaCandidates(html='',finalUrl=''){
   add(videos,socialMeta(html,'og:video')||socialMeta(html,'og:video:url')||socialMeta(html,'twitter:player:stream')||'');
   const decoded=decodeSocialUrl(html);
   const imagePatterns=[
-    /["'](?:display_url|display_src|thumbnail_src|image_url|image_uri|photo_image_uri|src)["']\s*:\s*["'](https?:\\?\/\\?\/[^"']+)["']/gi,
+    /["'](?:display_url|display_src|thumbnail_src|image_url|image_uri|photo_image_uri|src|url)["']\s*:\s*["'](https?:\\?\/\\?\/[^"']+)["']/gi,
     /(https?:\/\/[^"'<>\s]+(?:fbcdn\.net|cdninstagram\.com)[^"'<>\s]*\.(?:jpg|jpeg|png|webp)(?:\?[^"'<>\s]*)?)/gi
   ];
   for(const re of imagePatterns) for(const m of decoded.matchAll(re)) add(images,m[1]);
@@ -1944,6 +1953,9 @@ for (const org of plan.organizations) {
 
   const socialItemsByPlatform=new Map();
   const discoveredSocialProfiles=[...(Array.isArray(officialSocialProfiles)?officialSocialProfiles:[])];
+  if(BRAVE_DISCOVERY_BUDGET>0 && activeSocialPlatforms.length){
+    console.log(`[${org.short_name}] Brave qənaət rejimi: shard=${ORG_SHARD_INDEX+1}/${ORG_SHARD_COUNT}, uyğun=${braveShardEligible()?'bəli':'xeyr'}, büdcə=${BRAVE_DISCOVERY_BUDGET}`);
+  }
   if(!SITEMAP_FOCUS && activeSocialPlatforms.length){
     // Brave-in kiçik fast-watch büdcəsini platforma siyahısının təsadüfi sırası yeməsin.
     // Hər 15 dəqiqəlik bucket + shard üçün iki platformalı pəncərə seçirik. Beləliklə
@@ -2009,7 +2021,7 @@ for (const org of plan.organizations) {
       // Hər platformada bir rotasiya olunan təşkilat-spesifik sorğu seçilir. Brave title/snippet
       // bazaya yazılmır: profil URL-si deep-scan üçün reyestrə namizəd olur, post URL-si isə
       // yalnız həmin sosial səhifənin özündən ayrıca oxuna bilirsə ingest edilir.
-      if(!bingSocialHits && queries.length && braveRequestsUsed<BRAVE_DISCOVERY_BUDGET && !gatewayBudgetLow()){
+      if(!bingSocialHits && queries.length && braveShardEligible() && braveRequestsUsed<BRAVE_DISCOVERY_BUDGET && !gatewayBudgetLow()){
         const platformPriority=['Facebook','Instagram','TikTok','X','LinkedIn'];
         const priorityIndex=platformPriority.indexOf(socialPlatform);
         // Fast-watch-da Brave yalnız bu run üçün seçilmiş iki platformaya xərclənir.

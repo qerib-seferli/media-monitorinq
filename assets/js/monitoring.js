@@ -95,6 +95,12 @@ function hasReliablePublishedDate(m){
     const source=String(raw?.published_date_source||'');
     return raw?.published_from_page===true && raw?.published_date_status==='verified' && Number(raw?.date_parser_version||0)>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);
   }
+  if(['facebook','instagram','tiktok','linkedin','x'].includes(platform)){
+    // Sosial paylaşım tarixi yalnız platformanın öz səhifəsindən / rəsmi API-dən
+    // təsdiqlənəndə göstərilir. Discovery vaxtını paylaşım tarixi kimi təqdim etmirik.
+    if(String(raw?.provider||'').toLowerCase().includes('meta graph api')) return true;
+    return raw?.published_from_page===true && raw?.published_date_status==='verified' && String(raw?.published_date_source||'').startsWith('social:');
+  }
   return true;
 }
 function publishedDate(m){return hasReliablePublishedDate(m)?m.published_at:null;}
@@ -170,10 +176,11 @@ function socialAuthor(m,raw={}){
 function compactDisplayTitle(m){
   const raw=m?.raw_payload||{}; const p=canonicalPlatform(m?.source_platform);
   if(['Facebook','Instagram','TikTok','LinkedIn','X'].includes(p)){
-    const author=socialAuthor(m,raw);
+    let author=socialAuthor(m,raw);
+    author=author.replace(new RegExp(`\s+${String(p).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\s*$`,'i'),'').trim();
     if(author)return `${author} — ${p} paylaşımı`;
     const t=String(m?.title||'').trim();
-    if(t.length>120)return `${p} paylaşımı`;
+    if(t.length>90 || /(?:facebook|instagram|tiktok|linkedin|x)\s+paylaşımı/i.test(t))return `${p} paylaşımı`;
   }
   return String(m?.title||'Monitorinq qeydi');
 }
