@@ -2858,7 +2858,7 @@ async function storedYoutubeCommentBackfillStep(
 
 async function refilterExistingMentions(admin:any,org:any,keywords:string[],villages:string[],limit=250,before:string|null=null,markReviewed=false){
   let query:any=admin.from('mentions')
-    .select('id,title,original_text,source_url,published_at,detected_at,author_name,raw_payload,relevance_score')
+    .select('id,title,original_text,source_url,source_platform,published_at,detected_at,author_name,raw_payload,relevance_score')
     .eq('organization_id',org.id)
     .gt('relevance_score',0);
   if(before) query=query.lt('detected_at',before);
@@ -2868,6 +2868,9 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
   if(result?.error)throw result.error;
   let checked=0,filteredOut=0,positiveAdded=0,excludeAdded=0;
   for(const row of result?.data||[]){
+    // YouTube artıq ayrıca sabit discovery/verification axını ilə idarə olunur.
+    // Ümumi AI/review süzgəcinin işləyən YouTube arxivinə toxunmasına icazə vermirik.
+    if(canonicalPlatform(row?.source_platform||'')==='YouTube') continue;
     const item:Item={title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',published_at:row?.published_at||null,author:row?.author_name||null,raw:row?.raw_payload||{}};
     const match=evaluateMatch(org,item,keywords,villages);
     checked++;
@@ -2940,8 +2943,13 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
     const manualStatus=String(raw?.admin_review_status||'');
     // İstifadəçinin əl ilə blokladığı qeyd və canonical duplicate avtomatik
     // bərpa edilmir. Qalan relevance_score=0 qeydlər isə yenidən yoxlanır.
-    if(manualStatus==='blocked' || raw?.canonical_duplicate===true){
-      preserved++;
+    if(manualStatus==='blocked' || manualStatus==='ignored' || raw?.manual_false_positive===true || raw?.canonical_duplicate===true){
+      // Əl ilə rədd edilmiş/yanlış müsbət qeydin əvvəlki bərpa SQL-i və ya köhnə
+      // yumşaq filtr səbəbindən yenidən görünməsinə imkan vermirik.
+      if(Number(row?.relevance_score||0)>0){
+        await admin.from('mentions').update({relevance_score:0,priority_score:0,raw_payload:{...raw,monitor_filter:{filtered_at:new Date().toISOString(),reason:'manual-or-known-false-positive'}}}).eq('id',row.id);
+        filteredOut++;
+      } else preserved++;
       continue;
     }
     const alreadyAccepted=raw?.monitor_acceptance?.accepted===true;
@@ -2983,20 +2991,29 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
     }
     {
       const currentScore=Number(row?.relevance_score||0);
-      // VACİB: artıq görünən Web arxivini avtomatik re-filter heç vaxt gizlətmir.
-      // Açar söz bankı zamanla dəyişə bilər və əvvəl düzgün qəbul olunmuş 100+ materialın
-      // birdən relevance_score=0 olmasına səbəb olmamalıdır. Yeni materiallar yenə də
-      // news_ingest zamanı cari sərt filtrlə yoxlanılır; əl ilə bloklanan/canonical duplicate
-      // qeydlər yuxarıdakı qorunmuş hallarla idarə olunur. Burada yalnız audit izi saxlayırıq.
+      // Cari sərt təşkilat+ərazi+mövzu filtri qeydi rədd edirsə, görünən Web
+      // arxivində saxlamırıq. Əvvəlki v89 bərpa SQL-i relevance_score-u kütləvi
+      // qaldırdığı üçün Trump, ölüm/itkin, başqa rayon və s. materiallar geri
+      // görünə bilirdi. Qeyd SİLİNMİR: yalnız relevance/priority sıfırlanır və
+      // audit səbəbi raw_payload-da qalır. Manual 'kept' istisnası qorunur.
       if(currentScore>0){
+        if(manualStatus==='kept'){
+          const keep:any=await admin.from('mentions').update({raw_payload:{...raw,monitor_recheck:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[],preserved_manual_keep:true}}}).eq('id',row.id);
+          if(!keep?.error)preserved++;
+          continue;
+        }
         const update:any=await admin.from('mentions').update({
+          relevance_score:0,
+          priority_score:0,
           raw_payload:{
             ...raw,
-            monitor_recheck:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[],preserved_existing:true},
+            monitor_acceptance:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[]},
+            monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]},
+            monitor_recheck:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[],preserved_existing:false},
             ...(learned?.kind==='exclude'?{auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})
           }
         }).eq('id',row.id);
-        if(!update?.error){preserved++;if(samples.length<8)samples.push({title:row?.title||'',reason:'mövcud-web-qorundu'});}
+        if(!update?.error){filteredOut++;if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason});}
         continue;
       }
       const update:any=await admin.from('mentions').update({
@@ -4281,7 +4298,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const negativeOnly = !webLike && exclusionHits.length>0 && !positiveTopic && directMatches.length===0;
 
   const foreignDistricts = [
-    'abseron','baki','gence','sumqayit','mingecevir','sirvan','naftalan',
+    'abseron','baki','berde','gence','sumqayit','mingecevir','sirvan','naftalan',
     'agcabedi','agdam','agdas','agsu','astara','balaken','beyleqan','bilesuvar','celilabad','daskesen',
     'fuzuli','gedebey','goranboy','goycay','goygol','haciqabul','imisli','ismayilli','kurdemir','lerik',
     'xacmaz','xizi','quba','zaqatala','babek','naxcivan','ordubad','culfa','sahbuz','sederak','serur',
@@ -4289,7 +4306,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'samkir','siyazan','terter','ucar','yardimli','yevlax','zerdab','susa','lacin','kelbecer','qubadli',
     'zengilan','xocali','xocavend'
   ];
-  const foreignNamesHit = foreignDistricts.filter(name=>contains(normalized,name));
+  const foreignNamesHit = foreignDistricts.filter(name=>name!==district && contains(normalized,name));
   const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0;
 
   const districtWide = org.show_district_wide !== false;

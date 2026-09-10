@@ -2848,3 +2848,13 @@ body.media-viewer-open{
 #detail-bg .detail-media-carousel:has(.detail-media-wrap.is-active.media-load-error) .detail-media-track::after{content:"Media faylı mənbə tərəfindən birbaşa göstərilmir. Orijinal paylaşımı aç düyməsi ilə baxa bilərsiniz.";display:block;padding:26px;color:var(--muted);font-size:12px;text-align:center}
 @media(min-width:721px){#detail-bg .detail-modal{width:min(1180px,calc(100vw - 64px))!important;max-width:1180px!important}}
 @media(max-width:720px){#detail-bg .detail-modal-head h2{font-size:14px!important;line-height:1.28!important;font-weight:700!important}.mention-card h3{font-size:13px!important}.mention-card p{font-size:11px!important;line-height:1.45!important}}
+
+
+/* v90 — monitorinq kartlarının filtr zamanı sağa daşmasının qarşısı */
+.mention-list,#list{min-width:0;max-width:100%;width:100%;overflow:hidden}
+.mention-card{min-width:0;max-width:100%;width:100%;overflow:hidden;grid-template-columns:110px minmax(0,1fr) auto}
+.mention-card>div:not(.toolbar){min-width:0;max-width:100%;overflow:hidden}
+.mention-card h3,.mention-card p{max-width:100%;overflow:hidden;overflow-wrap:anywhere;word-break:break-word}
+.mention-card>.toolbar{min-width:0;max-width:100%;justify-content:flex-end}
+.mention-card>.toolbar .btn,.mention-card>.toolbar a.btn{white-space:nowrap;max-width:100%}
+@media(max-width:900px){.mention-card{grid-template-columns:78px minmax(0,1fr)!important}.mention-card>.toolbar{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.mention-card>.toolbar .btn,.mention-card>.toolbar a.btn{min-width:0;width:100%;overflow:hidden;text-overflow:ellipsis}}
