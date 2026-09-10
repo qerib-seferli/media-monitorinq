@@ -206,7 +206,7 @@ jobs:
           NEWS_ORG_BATCH: '1'
           NEWS_ORG_ROTATION_MINUTES: '15'
           NEWS_DIRECT_ONLY: '1'
-          NEWS_REFILTER_EXISTING: '1'
+          NEWS_REFILTER_EXISTING: '0'
           NEWS_GATEWAY_BUDGET_MS: '210000'
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
@@ -258,7 +258,7 @@ jobs:
           NEWS_GATEWAY_BUDGET_MS: '540000'
           # Yalnız archive-discovery shard 0 mövcud Web nəticələrini cari sərt filtrlə
           # yenidən yoxlayır. Düzgün arxiv qalır, həqiqi yanlış material relevance_score=0 olur.
-          NEWS_REFILTER_EXISTING: '1'
+          NEWS_REFILTER_EXISTING: '0'
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_SOURCE_BATCH: '40'
