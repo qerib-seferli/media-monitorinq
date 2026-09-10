@@ -2983,16 +2983,31 @@ async function refilterExistingWebMentions(admin:any,org:any,keywords:string[],v
     }
     {
       const currentScore=Number(row?.relevance_score||0);
+      // VACİB: artıq görünən Web arxivini avtomatik re-filter heç vaxt gizlətmir.
+      // Açar söz bankı zamanla dəyişə bilər və əvvəl düzgün qəbul olunmuş 100+ materialın
+      // birdən relevance_score=0 olmasına səbəb olmamalıdır. Yeni materiallar yenə də
+      // news_ingest zamanı cari sərt filtrlə yoxlanılır; əl ilə bloklanan/canonical duplicate
+      // qeydlər yuxarıdakı qorunmuş hallarla idarə olunur. Burada yalnız audit izi saxlayırıq.
+      if(currentScore>0){
+        const update:any=await admin.from('mentions').update({
+          raw_payload:{
+            ...raw,
+            monitor_recheck:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[],preserved_existing:true},
+            ...(learned?.kind==='exclude'?{auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})
+          }
+        }).eq('id',row.id);
+        if(!update?.error){preserved++;if(samples.length<8)samples.push({title:row?.title||'',reason:'mövcud-web-qorundu'});}
+        continue;
+      }
       const update:any=await admin.from('mentions').update({
-        ...(currentScore>0?{relevance_score:0}:{}),
         raw_payload:{
           ...raw,
           monitor_acceptance:{accepted:false,checked_at:new Date().toISOString(),reason:match.reason,matches:match.matches||[]},
           monitor_filter:{filtered_at:new Date().toISOString(),reason:match.reason,excluded_terms:match.excluded_terms||[]},
-          ...(learned?.kind==='exclude'?{admin_review_status:'auto-blocked',auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})
+          ...(learned?.kind==='exclude'?{auto_learning:{kind:learned.kind,value:learned.value,at:new Date().toISOString()}}:{})
         }
       }).eq('id',row.id);
-      if(!update?.error){if(currentScore>0)filteredOut++;if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});}
+      if(!update?.error){if(samples.length<8)samples.push({title:row?.title||'',reason:match.reason,excluded_terms:match.excluded_terms||[]});}
     }
   }
   return {checked,filtered_out:filteredOut,restored,preserved,confirmed,duplicates_filtered:duplicatesFiltered,samples};
