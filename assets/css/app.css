@@ -2883,3 +2883,191 @@ body.media-viewer-open{
   .mention-card h3,.mention-card p{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden!important}
   .mention-card h3{-webkit-line-clamp:2}.mention-card p{-webkit-line-clamp:3}
 }
+
+/* =========================================================
+   v92 — platforma naviqasiyası + kompakt monitorinq/detail UI
+   Yalnız monitorinq/dashboard görünüşünə təsir edir.
+   ========================================================= */
+.platform-switcher{
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:start;
+  gap:14px;
+  width:100%;
+  min-width:0;
+  margin:0 0 12px!important;
+}
+.platform-pill-row{
+  display:flex!important;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:7px;
+  min-width:0;
+  max-width:100%;
+  overflow:visible!important;
+  padding:1px!important;
+}
+.content-pill-row{
+  display:flex!important;
+  justify-content:flex-end;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:7px;
+  min-width:0;
+  max-width:100%;
+  overflow:visible!important;
+  padding:1px!important;
+}
+.platform-pill{
+  min-width:0;
+  min-height:36px;
+  padding:6px 10px!important;
+  border-radius:11px!important;
+  gap:6px!important;
+}
+.platform-pill .platform-brand-icon{
+  width:22px!important;
+  height:22px!important;
+  display:grid!important;
+  place-items:center;
+  padding:2px;
+  border-radius:7px!important;
+  background:rgba(255,255,255,.045)!important;
+  flex:0 0 22px;
+}
+.platform-pill .platform-brand-icon svg{width:18px;height:18px;display:block}
+.platform-pill-label{min-width:0}
+.platform-pill.youtube .platform-brand-icon{color:#ff0033}
+.platform-pill.facebook .platform-brand-icon{color:#1877f2}
+.platform-pill.instagram .platform-brand-icon{color:#e45aa9}
+.platform-pill.tiktok .platform-brand-icon{color:#69f4e8}
+.platform-pill.linkedin .platform-brand-icon{color:#0a66c2}
+.platform-pill.x .platform-brand-icon{color:#f5f7fa}
+.platform-pill.web .platform-brand-icon{color:#53cfa8}
+.platform-pill.all .platform-brand-icon{color:#f1ca67}
+.content-pill{min-height:31px!important;padding:5px 10px!important}
+
+.social-metrics{gap:5px!important;margin:5px 0 2px!important}
+.social-metric{gap:4px!important;padding:4px 7px!important;font-size:9px!important}
+.social-metric b{font-size:9px;color:#e9f3f8;font-weight:800}
+.social-metric-icon{display:inline-grid;place-items:center;line-height:1}
+.social-metric.comment-like{border-color:rgba(255,103,132,.22);background:rgba(255,82,116,.055);color:#c9d6e1}
+.social-metric.comment-like .social-metric-icon{color:#ff5b7c;font-size:11px}
+.comment-social-metrics{margin-top:4px!important}
+
+/* Ətraflı pəncərə: təkrar məlumatı azaldır, ilkin medianı daha yığcam göstərir. */
+#detail-bg .detail-modal{
+  width:min(1040px,calc(100vw - 72px))!important;
+  max-width:1040px!important;
+  max-height:84vh!important;
+  padding:0 18px 16px!important;
+  border-radius:18px!important;
+}
+#detail-bg .detail-modal-head{padding:12px 0 8px!important}
+#detail-bg .detail-modal-head h2{font-size:16px!important;line-height:1.28!important;margin-top:5px!important;max-width:820px!important}
+#detail-bg .detail-modal-head .social-metrics{margin-top:5px!important}
+#detail-bg .detail-grid{gap:7px!important;margin:8px 0!important}
+#detail-bg .detail-grid>div{padding:7px 9px!important;border-radius:11px!important}
+#detail-bg .detail-grid strong{font-size:8.5px!important}
+#detail-bg .detail-grid p{font-size:10px!important;margin-top:3px!important;line-height:1.35!important}
+#detail-bg .detail-state{padding:7px 9px!important;margin:7px 0!important}
+#detail-bg .detail-state p{font-size:9px!important;line-height:1.35!important;margin-top:4px!important}
+#detail-bg .detail-actions{margin:7px 0!important;gap:6px!important}
+#detail-bg .detail-actions .btn{min-height:34px;padding:7px 10px!important;font-size:10px!important;border-radius:10px!important}
+#detail-bg .detail-original{margin:8px 0!important}
+#detail-bg .detail-original summary{padding:8px 10px!important;font-size:10px!important}
+#detail-bg .detail-original .detail-text{padding:9px 10px!important;font-size:10px!important;line-height:1.5!important}
+#detail-bg h3{font-size:13px!important;margin:10px 0 5px!important}
+#detail-bg .social-detail-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+#detail-bg .comment-context{margin:8px 0;padding:9px 10px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.018)}
+#detail-bg .comment-context>div>strong{display:block;color:#8eb0c4;font-size:9px;margin-bottom:4px}
+#detail-bg .comment-context p{margin:0;color:#d9e7ef;font-size:10px;line-height:1.4;overflow-wrap:anywhere}
+#detail-bg .comment-technical{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;color:#7796a9;font-size:8.5px}
+#detail-bg .comment-technical span{display:inline-flex;padding:3px 6px;border-radius:999px;background:rgba(255,255,255,.035);max-width:100%;overflow-wrap:anywhere}
+#detail-bg .detail-media-help{font-size:9px!important;margin:3px 0 6px!important}
+#detail-bg .detail-media-carousel{max-width:820px;margin:6px auto 0!important;border-radius:12px!important}
+#detail-bg .detail-media-track{min-height:180px!important;max-height:390px!important}
+#detail-bg .detail-media-wrap[data-media-slide] .detail-media,#detail-bg .detail-media-video{max-height:360px!important;object-fit:contain!important}
+#detail-bg .detail-media-nav{width:34px!important;height:34px!important;font-size:23px!important}
+#detail-bg .detail-media-count{font-size:9px!important;padding:3px 7px!important}
+
+/* Ana səhifə — Son paylaşımlar daha yığcam. */
+.dashboard-mention-card{grid-template-columns:96px minmax(0,1fr)!important;gap:10px!important;padding:9px 10px!important;min-height:0!important}
+.dashboard-mention-card>.thumb{width:96px!important;height:62px!important;border-radius:10px!important}
+.dashboard-mention-card h3{font-size:11px!important;line-height:1.25!important;margin:0 0 3px!important;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden}
+.dashboard-mention-card p{font-size:9.5px!important;line-height:1.35!important;margin:0 0 5px!important;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.dashboard-mention-card .mention-meta{gap:4px!important}
+.dashboard-mention-card .badge,.dashboard-mention-card .muted{font-size:8px!important}
+
+@media(max-width:900px){
+  .platform-switcher{grid-template-columns:1fr!important;gap:7px!important}
+  .content-pill-row{justify-content:center!important}
+}
+
+@media(max-width:720px){
+  html,body{max-width:100%;overflow-x:hidden}
+  .platform-switcher{display:block!important;width:100%!important;max-width:100%!important;margin:1px 0 9px!important;overflow:hidden!important}
+  .platform-pill-row{
+    display:grid!important;
+    grid-template-columns:repeat(4,minmax(0,1fr))!important;
+    gap:6px!important;
+    width:100%!important;
+    max-width:100%!important;
+    padding:0!important;
+    overflow:visible!important;
+  }
+  .platform-pill{
+    width:100%!important;
+    min-width:0!important;
+    min-height:42px!important;
+    padding:5px 4px!important;
+    display:flex!important;
+    flex-direction:column!important;
+    justify-content:center!important;
+    gap:2px!important;
+    font-size:8.5px!important;
+    line-height:1.05!important;
+    overflow:hidden!important;
+  }
+  .platform-pill .platform-brand-icon{width:20px!important;height:20px!important;flex-basis:20px!important;padding:1px!important}
+  .platform-pill .platform-brand-icon svg{width:17px!important;height:17px!important}
+  .platform-pill-label{width:100%;overflow:hidden;text-overflow:ellipsis;text-align:center}
+  .content-pill-row{
+    display:flex!important;
+    justify-content:center!important;
+    align-items:center!important;
+    flex-wrap:wrap!important;
+    width:100%!important;
+    max-width:100%!important;
+    gap:5px!important;
+    margin:7px auto 0!important;
+    padding:0 3px!important;
+    overflow:visible!important;
+  }
+  .content-pill{min-height:27px!important;padding:4px 8px!important;font-size:8.5px!important;flex:0 0 auto!important}
+  .mention-card{max-width:100%!important;width:100%!important}
+  #detail-bg.modal-backdrop{padding:86px 6px calc(72px + env(safe-area-inset-bottom))!important}
+  #detail-bg .detail-modal{width:100%!important;max-width:100%!important;max-height:calc(100dvh - 164px)!important;padding:0 8px 9px!important;border-radius:14px!important}
+  #detail-bg .detail-modal-head{padding:7px 0 5px!important}
+  #detail-bg .detail-modal-head h2{font-size:13px!important;line-height:1.22!important;margin-top:4px!important}
+  #detail-bg .detail-modal-head .icon-btn{width:32px!important;height:32px!important;flex-basis:32px!important}
+  #detail-bg .detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:5px!important;margin:6px 0!important}
+  #detail-bg .social-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  #detail-bg .detail-grid>div{padding:6px 7px!important}
+  #detail-bg .detail-actions{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));width:100%!important}
+  #detail-bg .detail-actions .btn{width:100%!important;min-width:0!important;white-space:normal!important}
+  #detail-bg .detail-media-carousel{max-width:100%!important}
+  #detail-bg .detail-media-track{min-height:145px!important;max-height:31dvh!important}
+  #detail-bg .detail-media-wrap[data-media-slide] .detail-media,#detail-bg .detail-media-video{max-height:29dvh!important}
+  #detail-bg .detail-media-nav{width:30px!important;height:30px!important;font-size:20px!important}
+  .dashboard-mention-card{grid-template-columns:82px minmax(0,1fr)!important;gap:8px!important;padding:8px!important}
+  .dashboard-mention-card>.thumb{width:82px!important;height:56px!important}
+  .dashboard-mention-card h3{font-size:10px!important}
+  .dashboard-mention-card p{font-size:9px!important;-webkit-line-clamp:2}
+}
+
+@media(max-width:390px){
+  .platform-pill-row{gap:5px!important}
+  .platform-pill{font-size:8px!important;min-height:40px!important}
+  .content-pill{font-size:8px!important;padding:4px 7px!important}
+}

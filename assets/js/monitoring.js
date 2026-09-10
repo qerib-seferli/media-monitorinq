@@ -43,15 +43,29 @@ function applyPlatformFilter(q,value){
   return q.ilike('source_platform',p);
 }
 
+function platformIcon(id=''){
+  const common='viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\"';
+  const icons={
+    all:`<svg ${common}><circle cx=\"12\" cy=\"12\" r=\"8.25\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><circle cx=\"12\" cy=\"12\" r=\"2.7\" fill=\"currentColor\"/><path d=\"M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/></svg>`,
+    YouTube:`<svg ${common}><path d=\"M21.2 7.05a2.9 2.9 0 0 0-2.04-2.05C17.35 4.5 12 4.5 12 4.5s-5.35 0-7.16.5A2.9 2.9 0 0 0 2.8 7.05C2.3 8.86 2.3 12 2.3 12s0 3.14.5 4.95A2.9 2.9 0 0 0 4.84 19C6.65 19.5 12 19.5 12 19.5s5.35 0 7.16-.5a2.9 2.9 0 0 0 2.04-2.05c.5-1.81.5-4.95.5-4.95s0-3.14-.5-4.95Z\" fill=\"currentColor\"/><path d=\"m10 15.35 5.1-3.35L10 8.65v6.7Z\" fill=\"#fff\"/></svg>`,
+    Facebook:`<svg ${common}><circle cx=\"12\" cy=\"12\" r=\"10\" fill=\"currentColor\"/><path d=\"M13.55 20v-7h2.35l.36-2.74h-2.71V8.51c0-.79.22-1.33 1.36-1.33h1.45V4.73c-.25-.03-1.11-.1-2.12-.1-2.1 0-3.54 1.28-3.54 3.64v1.99H8.82V13h2.38v7h2.35Z\" fill=\"#fff\"/></svg>`,
+    Instagram:`<svg ${common}><rect x=\"3.1\" y=\"3.1\" width=\"17.8\" height=\"17.8\" rx=\"5.3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/><circle cx=\"12\" cy=\"12\" r=\"4.15\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/><circle cx=\"17.45\" cy=\"6.65\" r=\"1.2\" fill=\"currentColor\"/></svg>`,
+    TikTok:`<svg ${common}><path d=\"M14.6 3.1h3.05c.27 1.72 1.23 3.02 3.05 3.55v3.07a7.3 7.3 0 0 1-3.04-.9v6.05a5.54 5.54 0 1 1-5.55-5.54c.36 0 .72.03 1.06.1v3.13a2.55 2.55 0 1 0 1.43 2.3V3.1Z\" fill=\"currentColor\"/></svg>`,
+    LinkedIn:`<svg ${common}><rect x=\"2.7\" y=\"2.7\" width=\"18.6\" height=\"18.6\" rx=\"2.5\" fill=\"currentColor\"/><circle cx=\"7.2\" cy=\"8.1\" r=\"1.45\" fill=\"#fff\"/><path d=\"M5.95 10.2h2.5v7.35h-2.5V10.2Zm4.05 0h2.4v1c.75-.98 1.65-1.32 2.78-1.32 2.5 0 3.12 1.62 3.12 4.2v3.47h-2.5v-3.08c0-1.36-.05-2.47-1.5-2.47-1.52 0-1.8 1.18-1.8 2.64v2.91H10V10.2Z\" fill=\"#fff\"/></svg>`,
+    X:`<svg ${common}><path d=\"M4.4 3.5h4.15l4.17 5.58 4.9-5.58h1.98l-5.97 6.81 6.15 8.19h-4.15l-4.55-6.08-5.34 6.08H3.76l6.4-7.31L4.4 3.5Zm3.08 1.45H6.94l9.43 12.11h.55L7.48 4.95Z\" fill=\"currentColor\"/></svg>`,
+    Web:`<svg ${common}><circle cx=\"12\" cy=\"12\" r=\"9\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M3.4 12h17.2M12 3c2.25 2.45 3.42 5.43 3.42 9S14.25 18.55 12 21c-2.25-2.45-3.42-5.43-3.42-9S9.75 5.45 12 3Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.55\"/></svg>`
+  };
+  return icons[id||'all']||icons.Web;
+}
 const PLATFORM_TABS=[
-  {id:'',label:'Hamısı',icon:'◉',className:'all'},
-  {id:'YouTube',label:'YouTube',icon:'▶',className:'youtube'},
-  {id:'Facebook',label:'Facebook',icon:'f',className:'facebook'},
-  {id:'Instagram',label:'Instagram',icon:'◎',className:'instagram'},
-  {id:'TikTok',label:'TikTok',icon:'♪',className:'tiktok'},
-  {id:'LinkedIn',label:'LinkedIn',icon:'in',className:'linkedin'},
-  {id:'X',label:'X',icon:'𝕏',className:'x'},
-  {id:'Web',label:'Web',icon:'⌁',className:'web'}
+  {id:'',label:'Hamısı',className:'all'},
+  {id:'YouTube',label:'YouTube',className:'youtube'},
+  {id:'Facebook',label:'Facebook',className:'facebook'},
+  {id:'Instagram',label:'Instagram',className:'instagram'},
+  {id:'TikTok',label:'TikTok',className:'tiktok'},
+  {id:'LinkedIn',label:'LinkedIn',className:'linkedin'},
+  {id:'X',label:'X',className:'x'},
+  {id:'Web',label:'Web',className:'web'}
 ];
 const PLATFORM_TYPES={
   YouTube:[['','Hamısı'],['video','Videolar'],['short','Shorts'],['comment','Şərhlər'],['reply','Cavablar']],
@@ -66,7 +80,7 @@ let contentType='';
 function renderPlatformSwitcher(){
   if(!platformSwitcher)return;
   const selected=platform.value ? canonicalPlatform(platform.value) : '';
-  const main=PLATFORM_TABS.map(x=>`<button type="button" class="platform-pill ${x.className}${selected===x.id?' active':''}" data-platform-tab="${escapeHtml(x.id)}"><span>${x.icon}</span>${escapeHtml(x.label)}</button>`).join('');
+  const main=PLATFORM_TABS.map(x=>`<button type="button" class="platform-pill ${x.className}${selected===x.id?' active':''}" data-platform-tab="${escapeHtml(x.id)}" aria-pressed="${selected===x.id?'true':'false'}"><span class="platform-brand-icon">${platformIcon(x.id)}</span><span class="platform-pill-label">${escapeHtml(x.label)}</span></button>`).join('');
   const types=(PLATFORM_TYPES[selected]||[]).map(x=>`<button type="button" class="content-pill${contentType===x[0]?' active':''}" data-content-type="${escapeHtml(x[0])}">${escapeHtml(x[1])}</button>`).join('');
   platformSwitcher.innerHTML=`<div class="platform-pill-row">${main}</div>${types?`<div class="content-pill-row">${types}</div>`:''}`;
   platformSwitcher.querySelectorAll('[data-platform-tab]').forEach(btn=>btn.addEventListener('click',()=>{
@@ -242,14 +256,18 @@ function compactDisplayTitle(m){
   }
   return String(m?.title||'Monitorinq qeydi');
 }
-function socialMetricBar(raw={}){
+function socialMetricBar(raw={},options={}){
   const metrics=[];
-  const add=(icon,label,value)=>{if(value!==null&&value!==undefined&&String(value)!=='')metrics.push(`<span class="social-metric" title="${escapeHtml(label)}">${icon} ${escapeHtml(String(value))}</span>`)};
-  add('♥','Bəyənmə / reaksiya',raw.like_count??raw.reaction_count??raw.reactions_count);
-  add('💬','Şərh',raw.comments_count??raw.comment_count);
-  add('↗','Paylaşım',raw.share_count??raw.shares_count??raw.shares);
-  add('▶','Baxış',raw.views_count??raw.view_count??raw.video_views);
-  return metrics.length?`<div class="social-metrics">${metrics.join('')}</div>`:'';
+  const add=(icon,label,value,cls='')=>{if(value!==null&&value!==undefined&&String(value)!=='')metrics.push(`<span class="social-metric ${cls}" title="${escapeHtml(label)}"><span class="social-metric-icon">${icon}</span><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></span>`)};
+  if(options.comment){
+    add('♥','Şərh bəyənməsi',raw.like_count??raw.reaction_count??raw.reactions_count??0,'comment-like');
+  }else{
+    add('♥','Bəyənmə',raw.like_count??raw.reaction_count??raw.reactions_count);
+    add('💬','Şərh',raw.comments_count??raw.comment_count);
+    add('↗','Paylaşım',raw.share_count??raw.shares_count??raw.shares);
+    add('▶','Baxış',raw.views_count??raw.view_count??raw.video_views);
+  }
+  return metrics.length?`<div class="social-metrics${options.comment?' comment-social-metrics':''}">${metrics.join('')}</div>`:'';
 }
 
 function isComment(m){const k=String(m?.raw_payload?.kind||'').toLowerCase();return k.includes('comment')||k.includes('reply');}
@@ -264,7 +282,7 @@ function card(m){
   const comment=isComment(m);
   const sourceUrl=mentionSourceUrl(m);
   const platformLabel=canonicalPlatform(m.source_platform);
-  return `<article class="mention-card${comment?' is-comment':''}"><img class="thumb" src="${primaryMediaUrl(m)}" alt="" loading="lazy"><div><h3>${escapeHtml(compactDisplayTitle(m))}</h3><p>${escapeHtml(cleanSocialDisplayText(m.original_text||m.summary||''))}</p>${socialMetricBar(m.raw_payload||{})}<div class="mention-meta">${isCentralScope(ctx.profile)&&(m.service_point?.short_name||m.organizations?.short_name)?`<span class="badge ok">${escapeHtml(m.service_point?.short_name||m.organizations?.short_name)}</span>`:''}<span class="badge info">${escapeHtml(platformLabel)}</span>${comment?'<span class="badge comment-badge">✉ Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${publishedDateText(m)}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${sourceUrl?`<a class="btn" target="_blank" rel="noopener" href="${escapeHtml(sourceUrl)}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
+  return `<article class="mention-card${comment?' is-comment':''}"><img class="thumb" src="${primaryMediaUrl(m)}" alt="" loading="lazy"><div><h3>${escapeHtml(compactDisplayTitle(m))}</h3><p>${escapeHtml(cleanSocialDisplayText(m.original_text||m.summary||''))}</p>${socialMetricBar(m.raw_payload||{},{comment})}<div class="mention-meta">${isCentralScope(ctx.profile)&&(m.service_point?.short_name||m.organizations?.short_name)?`<span class="badge ok">${escapeHtml(m.service_point?.short_name||m.organizations?.short_name)}</span>`:''}<span class="badge info">${escapeHtml(platformLabel)}</span>${comment?'<span class="badge comment-badge">✉ Şərh</span>':''}${sourceStateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':m.priority_score>=61?'warn':'info'}">${m.priority_score||0}%</span><span class="muted">${escapeHtml(m.villages?.name||m.districts?.name||'')}</span><span class="muted">Paylaşım: ${publishedDateText(m)}</span></div></div><div class="toolbar"><button class="btn secondary" data-open="${m.id}">Ətraflı</button>${sourceUrl?`<a class="btn" target="_blank" rel="noopener" href="${escapeHtml(sourceUrl)}">${comment?'Şərhə get':'Orijinalı aç'}</a>`:''}</div></article>`;
 }
 function render(append=false){
   if(!append) list.innerHTML='';
@@ -382,9 +400,9 @@ async function openDetail(id){
   const screenshotState=platformLabel==='Web'&&!hasScreenshot?`<div class="card detail-state"><p class="muted">Arxiv ekran görüntüsü hələ hazırlanır. Yeni qəbul olunan Web materialları tam mətn və media ilə birlikdə tamamlanır; köhnə arxiv növbə ilə yenilənir.</p></div>`:'';
   const originalText=cleanSocialDisplayText(m.original_text||raw.text_original||raw.comment_text||raw.text||raw.message||raw.caption||raw.description||'');
   const displayTitle=compactDisplayTitle(m);
-  const metricsHtml=socialMetricBar(raw);
+  const metricsHtml=socialMetricBar(raw,{comment});
   const socialPlatform=['Facebook','Instagram','TikTok','LinkedIn','X'].includes(platformLabel);
-  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2 title="${escapeHtml(m.title||displayTitle)}">${escapeHtml(displayTitle)}</h2>${metricsHtml}</div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(platformLabel)}</p></div><div><strong>Paylaşılma tarixi</strong><p>${publishedDateText(m)}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(socialAuthor(m,raw)||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh / cavab':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${sourceUrl?`<a class="btn" target="_blank" rel="noopener" href="${escapeHtml(sourceUrl)}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><details class="detail-original" ${socialPlatform?'': 'open'}><summary>Orijinal mətn ${originalText.length>700?'— aç / bağla':''}</summary><div class="muted detail-text">${escapeHtml(originalText||(platformLabel==='Web'?'Tam mətn mənbədən avtomatik tamamlanma növbəsindədir.':'Mətn mənbə tərəfindən təqdim edilməyib.'))}</div></details>${raw.comment_id?`<div class="detail-grid comment-detail-grid"><div><strong>Şərh müəllifi</strong><p>${escapeHtml(m.author_name||raw.author_name||raw.username||'—')}</p></div><div><strong>Şərhin tarixi</strong><p>${publishedDateText(m)}</p></div><div><strong>Əsas material</strong><p>${escapeHtml(raw.video_title||raw.parent_text||raw.parent_caption||raw.parent_message||'—')}</p></div><div><strong>Şərhin bəyənmə sayı</strong><p>${escapeHtml(raw.like_count ?? '0')}</p></div><div><strong>Şərh ID</strong><p>${escapeHtml(raw.comment_id)}</p></div><div><strong>Növ</strong><p>${raw.parent_id||raw.parent_comment_id?'Cavab':'Əsas şərh'}</p></div></div>`:''}${socialDetailHtml(m,raw)}${screenshotState}${media?`<h3>Media sübutları</h3><p class="muted detail-media-help">Əvvəl mənbənin qapaq/paylaşım şəkli, sonra varsa arxiv ekran görüntüsü göstərilir.</p><div class="detail-media-gallery">${media}</div>`:''}</div></div>`;
+  document.querySelector('#modal-root').innerHTML=`<div class="modal-backdrop" id="detail-bg"><div class="modal detail-modal"><div class="modal-head detail-modal-head"><div><span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}% uyğunluq</span><h2 title="${escapeHtml(m.title||displayTitle)}">${escapeHtml(displayTitle)}</h2>${metricsHtml}</div><button class="icon-btn" id="detail-close" aria-label="Bağla">✕</button></div><div class="detail-grid"><div><strong>Platforma</strong><p>${escapeHtml(platformLabel)}</p></div><div><strong>Paylaşılma tarixi</strong><p>${publishedDateText(m)}</p></div><div><strong>Müəllif</strong><p>${escapeHtml(socialAuthor(m,raw)||'—')}</p></div><div><strong>Növ</strong><p>${comment?'Şərh / cavab':'Paylaşım / material'}</p></div></div><div class="card detail-state"><div class="mention-meta">${sourceStateBadge(m)}</div><p>${escapeHtml(sourceStateText(m))}</p></div><div class="detail-actions"><button class="btn secondary" id="detail-speak">🔊 Dinlə</button>${sourceUrl?`<a class="btn" target="_blank" rel="noopener" href="${escapeHtml(sourceUrl)}">${comment?'💬 Şərhə get':'🔗 Orijinal paylaşımı aç'}</a>`:''}</div><details class="detail-original" ${socialPlatform?'': 'open'}><summary>Orijinal mətn ${originalText.length>700?'— aç / bağla':''}</summary><div class="muted detail-text">${escapeHtml(originalText||(platformLabel==='Web'?'Tam mətn mənbədən avtomatik tamamlanma növbəsindədir.':'Mətn mənbə tərəfindən təqdim edilməyib.'))}</div></details>${raw.comment_id?`<div class="comment-context">${raw.video_title||raw.parent_text||raw.parent_caption||raw.parent_message?`<div><strong>Əsas material</strong><p>${escapeHtml(raw.video_title||raw.parent_text||raw.parent_caption||raw.parent_message)}</p></div>`:''}<div class="comment-technical"><span>Şərh ID: ${escapeHtml(raw.comment_id)}</span><span>${raw.parent_id||raw.parent_comment_id?'Cavab':'Əsas şərh'}</span></div></div>`:''}${socialDetailHtml(m,raw)}${screenshotState}${media?`<h3>Media sübutları</h3><p class="muted detail-media-help">Əvvəl mənbənin qapaq/paylaşım şəkli, sonra varsa arxiv ekran görüntüsü göstərilir.</p><div class="detail-media-gallery">${media}</div>`:''}</div></div>`;
   document.body.classList.add('detail-modal-open');
   document.documentElement.classList.add('detail-modal-open');
   mountViewerTopbar();

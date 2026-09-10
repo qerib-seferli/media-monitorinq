@@ -42,6 +42,7 @@ async function fetchDashboardData(){
   const fatal=[allCount,highCount,negCount,posCount,latestRes,notifRes].find(x=>x.error); if(fatal?.error) console.warn(friendlyError(fatal.error));
   const latestRows=filterExcludedMentions(latestRes.data||[],excludes)
     .filter(hasReliablePublishedDate)
+    .filter(m=>!(isComment(m)&&String(m?.source_status||'active')==='removed'))
     .sort((a,b)=>new Date(b.published_at||0)-new Date(a.published_at||0))
     .slice(0,6);
   return {
@@ -53,13 +54,16 @@ function canonicalPlatform(value=''){const p=String(value||'').trim().toLowerCas
 const isComment=m=>{const k=String(m?.raw_payload?.kind||'').toLowerCase();return k.includes('comment')||k.includes('reply');};
 function hasReliablePublishedDate(m){if(!m?.published_at)return false;const platform=String(m?.source_platform||'').toLowerCase();if(platform.includes('youtube'))return true;const raw=m?.raw_payload||{};if(platform==='web'||platform.includes('google news')){const source=String(raw?.published_date_source||'');return raw?.published_from_page===true&&raw?.published_date_status==='verified'&&Number(raw?.date_parser_version||0)>=2&&['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);}return true;}
 const stateBadge=m=>String(m?.source_status||'active')==='removed'?`<span class="badge danger source-removed">${isComment(m)?'Şərh silinib':'Material silinib'}</span>`:String(m?.source_status||'active')==='unavailable'?'<span class="badge warn">Əlçatan deyil</span>':'';
+function cleanDashboardText(value=''){
+  return String(value||'').replace(/\s+/g,' ').replace(/^\s*[0-9.,]+(?:[kmb])?\s+likes?\s*,\s*[0-9.,]+(?:[kmb])?\s+comments?\s*[-–—]\s*[^:]{1,120}\s+(?:on\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*)?:\s*/i,'').trim();
+}
 async function renderDashboard(){
   const results=await fetchDashboardData();
   const metrics=results.metrics||{}; latest=results.latestRows||[]; notifs=results.notifRows||[];
   const items=[['Yeni qeydlər',metrics.total||0,'info'],['Yüksək risk',metrics.high||0,'danger'],['Mənfi',metrics.negative||0,'warn'],['Müsbət',metrics.positive||0,'ok']];
   document.querySelector('#metrics').innerHTML=items.map(([l,n,c])=>`<article class="card metric"><span class="badge ${c}">${escapeHtml(l)}</span><div class="num">${n}</div><div class="label">Bu gün</div></article>`).join('');
 const latestEl=document.querySelector('#latest');
-latestEl.innerHTML=latest?.length?latest.map(m=>`<article class="mention-card dashboard-mention-card${isComment(m)?' is-comment':''}" data-detail-href="./monitorinq.html?id=${encodeURIComponent(m.id)}" tabindex="0" role="link" aria-label="${escapeHtml((m.title||'Monitorinq qeydi')+' — ətraflı bax')}"><img class="thumb" src="${mentionPreviewUrl(m)}" alt="" loading="lazy"><div><h3>${escapeHtml(m.title||'Adsız qeyd')}</h3><p>${escapeHtml(m.original_text||m.summary||'')}</p><div class="mention-meta">${isCentralScope(ctx.profile)&&(m.service_point?.short_name||m.organizations?.short_name)?`<span class="badge ok">${escapeHtml(m.service_point?.short_name||m.organizations?.short_name)}</span>`:''}<span class="badge info">${escapeHtml(canonicalPlatform(m.source_platform))}</span>${isComment(m)?'<span class="badge comment-badge">✉ Şərh</span>':''}${stateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}%</span><span class="muted">Paylaşım: ${fmtDate(m.published_at)}</span></div></div></article>`).join(''):'<div class="empty compact-empty">Hələ nəticə yoxdur.</div>';
+latestEl.innerHTML=latest?.length?latest.map(m=>`<article class="mention-card dashboard-mention-card${isComment(m)?' is-comment':''}" data-detail-href="./monitorinq.html?id=${encodeURIComponent(m.id)}" tabindex="0" role="link" aria-label="${escapeHtml((m.title||'Monitorinq qeydi')+' — ətraflı bax')}"><img class="thumb" src="${mentionPreviewUrl(m)}" alt="" loading="lazy"><div><h3>${escapeHtml(m.title||'Adsız qeyd')}</h3><p>${escapeHtml(cleanDashboardText(m.original_text||m.summary||''))}</p><div class="mention-meta">${isCentralScope(ctx.profile)&&(m.service_point?.short_name||m.organizations?.short_name)?`<span class="badge ok">${escapeHtml(m.service_point?.short_name||m.organizations?.short_name)}</span>`:''}<span class="badge info">${escapeHtml(canonicalPlatform(m.source_platform))}</span>${isComment(m)?'<span class="badge comment-badge">✉ Şərh</span>':''}${stateBadge(m)}<span class="badge ${m.priority_score>=81?'danger':'warn'}">${m.priority_score||0}%</span><span class="muted">Paylaşım: ${fmtDate(m.published_at)}</span></div></div></article>`).join(''):'<div class="empty compact-empty">Hələ nəticə yoxdur.</div>';
 latestEl.querySelectorAll('[data-detail-href]').forEach(card=>{
   const open=()=>location.href=card.dataset.detailHref;
   card.addEventListener('click',open);
