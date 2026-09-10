@@ -3071,3 +3071,140 @@ body.media-viewer-open{
   .platform-pill{font-size:8px!important;min-height:40px!important}
   .content-pill{font-size:8px!important;padding:4px 7px!important}
 }
+
+/* =========================================================
+   v94 — final monitorinq kartı / platforma / PWA modal polish
+   Mövcud backend axtarış və filtr məntiqinə toxunmur.
+   ========================================================= */
+
+/* Platforma seçimi: icon solda, düymə yalnız məzmun qədər en tutur. */
+.platform-pill-row{gap:6px!important}
+.platform-pill{
+  width:auto!important;
+  min-width:0!important;
+  min-height:32px!important;
+  padding:4px 7px!important;
+  border-radius:10px!important;
+  display:inline-flex!important;
+  flex-direction:row!important;
+  align-items:center!important;
+  justify-content:center!important;
+  gap:4px!important;
+  line-height:1!important;
+  overflow:visible!important;
+  flex:0 0 auto!important;
+}
+.platform-pill .platform-brand-icon{
+  width:19px!important;height:19px!important;flex:0 0 19px!important;
+  padding:1px!important;border-radius:6px!important;
+}
+.platform-pill .platform-brand-icon svg{width:16px!important;height:16px!important}
+.platform-pill-label{width:auto!important;min-width:0!important;overflow:visible!important;text-overflow:clip!important;text-align:left!important}
+
+/* Monitorinq kartında media ayrıca dar sütundur; platforma şəkilin üstündədir. */
+.mention-card{grid-template-columns:96px minmax(0,1fr) auto!important;gap:10px!important;padding:11px 12px!important;align-items:center!important}
+.mention-media-col{width:96px;min-width:0;display:grid;gap:5px;align-self:center}
+.mention-thumb-wrap{position:relative;width:100%;min-width:0;overflow:hidden;border-radius:10px}
+.mention-media-col .thumb{display:block!important;width:96px!important;height:64px!important;max-width:100%!important;object-fit:cover!important;object-position:center!important;border-radius:10px!important;background:transparent!important}
+.thumb-platform-chip{position:absolute;left:5px;top:5px;z-index:2;max-width:calc(100% - 10px);display:inline-flex;align-items:center;gap:3px;padding:3px 5px;border-radius:999px;background:rgba(5,15,27,.82);border:1px solid rgba(255,255,255,.14);box-shadow:0 2px 8px rgba(0,0,0,.22);font-size:7.5px;font-weight:800;line-height:1;color:#eef6fb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;backdrop-filter:blur(3px)}
+.thumb-platform-icon{width:11px;height:11px;display:grid;place-items:center;flex:0 0 11px}
+.thumb-platform-icon svg{width:11px;height:11px;display:block}
+.thumb-platform-chip.youtube .thumb-platform-icon{color:#ff0033}.thumb-platform-chip.facebook .thumb-platform-icon{color:#1877f2}.thumb-platform-chip.instagram .thumb-platform-icon{color:#e45aa9}.thumb-platform-chip.tiktok .thumb-platform-icon{color:#69f4e8}.thumb-platform-chip.linkedin .thumb-platform-icon{color:#0a66c2}.thumb-platform-chip.x .thumb-platform-icon{color:#fff}.thumb-platform-chip.web .thumb-platform-icon{color:#53cfa8}
+.mention-copy{min-width:0;overflow:hidden}
+.mention-card .comment-social-metrics{margin:0!important;display:block!important;width:100%!important}
+.mention-card .comment-social-metrics .social-metric{width:100%!important;max-width:100%!important;justify-content:center!important;padding:3px 4px!important;font-size:7.5px!important;gap:3px!important;overflow:hidden!important}
+.mention-card .comment-social-metrics .social-metric span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mention-card .comment-social-metrics .social-metric b{font-size:7.5px!important;flex:0 0 auto}
+.mention-card .mention-meta{gap:5px!important}
+.mention-card .toolbar{gap:6px!important}
+.mention-card .toolbar .btn{min-height:34px!important;padding:7px 10px!important}
+
+/* Dashboard Son paylaşımlar da eyni yığcam media sütunundan istifadə edir. */
+.dashboard-mention-card{grid-template-columns:88px minmax(0,1fr)!important;align-items:center!important;overflow:visible!important}
+.dashboard-mention-card .dashboard-media-col{width:88px!important;gap:4px!important}
+.dashboard-mention-card .mention-thumb-wrap{border-radius:9px!important}
+.dashboard-mention-card .thumb{width:88px!important;height:58px!important;object-fit:cover!important;background:transparent!important}
+.dashboard-mention-card .thumb-platform-chip{font-size:6.8px;padding:2px 4px;left:4px;top:4px}
+.dashboard-thumb-like{display:flex;align-items:center;justify-content:center;gap:3px;width:100%;min-width:0;padding:2px 4px;border-radius:999px;border:1px solid rgba(255,103,132,.22);background:rgba(255,82,116,.055);color:#b9c9d8;font-size:6.8px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dashboard-thumb-like>span{color:#ff5b7c}.dashboard-thumb-like b{color:#eef5f9;font-size:6.8px}
+.dashboard-mention-card .mention-meta{max-height:none!important;overflow:visible!important;flex-wrap:wrap!important}
+
+/* Ətraflı modal: bottom nav örtməsin, arxa səhifə sürüşməsin. */
+html.detail-modal-open,body.detail-modal-open{overflow:hidden!important;overscroll-behavior:none!important}
+#detail-bg.modal-backdrop{z-index:6900!important;overflow:hidden!important}
+body.detail-modal-open .bottom-nav{visibility:hidden!important;pointer-events:none!important;opacity:0!important}
+#detail-bg .detail-modal{overflow-y:auto!important;overscroll-behavior:contain!important;scrollbar-gutter:stable}
+
+/* İlkin media preview-də qara letterbox olmasın; tam baxış viewer-də contain qalır. */
+#detail-bg .detail-media-carousel{background:rgba(7,24,41,.72)!important;overflow:hidden!important}
+#detail-bg .detail-media-track{min-height:0!important;height:230px!important;max-height:230px!important;background:transparent!important;overflow:hidden!important}
+#detail-bg .detail-media-wrap[data-media-slide].is-active{width:100%!important;height:100%!important;overflow:hidden!important;display:block!important;position:relative!important}
+#detail-bg .detail-media-wrap[data-media-slide] .detail-media,
+#detail-bg .detail-media-video{width:100%!important;height:100%!important;max-height:none!important;object-fit:cover!important;object-position:center!important;border-radius:0!important;background:transparent!important;display:block!important}
+#detail-bg .detail-media-wrap[data-media-slide] figcaption{position:absolute!important;left:8px!important;bottom:8px!important;z-index:3!important;padding:4px 7px!important;border-radius:999px!important;background:rgba(4,14,25,.72)!important;color:#e6eef4!important;font-size:8px!important;line-height:1!important;pointer-events:none}
+
+/* Bildiriş boş vəziyyəti kompakt qalsın, süni uzun boş ekran yaratmasın. */
+.notification-list>.empty{padding:24px 14px!important;min-height:0!important;margin:0!important}
+
+@media(max-width:900px){
+  .mention-card{grid-template-columns:82px minmax(0,1fr)!important;gap:8px!important;padding:10px!important;align-items:start!important}
+  .mention-media-col{width:82px!important}
+  .mention-media-col .thumb{width:82px!important;height:66px!important}
+  .mention-card>.toolbar{grid-column:1/-1!important;margin-top:2px!important}
+}
+
+@media(max-width:720px){
+  .platform-switcher{overflow:visible!important}
+  .platform-pill-row{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:6px!important}
+  .platform-pill{
+    width:100%!important;min-width:0!important;min-height:36px!important;padding:4px 3px!important;
+    display:inline-flex!important;flex-direction:row!important;gap:3px!important;overflow:hidden!important;
+    font-size:7.6px!important;
+  }
+  .platform-pill .platform-brand-icon{width:18px!important;height:18px!important;flex-basis:18px!important}
+  .platform-pill .platform-brand-icon svg{width:15px!important;height:15px!important}
+  .platform-pill-label{font-size:7.6px!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;text-align:left!important}
+  .content-pill-row{justify-content:center!important;margin-top:8px!important}
+
+  .mention-card{grid-template-columns:92px minmax(0,1fr)!important;gap:9px!important;padding:10px!important;border-radius:15px!important}
+  .mention-media-col{width:92px!important;align-self:start!important}
+  .mention-media-col .thumb{width:92px!important;height:78px!important;border-radius:10px!important}
+  .thumb-platform-chip{left:4px;top:4px;font-size:7px;padding:3px 4px;max-width:calc(100% - 8px)}
+  .mention-card h3{font-size:12px!important;line-height:1.3!important;-webkit-line-clamp:2!important;margin-bottom:4px!important}
+  .mention-card p{font-size:10px!important;line-height:1.4!important;-webkit-line-clamp:3!important;margin-bottom:5px!important}
+  .mention-card .comment-social-metrics .social-metric{font-size:7px!important;padding:3px!important}
+  .mention-card .mention-meta{gap:4px!important;overflow:visible!important;flex-wrap:wrap!important}
+  .mention-card .badge,.mention-card .muted{font-size:8px!important}
+
+  #detail-bg.modal-backdrop{padding:max(76px,calc(env(safe-area-inset-top) + 72px)) 6px 8px!important;align-items:stretch!important}
+  #detail-bg .detail-modal{width:100%!important;max-width:100%!important;max-height:calc(100dvh - max(84px,calc(env(safe-area-inset-top) + 80px)))!important;margin:0!important;padding:0 8px 10px!important;border-radius:14px!important}
+  #detail-bg .detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  #detail-bg .detail-grid>div{padding:5px 6px!important}
+  #detail-bg .detail-grid strong{font-size:8px!important}
+  #detail-bg .detail-grid p{font-size:9.5px!important}
+  #detail-bg .detail-state{padding:6px 7px!important}
+  #detail-bg .detail-actions .btn{min-height:32px!important;padding:6px 7px!important;font-size:9px!important}
+  #detail-bg .detail-original summary{padding:7px 8px!important}
+  #detail-bg .detail-original .detail-text{padding:8px!important;font-size:9.5px!important;line-height:1.45!important}
+  #detail-bg .detail-media-track{height:180px!important;max-height:180px!important}
+
+  .dashboard-mention-card{grid-template-columns:82px minmax(0,1fr)!important;gap:8px!important;padding:8px!important}
+  .dashboard-mention-card .dashboard-media-col{width:82px!important}
+  .dashboard-mention-card .thumb{width:82px!important;height:58px!important}
+  .dashboard-mention-card h3{-webkit-line-clamp:2!important;font-size:10px!important}
+  .dashboard-mention-card p{-webkit-line-clamp:2!important;font-size:9px!important}
+}
+
+@media(max-width:390px){
+  .platform-pill-row{gap:5px!important}
+  .platform-pill{font-size:7px!important;padding:4px 2px!important;gap:2px!important}
+  .platform-pill-label{font-size:7px!important}
+  .platform-pill .platform-brand-icon{width:17px!important;height:17px!important;flex-basis:17px!important}
+  .mention-card{grid-template-columns:86px minmax(0,1fr)!important;gap:7px!important;padding:9px!important}
+  .mention-media-col{width:86px!important}.mention-media-col .thumb{width:86px!important;height:72px!important}
+}
+
+/* v94.1: 4x2 mobil grid saxlanır, lakin düymənin özü məzmun eni qədərdir. */
+@media(max-width:720px){
+  .platform-pill{width:max-content!important;max-width:100%!important;justify-self:center!important}
+}
