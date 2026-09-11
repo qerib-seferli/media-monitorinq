@@ -31,6 +31,73 @@ async function fetchDistrictPlaceNames(admin:any, districtId:string|null|undefin
   return Array.from(new Set<string>(names));
 }
 
+function organizationDistrictNames(org:any):string[] {
+  const raw=[
+    String(org?.districts?.name||''),
+    ...(Array.isArray(org?.service_area_names)?org.service_area_names:[])
+  ].map((x:any)=>String(x||'').replace(/\s+/g,' ').trim()).filter(Boolean);
+  const seen=new Set<string>(); const out:string[]=[];
+  for(const value of raw){const key=value.toLocaleLowerCase('az-AZ');if(seen.has(key))continue;seen.add(key);out.push(value);}
+  return out;
+}
+
+type OrganizationPlaceContext={
+  terms:string[];
+  base_names:string[];
+  place_count:number;
+  alias_count:number;
+  district_ids:string[];
+  district_names:string[];
+};
+
+async function fetchOrganizationPlaceContext(admin:any, org:any, maxPlaces=1400, maxTerms=6000):Promise<OrganizationPlaceContext> {
+  const districtIds=[...new Set([
+    ...(Array.isArray(org?.service_area_district_ids)?org.service_area_district_ids:[]),
+    org?.district_id
+  ].map((x:any)=>String(x||'')).filter(Boolean))];
+  const districtNames=organizationDistrictNames(org);
+  if(!districtIds.length) return {terms:[],base_names:[],place_count:0,alias_count:0,district_ids:[],district_names:districtNames};
+
+  // Mərkəzi/regional qurumlarda minlərlə yaşayış məntəqəsi ola bilər. Bütün 4586 sətri
+  // hər Edge çağırışına yükləmək əvəzinə saatlıq deterministik pəncərə götürürük.
+  // Rayon SMSİİ kimi kiçik ərazilərdə bütün məntəqələr bir dəfəyə daxil olur.
+  const countRes:any=await admin.from('place_catalog').select('id',{count:'exact',head:true}).in('district_id',districtIds).eq('is_active',true);
+  if(countRes?.error){
+    const raw=`${countRes?.error?.code||''} ${countRes?.error?.message||''}`.toLowerCase();
+    if(raw.includes('42p01')||raw.includes('pgrst205')){
+      const legacyNames=org?.district_id?await fetchDistrictPlaceNames(admin,String(org.district_id)).catch(()=>[]):[];
+      return {terms:legacyNames,base_names:legacyNames,place_count:legacyNames.length,alias_count:0,district_ids:districtIds,district_names:districtNames};
+    }
+    throw countRes.error;
+  }
+  const total=Math.max(0,Number(countRes?.count||0));
+  if(!total) return {terms:[],base_names:[],place_count:0,alias_count:0,district_ids:districtIds,district_names:districtNames};
+  const take=Math.max(50,Math.min(maxPlaces,total));
+  const maxStart=Math.max(0,total-take);
+  const hourBucket=Math.floor(Date.now()/(60*60*1000));
+  const seed=[...String(org?.id||org?.short_name||'')].reduce((n,ch)=>((n*33)+ch.charCodeAt(0))>>>0,5381);
+  const start=maxStart?((seed+hourBucket*take)%(maxStart+1)):0;
+  const rowsRes:any=await admin.from('place_catalog')
+    .select('id,district_id,name,place_type,monitoring_aliases')
+    .in('district_id',districtIds)
+    .eq('is_active',true)
+    .order('district_id',{ascending:true})
+    .order('name',{ascending:true})
+    .range(start,Math.min(total-1,start+take-1));
+  if(rowsRes?.error) throw rowsRes.error;
+  const rows=Array.isArray(rowsRes?.data)?rowsRes.data:[];
+  const base:string[]=[]; const terms:string[]=[]; const seenBase=new Set<string>(); const seenTerms=new Set<string>(); let aliasCount=0;
+  const addTerm=(raw:any)=>{const value=String(raw||'').replace(/\s+/g,' ').trim();const key=value.toLocaleLowerCase('az-AZ');if(!value||value.length<3||seenTerms.has(key)||terms.length>=maxTerms)return;seenTerms.add(key);terms.push(value);};
+  for(const row of rows){
+    const name=String(row?.name||'').replace(/\s+/g,' ').trim(); const nk=name.toLocaleLowerCase('az-AZ');
+    if(name&&!seenBase.has(nk)){seenBase.add(nk);base.push(name);addTerm(name);}
+    const aliases=Array.isArray(row?.monitoring_aliases)?row.monitoring_aliases:[];
+    aliasCount+=aliases.length;
+    for(const alias of aliases) addTerm(alias);
+  }
+  return {terms,base_names:base,place_count:total,alias_count:aliasCount,district_ids:districtIds,district_names:districtNames};
+}
+
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok',{headers:corsHeaders});
@@ -97,7 +164,7 @@ Deno.serve(async (req) => {
     // frazalarını bir dəfəlik tamamlayır. Bu əməliyyat mövcud sözləri dəyişmir və
     // rayon/təşkilat adlarını heç vaxt exclude kimi yazmır. Beləliklə filtr bankı
     // deploy-dan sonra real olaraq böyüyür, amma paralel arxiv job-ları boş yerə DB yazmır.
-    if (options.quick_youtube_comments === true && !options.organization_id && !callerOrganizationId) {
+    if (options.quick_youtube_comments === true && !options.organization_id && !callerOrganizationId && ['1','true','yes'].includes(String(Deno.env.get('KEYWORD_BASELINE_SEED')||'').toLowerCase())) {
       try {
         const seeded = await ensureBaselineKeywordBank(admin);
         if (seeded.positive_added || seeded.exclude_added) details.push({source:'Özünü-təkmilləşdirən qlobal söz bankı',...seeded});
@@ -358,6 +425,31 @@ Deno.serve(async (req) => {
       districts:o?.district_id ? {name:districtNameById.get(String(o.district_id))||''} : null
     }));
 
+    // Təşkilat coğrafiyası yalnız organizations.district_id ilə məhdud deyil. Regional
+    // bölmələr organization_service_areas vasitəsilə bir neçə rayona xidmət edir. Bütün
+    // cari təşkilatların xidmət rayonlarını bir dəfə bulk oxuyub org obyektinə qoşuruq.
+    const currentOrgIds=orgs.map((o:any)=>String(o?.id||'')).filter(Boolean);
+    const serviceAreasByOrg=new Map<string,string[]>();
+    if(currentOrgIds.length){
+      const areaRes:any=await admin.from('organization_service_areas').select('organization_id,district_id').in('organization_id',currentOrgIds).limit(5000);
+      if(!areaRes?.error){
+        for(const row of (Array.isArray(areaRes?.data)?areaRes.data:[])){
+          const oid=String(row?.organization_id||''), did=String(row?.district_id||''); if(!oid||!did)continue;
+          const arr=serviceAreasByOrg.get(oid)||[]; if(!arr.includes(did))arr.push(did); serviceAreasByOrg.set(oid,arr);
+        }
+        const extraIds=[...new Set((areaRes?.data||[]).map((r:any)=>String(r?.district_id||'')).filter((id:string)=>id&&!districtNameById.has(id)))];
+        if(extraIds.length){
+          const extraRes:any=await admin.from('districts').select('id,name').in('id',extraIds);
+          if(!extraRes?.error) for(const row of (extraRes?.data||[])) districtNameById.set(String(row.id),String(row.name||''));
+        }
+      }
+    }
+    orgs=orgs.map((o:any)=>{
+      const oid=String(o?.id||'');
+      const areaIds=[...new Set([...(serviceAreasByOrg.get(oid)||[]),...(o?.district_id?[String(o.district_id)]:[])])];
+      return {...o,service_area_district_ids:areaIds,service_area_names:areaIds.map(id=>districtNameById.get(id)||'').filter(Boolean)};
+    });
+
     if (!requestedOrganizationId && !requestedOrganizationShortName && options.mode !== 'meta_monitor' && (options.include_archived || options.organization_batch > 0)) {
       orgs = rotateOrganizationBatch(orgs, options.organization_shard_count, options.organization_shard_index, options.organization_batch, options.organization_rotation_bucket);
     }
@@ -473,7 +565,7 @@ Deno.serve(async (req) => {
       try {
         const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
         const keywords = installKeywordContext(org, activeKeywordRows);
-        const villages = org.district_id ? await fetchDistrictPlaceNames(admin, org.district_id).catch(()=>[]) : [];
+        const villages = (await fetchOrganizationPlaceContext(admin,org,1400,6000).catch(()=>({terms:[]} as any))).terms;
         const aliases = await fetchOrganizationAliases(admin, org.id, 500).catch(()=>[]);
         org.aliases = aliases;
         const scan = await metaPublicProfileItems(token, appSecret, options.social_sources);
@@ -513,7 +605,7 @@ Deno.serve(async (req) => {
           const keywords = installKeywordContext(org, activeKeywordRows);
           const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
           let villageNames:string[] = [];
-          if (org.district_id) villageNames = await fetchDistrictPlaceNames(admin,String(org.district_id)).catch(()=>[]);
+          villageNames = (await fetchOrganizationPlaceContext(admin,org,1400,6000).catch(()=>({terms:[]} as any))).terms;
           let orgInserted = 0;
           for (const entry of relevantEntries) {
             if (Date.now() >= stopAt) break;
@@ -572,7 +664,7 @@ Deno.serve(async (req) => {
         const keywordRows=await fetchOrganizationMatchKeywords(admin,org,1600);
         const positives=keywordRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').map((x:any)=>String(x?.value||'').trim()).filter(Boolean);
         const excludes=keywordRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude').map((x:any)=>String(x?.value||'').trim()).filter(Boolean);
-        const places=org.district_id?await fetchDistrictPlaceNames(admin,String(org.district_id)).catch(()=>[]):[];
+        const places=(await fetchOrganizationPlaceContext(admin,org,1400,6000).catch(()=>({terms:[]} as any))).terms;
         const seed=Math.abs(radarTextHash(`${options.scan_id}|${org.id}|${options.radar_stage}`));
         const includeTerm=positives.length?positives[seed%positives.length]:'';
         const excludeTerm=excludes.length?excludes[(seed*7)%excludes.length]:'';
@@ -644,21 +736,24 @@ Deno.serve(async (req) => {
         const excludeCount = keywordRows
           .filter((k:any)=>String(k?.kind || '').toLowerCase() === 'exclude').length;
 
-        const villageNames:string[] = org.district_id
-          ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
-          : [];
+        const placeContext=await fetchOrganizationPlaceContext(admin,org,1400,6000).catch(()=>({terms:[],base_names:[],place_count:0,alias_count:0,district_ids:[],district_names:organizationDistrictNames(org)}));
+        const villageNames:string[]=placeContext.terms;
 
         organizations.push({
           id:String(org.id),
           name:String(org.name || ''),
           short_name:String(org.short_name || ''),
           district:String(org.districts?.name || ''),
+          service_districts:placeContext.district_names,
           google_queries:buildGoogleNewsGatewayQueries(org),
           gdelt_queries:buildGdeltGatewayQueries(org),
           keyword_queries:buildKeywordGatewayQueries(org, positiveKeywords, villageNames, 600),
           village_queries:buildVillageGatewayQueries(org, villageNames, 240),
           alias_queries:buildAliasGatewayQueries(org, 80),
-          village_count:villageNames.length,
+          village_count:placeContext.place_count,
+          place_term_count:villageNames.length,
+          place_alias_count:placeContext.alias_count,
+          service_area_count:placeContext.district_ids.length,
           alias_count:Array.isArray(org.aliases)?org.aliases.length:0,
           keyword_count:positiveKeywords.length,
           active_exclude_count:excludeCount,
@@ -802,9 +897,7 @@ Deno.serve(async (req) => {
 
         const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 2400);
         const positiveKeywords = installKeywordContext(org, activeKeywordRows);
-        const villageNames:string[] = org.district_id
-          ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
-          : [];
+        const villageNames:string[] = (await fetchOrganizationPlaceContext(admin,org,1400,6000).catch(()=>({terms:[]} as any))).terms;
         // Profil adı təsadüfən rayon adı ilə üst-üstə düşə bilər. Enrichment zamanı
         // real post məzmununu trusted_org_profile bypass-i olmadan yenidən yoxlayırıq.
         // Bununla "Abşeron Absheron" kimi əlaqəsiz səhifə materialı gizlədilir,
@@ -902,9 +995,7 @@ Deno.serve(async (req) => {
         if (newsText || newsTitle) {
           const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 2400);
           const positiveKeywords = installKeywordContext(org, activeKeywordRows);
-          const villageNames:string[] = org.district_id
-            ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
-            : [];
+          const villageNames:string[] = (await fetchOrganizationPlaceContext(admin,org,1400,6000).catch(()=>({terms:[]} as any))).terms;
           const candidate:Item={title:newsTitle||current.data.title||'',text:newsText||'',url:options.canonical_url||options.source_url,published_at:newsPublishedAt||current.data.published_at||null,raw:{kind:'web_enrich',provider:'web'}};
           contentRelevant=evaluateMatch(org,candidate,positiveKeywords.map((x:string)=>x.toLocaleLowerCase('az-AZ')),villageNames).accepted;
         }
@@ -1034,9 +1125,7 @@ Deno.serve(async (req) => {
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
 
-      const villageNames:string[] = org.district_id
-        ? await fetchDistrictPlaceNames(admin, String(org.district_id))
-        : [];
+      const villageNames:string[] = (await fetchOrganizationPlaceContext(admin,org,1400,6000)).terms;
 
       const result = await refilterExistingWebMentions(admin,org,lowerKeywords,villageNames,300);
       return json({ok:true,run_id:runId,mode:'news_refilter',organization:org.short_name,...result},200);
@@ -1048,9 +1137,7 @@ Deno.serve(async (req) => {
       const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 3200);
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
-      const villageNames:string[] = org.district_id
-        ? await fetchDistrictPlaceNames(admin, String(org.district_id))
-        : [];
+      const villageNames:string[] = (await fetchOrganizationPlaceContext(admin,org,1400,6000)).terms;
       const result = await refilterExistingMentions(admin,org,lowerKeywords,villageNames,options.refilter_limit,options.refilter_before);
       return json({ok:true,run_id:runId,mode:'existing_refilter',organization:org.short_name,...result},200);
     }
@@ -1062,9 +1149,7 @@ Deno.serve(async (req) => {
       const keywords = installKeywordContext(org, activeKeywordRows);
       org.__ai_learning_budget=1;
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
-      const villageNames:string[] = org.district_id
-        ? await fetchDistrictPlaceNames(admin, String(org.district_id))
-        : [];
+      const villageNames:string[] = (await fetchOrganizationPlaceContext(admin,org,1400,6000)).terms;
       // Final sabitlik qaydası: AI ələk hər radar run-da yalnız yüksək əminlikli
       // false-positive qeydləri gizlədir. Sadəcə 'ərazi/mövzu uyğunluğu tapılmadı'
       // kimi qeyri-müəyyən qərara görə əvvəl qəbul edilmiş real arxiv azaldılmır.
@@ -1083,9 +1168,7 @@ Deno.serve(async (req) => {
       const keywords = installKeywordContext(org, activeKeywordRows);
       const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
 
-      const villageNames:string[] = org.district_id
-        ? await fetchDistrictPlaceNames(admin, String(org.district_id))
-        : [];
+      const villageNames:string[] = (await fetchOrganizationPlaceContext(admin,org,1400,6000)).terms;
 
       const source = {platform:canonicalPlatform(options.source_platform || 'Web'),url:options.source_label || 'GitHub News Gateway'};
       let accepted = 0;
@@ -1138,10 +1221,10 @@ Deno.serve(async (req) => {
       const sources = (Array.isArray(org.sources) ? org.sources : []).filter((s:any)=>s?.is_active !== false);
 
       let villageNames:string[] = [];
-      if (org.district_id && Date.now() < stopAt) {
+      if (Date.now() < stopAt) {
         currentStage = 'places';
         try {
-          villageNames = await fetchDistrictPlaceNames(admin, String(org.district_id));
+          villageNames = (await fetchOrganizationPlaceContext(admin,org,1400,6000)).terms;
         } catch (e) {
           fail(currentStage,e,org.short_name,'place_catalog');
         }
@@ -1448,8 +1531,8 @@ async function radarMentionStats(admin:any,startedAt:string) {
 }
 
 function buildVillageGatewayQueries(org:any,villages:string[] = [],max=240):string[] {
-  const district=String(org.districts?.name||'').trim();
-  const topicGroups=['suvarma','artezian','kanal','su problemi','fermer su','nasos'];
+  const districts=organizationDistrictNames(org);
+  const topicGroups=['suvarma','artezian','kanal','su problemi','fermer su','nasos','meliorasiya','drenaj'];
   const cleaned=[...new Set(villages.map(v=>String(v||'').replace(/\s+/g,' ').trim()).filter(v=>v.length>=3))];
   if(!cleaned.length) return [];
   const bucket=Math.floor(Date.now()/(15*60*1000));
@@ -1458,16 +1541,20 @@ function buildVillageGatewayQueries(org:any,villages:string[] = [],max=240):stri
   for(let i=0;i<cleaned.length;i++) rotated.push(cleaned[(start+i)%cleaned.length]);
   const out:string[]=[];
   for(let i=0;i<rotated.length && out.length<max;i++){
-    const village=rotated[i];
+    const place=rotated[i];
     const topic=topicGroups[i%topicGroups.length];
-    out.push(`${district ? `${district} ` : ''}${village} ${topic}`.trim());
-    if(out.length<max && i%3===0) out.push(`${village} suvarma suyu`);
+    // monitoring_aliases artıq “Bərdə Güloğlular” kimi rayon+məntəqə variantlarını
+    // saxlayır. Alias rayon adı daşımırsa xidmət rayonlarından biri rotasiya ilə əlavə olunur.
+    const nd=normalizeForMatch(place);
+    const district=districts.find(d=>nd.includes(normalizeForMatch(d))) || (districts.length?districts[(bucket+i)%districts.length]:'');
+    out.push(`${district && !nd.includes(normalizeForMatch(district)) ? `${district} ` : ''}${place} ${topic}`.trim());
+    if(out.length<max && i%3===0) out.push(`${place} suvarma suyu`);
   }
   return [...new Set(out)].slice(0,max);
 }
 
 function buildAliasGatewayQueries(org:any,max=80):string[] {
-  const district=String(org.districts?.name||'').trim();
+  const districts=organizationDistrictNames(org);
   const values=[
     String(org.short_name||''),
     String(org.name||''),
@@ -1479,6 +1566,7 @@ function buildAliasGatewayQueries(org:any,max=80):string[] {
     if(!key||seen.has(key)) continue;
     seen.add(key);
     out.push(`"${value.replace(/["“”]+/g,'')}"`);
+    const district=districts.find(d=>key.includes(normalizeForMatch(d))) || districts[0] || '';
     if(district && !key.includes(normalizeForMatch(district))) out.push(`"${district}" "${value.replace(/["“”]+/g,'')}"`);
     if(out.length>=max) break;
   }
@@ -1769,116 +1857,25 @@ async function fetchOrganizationMatchKeywords(admin:any, org:any, maxPositive=32
   const globalRows=await pageRows(()=>admin.from('keywords').select('organization_id,value,kind,is_active,created_at').is('organization_id',null).eq('is_active',true).order('created_at',{ascending:false}),Math.min(12000,maxPos+5000));
   const orgRows=organizationId?await pageRows(()=>admin.from('keywords').select('organization_id,value,kind,is_active,created_at').eq('organization_id',organizationId).eq('is_active',true).order('created_at',{ascending:false}),Math.min(6000,maxPos+1500)):[];
 
-  // Deaktiv/arxiv qeydləri artıq ölü baza deyil. Admin paneldə “Ehtiyat rotasiya bankı”
-  // bütün keywords cədvəli üzrə `cəmi - aktiv` kimi hesablanır. Əvvəl worker yalnız
-  // qlobal + cari təşkilata bağlı deaktiv sətrləri saydığı üçün paneldə 9 min+ ehtiyat
-  // görünsə də bəzi təşkilatlarda 0 görünürdü. Ehtiyat pozitiv bankı discovery üçündür
-  // və hər sorğu onsuz da cari rayon/təşkilat siqnalı ilə scope olunur; buna görə bütün
-  // deaktiv bankdan kiçik deterministik pəncərə götürürük. Deaktiv `exclude` qeydləri
-  // heç vaxt filtrə daxil edilmir — yalnız aktiv exclude bankı veto kimi işləyir.
-  const reserveLimit=Math.max(350,Math.min(1200,Math.floor(maxPos*.32)));
-  const countInactive=async(state:'false'|'null')=>{
-    let q:any=admin.from('keywords').select('id',{count:'exact',head:true});
-    q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
-    const r:any=await q;
-    if(r?.error) return 0;
-    return Math.max(0,Number(r?.count||0));
-  };
-  const reserveFalseCount=await countInactive('false');
-  const reserveNullCount=await countInactive('null');
-  const reserveCount=reserveFalseCount+reserveNullCount;
-  // Ehtiyat bankda həm pozitiv, həm də köhnə exclude sətrləri ola bilər. Ümumi sayı
-  // saxlayırıq, amma discovery-yə yalnız pozitiv frazalar daxil olur; köhnə/deaktiv
-  // exclude-lər nə axtarış sözü, nə də aktiv veto kimi istifadə edilir.
-  const countInactiveExclude=async(state:'false'|'null')=>{
-    let q:any=admin.from('keywords').select('id',{count:'exact',head:true}).eq('kind','exclude');
-    q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
-    const r:any=await q;
-    return r?.error?0:Math.max(0,Number(r?.count||0));
-  };
-  const reserveExcludeCount=(await countInactiveExclude('false'))+(await countInactiveExclude('null'));
-  const reservePositiveCount=Math.max(0,reserveCount-reserveExcludeCount);
-  let reserveRows:any[]=[];
-  const bucket=Math.floor(Date.now()/3600000);
-
-  // Paneldə göstərilən reserveCount bütün bankın ümumi sayıdır. Discovery pəncərəsi isə
-  // yalnız qlobal + cari təşkilata aid reserve sözlərindən seçilməlidir; başqa rayonun
-  // təşkilat-səviyyəli sözləri heç vaxt cari təşkilata qarışmır.
-  const countScopedInactive=async(state:'false'|'null')=>{
-    let q:any=admin.from('keywords').select('id',{count:'exact',head:true});
-    q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
-    if(organizationId) q=q.or(`organization_id.is.null,organization_id.eq.${organizationId}`);
-    else q=q.is('organization_id',null);
-    const r:any=await q;
-    return r?.error?0:Math.max(0,Number(r?.count||0));
-  };
-  const scopedFalseCount=await countScopedInactive('false');
-  const scopedNullCount=await countScopedInactive('null');
-  const scopedCount=scopedFalseCount+scopedNullCount;
-  const takeInactiveWindow=async(state:'false'|'null',count:number,limit:number)=>{
-    if(count<=0||limit<=0)return [];
-    const maxStart=Math.max(0,count-limit);
-    const start=maxStart?radarTextHash(`${organizationId||'global'}:reserve:${state}:${bucket}`)%(maxStart+1):0;
-    let q:any=admin.from('keywords').select('organization_id,value,kind,is_active,created_at');
-    q=state==='false'?q.eq('is_active',false):q.is('is_active',null);
-    if(organizationId) q=q.or(`organization_id.is.null,organization_id.eq.${organizationId}`);
-    else q=q.is('organization_id',null);
-    q=q.order('created_at',{ascending:true}).range(start,Math.min(count-1,start+limit-1));
-    const rr:any=await q;
-    return rr?.error?[]:(Array.isArray(rr?.data)?rr.data:[]);
-  };
-  if(scopedCount>0){
-    const falseLimit=scopedFalseCount?Math.max(1,Math.round(reserveLimit*(scopedFalseCount/scopedCount))):0;
-    const nullLimit=scopedNullCount?Math.max(1,reserveLimit-falseLimit):0;
-    reserveRows=[
-      ...await takeInactiveWindow('false',scopedFalseCount,Math.min(scopedFalseCount,falseLimit)),
-      ...await takeInactiveWindow('null',scopedNullCount,Math.min(scopedNullCount,nullLimit))
-    ];
-  }
-
-  // Köhnə qlobal bankda rayon adı ilə yazılmış lokal ifadələr ola bilər. Məsələn
-  // “Bərdə Mollalılar ...” qlobal sətrə düşübsə onu Quba/Naxçıvan discovery-sinə
-  // vermirik. Həqiqətən ümumi terminlər (kanal, suvarma, meliorasiya və s.) qalır.
-  const currentDistrict=normalizeForMatch(String(org?.districts?.name||org?.district||''));
-  const districtNames=await reserveDistrictNames(admin);
-  const geographicallyValidForOrg=(row:any)=>{
-    const rowOrg=String(row?.organization_id||'');
-    if(rowOrg && rowOrg!==organizationId) return false;
-    if(rowOrg===organizationId) return true;
-    const nv=normalizeForMatch(String(row?.value||''));
-    if(!nv) return false;
-    // Köhnə qlobal bankda “berdede ...”, “qax ...” kimi rayon-spesifik frazalar
-    // aktiv də ola bilər. Cari rayon deyilsə həm aktiv, həm reserve pozitiv bankdan
-    // çıxarılır; məlumat DB-də qalır, sadəcə başqa təşkilatın discovery-sinə qarışmır.
-    for(const d of districtNames){
-      if(d===currentDistrict) continue;
-      if(nv.includes(d)) return false;
-    }
-    return true;
-  };
-  reserveRows=reserveRows.filter(geographicallyValidForOrg);
-
+  // 2026-09 yeni professional bank: deaktiv/null köhnə sözlər discovery-yə geri
+  // qaytarılmır. Supabase-də yalnız aktiv, qısa və kurasiya edilmiş bank işləyir.
+  // Bu, əvvəlki 9K+ uzun frazanın “ehtiyat bank” adı ilə arxa qapıdan axtarışa
+  // qarışmasının qarşısını alır. Avtomatik öyrənmə ayrıca opt-in flag ilə idarə olunur.
   const seen=new Set<string>(); const rows:any[]=[];
   const push=(row:any)=>{
-    const value=String(row?.value||'').trim(); const nk=normalizeForMatch(value); const kind=String(row?.kind||'phrase').toLowerCase();
-    const key=`${kind}|${nk}`; if(!value||!nk||seen.has(key)) return; seen.add(key);
-    rows.push({organization_id:row?.organization_id||null,value,kind,is_active:row?.is_active!==false,created_at:row?.created_at||null});
+    const value=String(row?.value||'').replace(/\s+/g,' ').trim(); const nk=normalizeForMatch(value); const kind=String(row?.kind||'phrase').toLowerCase();
+    const key=`${kind}|${nk}`; if(!value||!nk||seen.has(key))return; seen.add(key);
+    rows.push({organization_id:row?.organization_id||null,value,kind,is_active:true,created_at:row?.created_at||null});
   };
-  // Aktiv filtrlər təhlükəsizlik üçün tam prioritetlidir; sonra aktiv pozitivlər, sonda
-  // ehtiyat/arxiv pozitiv bankının rotasiya pəncərəsi işləyir.
   for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
   for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()==='exclude')) push(row);
-  for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude' && geographicallyValidForOrg(x)).slice(0,maxPos)) push(row);
+  for(const row of globalRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
   for(const row of orgRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').slice(0,maxPos)) push(row);
-  // organization_id-ni saxlayırıq: təşkilata bağlı reserve fraza qlobal keyword kimi
-  // maskalanmır və evaluateMatch onu məhz həmin təşkilatın bankı kimi görür.
-  for(const row of reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude')) push(row);
-  // Deaktiv exclude-lər ehtiyat pozitiv bankına çevrilmir və veto kimi də işlədilmir.
   org.__reserve_exclude_candidates=[];
-  org.__reserve_keyword_count=reserveCount;
-  org.__reserve_positive_count=reservePositiveCount;
-  org.__reserve_exclude_count=reserveExcludeCount;
-  org.__reserve_keyword_window=reserveRows.filter((x:any)=>String(x?.kind||'').toLowerCase()!=='exclude').length;
+  org.__reserve_keyword_count=0;
+  org.__reserve_positive_count=0;
+  org.__reserve_exclude_count=0;
+  org.__reserve_keyword_window=0;
   return rows;
 }
 
@@ -1895,7 +1892,8 @@ function installKeywordContext(org:any, rows:any[]) {
 }
 
 function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [], max=8):string[] {
-  const district = String(org.districts?.name || '').trim();
+  const districts = organizationDistrictNames(org);
+  const district = districts[0] || '';
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
 
@@ -1906,17 +1904,17 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
     'içməli su','su təchizatı','su xətti','boru xətti','su qəzası','nasos stansiyası',
     'kanalizasiya','tullantı su','yağış suyu','su sayğacı','suölçən','lildən təmizləmə'
   ];
-  const core = district ? coreTopics.map(topic=>`${district} ${topic}`) : [];
+  const core = districts.length ? districts.flatMap(d=>coreTopics.map(topic=>`${d} ${topic}`)) : coreTopics;
 
   // Böyük açar-söz bankını hər run-da eyni ilk sətrlərlə məhdudlaşdırmırıq.
   // Dəqiqəlik rotasiya sayəsində discovery sorğuları kvotanı partlatmadan zamanla bütün
   // bankı dolaşır. Rayon/kənd adı olan frazalara üstünlük verilir.
-  const nd = normalizeForMatch(district);
+  const districtNorms=districts.map(normalizeForMatch).filter(Boolean);
   const villageNorms = villages.map(normalizeForMatch).filter(Boolean);
   const bank = keywords.filter(value=>{
     const nk=normalizeForMatch(value);
     if (!nk || nk.length < 5) return false;
-    if (nd && nk.includes(nd)) return true;
+    if (districtNorms.some(nd=>nk.includes(nd))) return true;
     return villageNorms.some(v=>v.length>=4 && nk.includes(v));
   });
   const bucket = Math.floor(Date.now()/60000);
@@ -1943,7 +1941,8 @@ function buildDiscoveryQueries(org:any, keywords:string[], villages:string[] = [
 function buildYoutubeDiscoveryQueries(org:any, keywords:string[], villages:string[] = [], max=1):string[] {
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
-  const district = String(org.districts?.name || '').trim();
+  const districts=organizationDistrictNames(org);
+  const district = districts[0] || '';
   const aliases = (Array.isArray(org.aliases) ? org.aliases : [])
     .map((a:any)=>String(a?.alias || '').replace(/\s+/g,' ').trim())
     .filter(Boolean);
@@ -1970,12 +1969,10 @@ function buildYoutubeDiscoveryQueries(org:any, keywords:string[], villages:strin
     if(q) servicePointQueries.push(q);
   }
 
-  const districtTopics = district
-    ? [
-        `${quote(district)} (suvarma|meliorasiya|subartezian|artezian|kanal|kollektor|drenaj|sukanal|"su təchizatı")`,
-        `${quote(district)} ("içməli su"|"su problemi"|"suvarma suyu"|"nasos stansiyası")`
-      ]
-    : [];
+  const districtTopics = districts.flatMap(area=>[
+    `${quote(area)} (suvarma|meliorasiya|subartezian|artezian|kanal|kollektor|drenaj|sukanal|"su təchizatı")`,
+    `${quote(area)} ("içməli su"|"su problemi"|"suvarma suyu"|"nasos stansiyası")`
+  ]).slice(0,8);
 
   const fallback = buildDiscoveryQueries(org, keywords, villages, Math.max(2,max+1));
   const pool = [identityQuery, ...servicePointQueries, ...districtTopics, ...fallback].filter(Boolean);
@@ -1993,10 +1990,11 @@ function buildYoutubeDiscoveryQueries(org:any, keywords:string[], villages:strin
 }
 
 function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[] = [], max=180):string[] {
-  const district = String(org.districts?.name || '').trim();
+  const districts=organizationDistrictNames(org);
+  const district = districts[0] || '';
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
-  const nd = normalizeForMatch(district);
+  const districtNorms=districts.map(normalizeForMatch).filter(Boolean);
   const orgNames = [shortName, fullName, ...(Array.isArray(org.aliases)?org.aliases.map((a:any)=>String(a?.alias||'')):[])].map(normalizeForMatch).filter(Boolean);
   const villageNorms = villages.map(normalizeForMatch).filter(v=>v.length >= 4);
 
@@ -2039,7 +2037,7 @@ function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[
 
   for (const value of rotated) {
     const nk = normalizeForMatch(value);
-    const alreadyScoped = (nd && nk.includes(nd)) || orgNames.some(n=>n && nk.includes(n)) || villageNorms.some(v=>nk.includes(v));
+    const alreadyScoped = districtNorms.some(nd=>nk.includes(nd)) || orgNames.some(n=>n && nk.includes(n)) || villageNorms.some(v=>nk.includes(v));
     const safe = value.replace(/["“”]+/g,'').trim();
     if (!safe) continue;
     // Açar sözləri bütöv "dəqiq fraza" kimi axtarmaq şəkilçi və söz sırası dəyişəndə
@@ -2052,8 +2050,8 @@ function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[
       .slice(0,5);
     const relaxed = relaxedParts.join(' ');
     if (!relaxed) continue;
-    if (alreadyScoped || !district) add(relaxed);
-    else add(`${district} ${relaxed}`);
+    if (alreadyScoped || !districts.length) add(relaxed);
+    else { const scopedDistrict=districts[(queries.length+bucket)%districts.length]; add(`${scopedDistrict} ${relaxed}`); }
     if (queries.length >= windowSize) break;
   }
 
@@ -2061,7 +2059,8 @@ function buildKeywordGatewayQueries(org:any, keywords:string[], villages:string[
 }
 
 function buildGoogleNewsGatewayQueries(org:any):string[] {
-  const district = String(org.districts?.name || '').trim();
+  const districts=organizationDistrictNames(org);
+  const district = districts[0] || '';
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
   const candidates:string[] = [];
@@ -2069,10 +2068,10 @@ function buildGoogleNewsGatewayQueries(org:any):string[] {
   // Əsas problem: dar təşkilat adı ilə RSS çox vaxt 0 qaytarır. İlk sorğular geniş
   // rayon discovery-sidir; news_ingest mərhələsində mövcud aidiyyət filtri lazımsız
   // materialları onsuz da rədd edir. Bu üç sorğu hər run-da işləyir.
-  if (district) {
-    candidates.push(`"${district}"`);
-    candidates.push(`"${district}" suvarma`);
-    candidates.push(`"${district}" subartezian`);
+  for(const area of districts.slice(0,4)) {
+    candidates.push(`"${area}"`);
+    candidates.push(`"${area}" suvarma`);
+    candidates.push(`"${area}" subartezian`);
   }
 
   // 2026-cı ildə işlənən aktual adlandırmanı da ayrıca nəzərə alırıq. Bazadakı köhnə
@@ -2094,21 +2093,19 @@ function buildGoogleNewsGatewayQueries(org:any):string[] {
   // 2010–2023 xəbərləri indiki SMSİİ adı ilə deyil, köhnə “Suvarma Sistemləri İdarəsi”
   // və “Subartezian Quyularının İstismarı İdarəsi” adları ilə indekslənib. Bu yalnız
   // axtarışı genişləndirir; qəbul filtri yenə rayon + real su/meliorasiya mövzusunu tələb edir.
-  if (district) {
-    candidates.push(`"${district} Suvarma Sistemləri İdarəsi"`);
-    candidates.push(`"${district} Suvarma Sistemlərinin İstismarı İdarəsi"`);
-    candidates.push(`"${district} Subartezian Quyularının İstismarı İdarəsi"`);
-    candidates.push(`"${district} Su Meliorasiya Sistemlərinin İstismarı İdarəsi"`);
+  for(const area of districts.slice(0,4)) {
+    candidates.push(`"${area} Suvarma Sistemləri İdarəsi"`);
+    candidates.push(`"${area} Suvarma Sistemlərinin İstismarı İdarəsi"`);
+    candidates.push(`"${area} Subartezian Quyularının İstismarı İdarəsi"`);
+    candidates.push(`"${area} Su Meliorasiya Sistemlərinin İstismarı İdarəsi"`);
   }
 
-  if (district) {
-    const topicQueries = [
-      'meliorasiya','suvarma suyu','su problemi','su gəlmir','su çatışmazlığı',
-      'kanal','arx','drenaj','kollektor','artezian','su quyusu','nasos stansiyası',
-      'əkin sahəsi','fermer','lildən təmizlənir','şoranlaşma'
-    ];
-    for (const topic of topicQueries) candidates.push(`"${district}" "${topic}"`);
-  }
+  const topicQueries = [
+    'meliorasiya','suvarma suyu','su problemi','su gəlmir','su çatışmazlığı',
+    'kanal','arx','drenaj','kollektor','artezian','su quyusu','nasos stansiyası',
+    'əkin sahəsi','fermer','lildən təmizlənir','şoranlaşma'
+  ];
+  for(const area of districts.slice(0,4)) for (const topic of topicQueries) candidates.push(`"${area}" "${topic}"`);
 
   const seen=new Set<string>();
   return candidates.filter(q=>{
@@ -2119,13 +2116,14 @@ function buildGoogleNewsGatewayQueries(org:any):string[] {
 }
 
 function buildGdeltGatewayQueries(org:any):string[] {
-  const district = String(org.districts?.name || '').trim();
+  const districts=organizationDistrictNames(org);
+  const district = districts[0] || '';
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
   const candidates:string[] = [];
-  if (district) {
-    candidates.push(`"${district}" (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj)`);
-    candidates.push(`"${district}" ("su gəlmir" OR "su çatışmazlığı" OR fermer)`);
+  for(const area of districts.slice(0,3)) {
+    candidates.push(`"${area}" (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj)`);
+    candidates.push(`"${area}" ("su gəlmir" OR "su çatışmazlığı" OR fermer)`);
   }
   if (shortName) candidates.push(`"${shortName}"`);
   if (fullName && normalizeForMatch(fullName)!==normalizeForMatch(shortName)) candidates.push(`"${fullName}"`);
@@ -2143,7 +2141,8 @@ function buildGdeltGatewayQueries(org:any):string[] {
 }
 
 function buildGdeltQueries(org:any, keywords:string[], villages:string[] = [], max=1):string[] {
-  const district = String(org.districts?.name || '').trim();
+  const districts=organizationDistrictNames(org);
+  const district = districts[0] || '';
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
   const candidates:string[] = [];
@@ -2151,8 +2150,8 @@ function buildGdeltQueries(org:any, keywords:string[], villages:string[] = [], m
   // GDELT üçün birinci sorğu geniş, amma aidiyyətli rayon+mövzu sorğusudur.
   // DOC API mötərizə daxilində OR bloklarını dəstəkləyir; boşluq terminlərin birlikdə
   // axtarılmasını təmin edir. Rayon yoxdursa təşkilat adı ilə fallback edirik.
-  if (district) {
-    const aliases = districtAliases(district).map(value=>`"${value}"`).join(' OR ');
+  for(const area of districts.slice(0,3)) {
+    const aliases = districtAliases(area).map(value=>`"${value}"`).join(' OR ');
     candidates.push(`(${aliases}) (suvarma OR meliorasiya OR kanal OR arx OR subartezian OR artezian OR drenaj OR "içməli su" OR "su təchizatı" OR "su xətti" OR nasos)`);
     candidates.push(`(${aliases}) ("su gəlmir" OR "su çatışmazlığı" OR kanalizasiya OR "tullantı su")`);
   }
@@ -2172,7 +2171,8 @@ function buildGdeltQueries(org:any, keywords:string[], villages:string[] = [], m
 }
 
 function buildGoogleNewsQueries(org:any, keywords:string[], villages:string[]=[]):string[] {
-  const district = String(org.districts?.name || '').trim();
+  const districts=organizationDistrictNames(org);
+  const district = districts[0] || '';
   const shortName = String(org.short_name || '').trim();
   const fullName = String(org.name || '').trim();
   const candidates:string[] = [];
@@ -4023,6 +4023,7 @@ async function geminiKeywordLearningCandidate(org:any,item:Item,match:any):Promi
 }
 
 async function autoLearnKeywordBank(admin:any, org:any, item:Item, match:any, allowAdaptive=false) {
+  if(!['1','true','yes'].includes(String(Deno.env.get('KEYWORD_AUTO_LEARN')||'').toLowerCase())) return null;
   const normalized=String(match?.normalized||normalizeForMatch(`${item?.title||''} ${item?.text||''}`));
   if(!normalized) return null;
   const globalPositive=new Set((Array.isArray(org.__normalized_global_keywords)?org.__normalized_global_keywords:[]).map(String));
@@ -4168,13 +4169,14 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'school vlog','college vlog','exam result','job vacancy','vacancy announcement'
   ].map(normalizeForMatch).filter(Boolean);
 
-  const district = normalizeForMatch(String(org.districts?.name || ''));
+  const districtTerms=organizationDistrictNames(org).map(normalizeForMatch).filter(Boolean);
+  const district = districtTerms[0] || '';
   const villageTerms = villages.map(normalizeForMatch).filter(term=>term.length >= 4);
 
   // Rayon/təşkilat adları və əsas su-meliorasiya terminləri qlobal exclude bankına
   // səhvən əlavə olunsa belə düzgün materialları bloklamasın.
   const protectedExcludeTerms = new Set([
-    district,
+    ...districtTerms,
     'su','sukanal','suvarma','meliorasiya','kanalizasiya','kollektor','drenaj',
     'subartezian','artezian','irriqasiya','nasos','quyu','su techizati',
     'adsea','smsii','rsmx','isst','isbtx','simdnx','sdnx','smeti','smkli','toom'
@@ -4196,7 +4198,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     const tokens=normalized.split(/\s+/).filter(Boolean);
     return tokens.some(token=>token.length>term.length && token.startsWith(term));
   };
-  const districtHit = Boolean(district && locationTermHit(district));
+  const districtHit = districtTerms.some(term=>locationTermHit(term));
   const villageHits = villageTerms.filter(term=>locationTermHit(term)).slice(0,5);
   const locationHit = districtHit || villageHits.length > 0;
 
@@ -4245,7 +4247,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     // Konkret açar fraza yalnız təşkilatın öz ərazisinə bağlıdırsa təkbaşına
     // qəbul siqnalı ola bilər. Məsələn başqa rayonun "Arpaçay su anbarı" kimi
     // xəbəri sırf ümumi suvarma açar sözünə görə Bərdə monitorinqinə düşməməlidir.
-    if (district && term.includes(district)) return true;
+    if (districtTerms.some(d=>term.includes(d))) return true;
     if (villageTerms.some(v=>term.includes(v))) return true;
     if (direct.some(name=>name && term.includes(name))) return true;
     return locationHit;
@@ -4387,7 +4389,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     'samkir','siyazan','terter','ucar','yardimli','yevlax','zerdab','susa','lacin','kelbecer','qubadli',
     'zengilan','xocali','xocavend'
   ];
-  const foreignNamesHit = foreignDistricts.filter(name=>name!==district && contains(normalized,name));
+  const foreignNamesHit = foreignDistricts.filter(name=>!districtTerms.includes(name) && contains(normalized,name));
   const foreignHit = foreignNamesHit.length > 0 && !districtHit && directMatches.length === 0;
 
   const districtWide = org.show_district_wide !== false;
@@ -4406,7 +4408,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // amma discovery_query rayonun özünə bağlanmış olur. Bu siqnal yalnız historical
   // backfill + real su/meliorasiya mövzusu olduqda işləyir; başqa rayon və exclude veto-su qalır.
   const discoveryQuery = normalizeForMatch(String(raw?.discovery_query || ''));
-  const historicalScopedQuery = Boolean(historicalBackfill && district && (contains(discoveryQuery,district) || (district.length>=5 && discoveryQuery.split(/\s+/).some(token=>token.startsWith(district)))));
+  const historicalScopedQuery = Boolean(historicalBackfill && districtTerms.some(d=>contains(discoveryQuery,d) || (d.length>=5 && discoveryQuery.split(/\s+/).some(token=>token.startsWith(d)))));
   // Axtarış sorğusunda Bərdə yazılması nəticənin özünün Bərdəyə aid olduğunu
   // sübut etmir. Bing/Google bəzən sorğuya Abşeron, Mingəçevir və başqa rayon
   // xəbərləri qaytarırdı. Arxiv sorğusu yalnız nəticənin öz başlıq/mətn/URL-ində
