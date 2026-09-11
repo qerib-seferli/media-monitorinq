@@ -151,27 +151,48 @@ function updateDateInputs(){
   dateFrom.classList.remove('hidden'); dateTo.classList.remove('hidden');
 }
 
+function hasSafeStoredPublishedDate(m){
+  if(!m?.published_at)return false;
+  const published=new Date(m.published_at);
+  if(Number.isNaN(published.getTime()))return false;
+  const now=Date.now();
+  if(published.getUTCFullYear()<1995 || published.getTime()>now+86400000)return false;
+
+  // Köhnə arxiv qeydlərinin bir hissəsində published_at düzgün saxlanılıb, amma
+  // raw_payload-a yeni date_parser_version / published_date_status sahələri sonradan
+  // əlavə olunduğu üçün istifadəçi ekranı həmin düzgün tarixi gizlədirdi.
+  // detected_at paylaşım tarixi deyil. Legacy fallback yalnız published_at aşkarlanma
+  // vaxtından aydın şəkildə əvvəl olanda işləyir; beləliklə köhnə "aşkarlanma vaxtını
+  // paylaşım vaxtı kimi yaz" problemini yenidən geri qaytarmırıq.
+  const detected=m?.detected_at?new Date(m.detected_at):null;
+  if(!detected || Number.isNaN(detected.getTime()))return true;
+  const delta=detected.getTime()-published.getTime();
+  return delta>=36*60*60*1000;
+}
 function hasReliablePublishedDate(m){
   if(!m?.published_at)return false;
   const platform=String(m?.source_platform||'').toLowerCase();
   if(platform.includes('youtube'))return true;
   const raw=m?.raw_payload||{};
-  // Web/Google News tarixləri yalnız məqalənin öz səhifəsindən təsdiqlənəndə göstərilir.
-  // RSS/Google/Bing discovery vaxtı köhnə xəbərə yeni tarix verə bildiyi üçün artıq
-  // istifadəçiyə "paylaşım tarixi" kimi göstərilmir.
+  // Web/Google News tarixlərində birinci seçim məqalənin öz səhifəsindən və ya
+  // mənbənin RSS/feed pubDate sahəsindən təsdiqlənmiş tarixdir.
   if(platform==='web'||platform.includes('google news')){
     const source=String(raw?.published_date_source||'');
     const pageVerified=raw?.published_from_page===true && raw?.published_date_status==='verified' && Number(raw?.date_parser_version||0)>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(source);
     const provider=String(raw?.provider||'').toLowerCase();
     const kind=String(raw?.kind||'').toLowerCase();
     const feedReported=raw?.published_date_status==='source-reported' && source==='feed:published' && Number(raw?.date_parser_version||0)>=3 && (/(google news|bing|rss|gdelt|configured feed)/.test(provider) || ['google_news','bing_news','bing_web','gdelt_article','configured_feed'].includes(kind));
-    return pageVerified||feedReported;
+    if(pageVerified||feedReported)return true;
+    // Admin paneldə düzgün görünən köhnə materialların published_at dəyərini
+    // istifadəçi ekranında da göstər, amma detected_at-a yaxın şübhəli tarixləri yox.
+    return hasSafeStoredPublishedDate(m);
   }
   if(['facebook','instagram','tiktok','linkedin','x'].includes(platform)){
-    // Sosial paylaşım tarixi yalnız platformanın öz səhifəsindən / rəsmi API-dən
-    // təsdiqlənəndə göstərilir. Discovery vaxtını paylaşım tarixi kimi təqdim etmirik.
+    // Sosial paylaşım tarixi platformanın öz səhifəsindən / rəsmi API-dən
+    // təsdiqlənəndə göstərilir. Köhnə təhlükəsiz published_at qeydləri də qorunur.
     if(String(raw?.provider||'').toLowerCase().includes('meta graph api')) return true;
-    return raw?.published_from_page===true && raw?.published_date_status==='verified' && String(raw?.published_date_source||'').startsWith('social:');
+    const socialVerified=raw?.published_from_page===true && raw?.published_date_status==='verified' && String(raw?.published_date_source||'').startsWith('social:');
+    return socialVerified||hasSafeStoredPublishedDate(m);
   }
   return true;
 }
