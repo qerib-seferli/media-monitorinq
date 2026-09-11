@@ -19,6 +19,7 @@ const DEEP_BACKFILL = ['1','true','yes'].includes(String(process.env.NEWS_DEEP_B
 const RECENT_PRIORITY = ['1','true','yes'].includes(String(process.env.NEWS_RECENT_PRIORITY || '').toLowerCase());
 const REFILTER_EXISTING = ['1','true','yes'].includes(String(process.env.NEWS_REFILTER_EXISTING || '').toLowerCase());
 const FULL_RADAR = ['1','true','yes'].includes(String(process.env.NEWS_FULL_RADAR || '').toLowerCase());
+const OPEN_SOCIAL_ONLY = ['1','true','yes'].includes(String(process.env.NEWS_OPEN_SOCIAL_ONLY || '').toLowerCase());
 const QUERY_PASS_COUNT = Math.max(1, Math.min(12, Number(process.env.NEWS_QUERY_PASS_COUNT || 1)));
 const QUERY_PASS = Math.max(0, Math.min(QUERY_PASS_COUNT - 1, Number(process.env.NEWS_QUERY_PASS || 0)));
 const CURRENT_YEAR = new Date().getFullYear();
@@ -525,7 +526,7 @@ async function directSocialProfileItems(source,org){
     title:`${org?.short_name||org?.name||'Təşkilat'} — ${platform} paylaşımı`,
     text:row.text||'',
     url:row.url,published_at:null,image:null,author:source?.name||org?.short_name||null,
-    raw:{kind:'known_social_profile_post',provider:`${platform} public profile`,social_platform:platform,profile_url:profileUrl,trusted_org_profile:true,profile_discovery_rank:index+1}
+    raw:{kind:'known_social_profile_post',provider:`${platform} public profile`,social_platform:platform,profile_url:profileUrl,trusted_org_profile:true,profile_discovery_rank:index+1,open_social_discovery:true,discovery_channel:'open_social_web'}
   }));
 }
 
@@ -645,7 +646,7 @@ async function directSocialPostFromDiscoveredUrl(url,platform,org){
   const provisional={
     title:`${org?.short_name||org?.name||'Təşkilat'} — ${platform} paylaşımı`,
     text:'',url,published_at:null,image:null,author:null,
-    raw:{kind:'public_social_direct_page',social_platform:platform,public_social:true,direct_source_fetch:true}
+    raw:{kind:'public_social_direct_page',social_platform:platform,public_social:true,direct_source_fetch:true,open_social_discovery:true,discovery_channel:'open_social_web'}
   };
   const enriched=await enrichSocialPage(provisional,platform).catch(()=>provisional);
   const title=String(enriched?.title||'').trim();
@@ -665,6 +666,8 @@ function socialLinkOnlyDiscoveryItem(url,platform,org,query=''){
     raw:{
       kind:'public_social_link_discovery',
       social_platform:platform,
+      open_social_discovery:true,
+      discovery_channel:'open_social_web',
       public_social:true,
       discovery_only:true,
       content_unavailable:true,
@@ -801,6 +804,33 @@ function normalizeDate(value='') {
   const year=d.getUTCFullYear(); if(year<1995||year>new Date().getUTCFullYear()+1)return null;
   return d.toISOString();
 }
+function publishedDateFromUrl(value='') {
+  if(!value) return null;
+  let decoded=String(value||'');
+  try{decoded=decodeURIComponent(decoded);}catch{}
+  try{decoded=decodeURIComponent(decoded);}catch{}
+  const candidates=[];
+  // YYYY-MM-DD HH:mm:ss — RealPress kimi köhnə xəbərlərin öz URL-ində dəqiq tarix/saat saxlanılır.
+  for(const m of decoded.matchAll(/(?:^|[^0-9])((?:19|20)\d{2})[-_/.](0?[1-9]|1[0-2])[-_/.]([0-3]?\d)(?:[T _-]+([0-2]?\d):([0-5]\d)(?::([0-5]\d))?)?/g)){
+    const y=Number(m[1]),mo=Number(m[2]),d=Number(m[3]),hh=Number(m[4]||0),mm=Number(m[5]||0),ss=Number(m[6]||0);
+    if(d<1||d>31) continue;
+    // Saat yazılıbsa Azərbaycan yerli vaxtı kimi saxla; yoxdursa tarix günü 00:00.
+    const pad=n=>String(n).padStart(2,'0');
+    const iso=`${y}-${pad(mo)}-${pad(d)}T${pad(hh)}:${pad(mm)}:${pad(ss)}+04:00`;
+    const dt=new Date(iso);
+    if(!Number.isNaN(dt.getTime()) && dt.getTime()<=Date.now()+3*86400000) candidates.push(dt.toISOString());
+  }
+  // DD.MM.YYYY HH:mm — query/path daxilində bu format da geniş yayılıb.
+  for(const m of decoded.matchAll(/(?:^|[^0-9])([0-3]?\d)[._/-](0?[1-9]|1[0-2])[._/-]((?:19|20)\d{2})(?:[T _-]+([0-2]?\d):([0-5]\d)(?::([0-5]\d))?)?/g)){
+    const d=Number(m[1]),mo=Number(m[2]),y=Number(m[3]),hh=Number(m[4]||0),mm=Number(m[5]||0),ss=Number(m[6]||0);
+    if(d<1||d>31) continue;
+    const pad=n=>String(n).padStart(2,'0');
+    const dt=new Date(`${y}-${pad(mo)}-${pad(d)}T${pad(hh)}:${pad(mm)}:${pad(ss)}+04:00`);
+    if(!Number.isNaN(dt.getTime()) && dt.getTime()<=Date.now()+3*86400000) candidates.push(dt.toISOString());
+  }
+  return candidates[0]||null;
+}
+
 function datePatterns(){
   return [
     /(?:tarix|date|paylasim|paylaşım)?\s*[:\-]?\s*(\d{1,2}\s+(?:yanvar|fevral|mart|aprel|may|iyun|iyul|avqust|sentyabr|oktyabr|noyabr|dekabr|january|february|march|april|june|july|august|september|october|november|december)[,\s]+(?:19|20)\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/gi,
@@ -1150,11 +1180,31 @@ function jsonLdObjects(html='') {
 function cleanArticleText(value='') {
   return stripHtml(String(value||'').replace(/<br\s*\/?\s*>/gi,'\n').replace(/<\/p>/gi,'\n')).replace(/\s*\n\s*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
 }
+function trimRelatedListingTail(value='') {
+  const text=String(value||'');
+  if(text.length<220) return text;
+  // Məqalədən sonra sidebar/"son xəbərlər" kartları başlıqsız ardıcıl yapışa bilir.
+  // Eyni hissədə ən az iki tarix+kateqoriya kartı görünürsə ilk kartdan sonranı kəsirik.
+  const month='(?:yanvar|fevral|mart|aprel|may|iyun|iyul|avqust|sentyabr|sent|oktyabr|noyabr|dekabr|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)';
+  const cardRe=new RegExp(`(?:^|\s)(?:\d{1,3}\s+)?\d{1,2}\s+${month}\s+(?:19|20)\d{2}\s+(?:siyas[eə]t|iqtisadiyyat|c[eə]miyy[eə]t|şou[- ]?biznes|idman|hadis[eə]|dünya|m[eə]d[eə]niyy[eə]t|kriminal|sağlamlıq|texnologiya)\b`,'giu');
+  const hits=[...text.matchAll(cardRe)];
+  for(let i=0;i<hits.length-1;i++){
+    const a=hits[i].index||0,b=hits[i+1].index||0;
+    if(a>=180 && b-a<=1500) return text.slice(0,a).trim();
+  }
+  // Sayğac + tarix + kateqoriya variantı: "163 11 Sent 2026 Siyasət ..."
+  const compactRe=/(?:^|\s)\d{1,4}\s+\d{1,2}\s+(?:sent|sentyabr|oktyabr|noyabr|dekabr|avqust|iyul|iyun|may|aprel|mart|fevral|yanvar)\s+(?:19|20)\d{2}\s+(?:siyas[eə]t|iqtisadiyyat|c[eə]miyy[eə]t|idman|hadis[eə]|dünya|m[eə]d[eə]niyy[eə]t)\b/iu;
+  const m=compactRe.exec(text.slice(180));
+  if(m) return text.slice(0,180+(m.index||0)).trim();
+  return text;
+}
+
 function cleanArticleBody(value='', title='') {
   let text=cleanArticleText(value||'')
     .replace(/(?:-->|→|»){1,}/g,' ')
     .replace(/[ \t]{2,}/g,' ')
     .trim();
+  text=trimRelatedListingTail(text);
   if(!text) return '';
   const cleanTitle=cleanArticleText(title||'').trim();
   if(cleanTitle.length>=6){
@@ -1217,6 +1267,7 @@ function titleAnchoredArticleText(html='', title='') {
     .replace(/^(?:sosial\s+)?\d{1,2}[.\/-]\d{1,2}[.\/-](?:19|20)\d{2}(?:\s+\d{1,2}:\d{2})?\s*/i,'')
     .replace(/^oxunma sayı\s*:?\s*\d+\s*/i,'')
     .trim();
+  chunk=trimRelatedListingTail(chunk);
   const lines=chunk.split(/\n+/).map(x=>x.trim()).filter(x=>x.length>=25 && !/facebook|instagram|telegram|twitter|x\.com|reklam|cookie|abunə|subscribe/i.test(x));
   return [...new Set(lines)].join('\n\n').slice(0,120000);
 }
@@ -1293,9 +1344,10 @@ async function enrichPage(item) {
     const metaImage=firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i]);
     const structuredRaw = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
     const structuredPublished=validatePublishedForTarget(normalizeDate(structuredRaw),item);
-    const visiblePublished=structuredPublished?null:validatePublishedForTarget(extractVisiblePublishedDate(html,stripHtml(title)||item.title||''),item);
-    const pagePublished=structuredPublished||visiblePublished||null;
-    const publishedDateSource=structuredPublished?'structured:datePublished':visiblePublished?'visible:article-heading':null;
+    const urlPublished=structuredPublished?null:validatePublishedForTarget(publishedDateFromUrl(finalUrl||item.url),item);
+    const visiblePublished=(structuredPublished||urlPublished)?null:validatePublishedForTarget(extractVisiblePublishedDate(html,stripHtml(title)||item.title||''),item);
+    const pagePublished=structuredPublished||urlPublished||visiblePublished||null;
+    const publishedDateSource=structuredPublished?'structured:datePublished':urlPublished?'url:embedded-published-at':visiblePublished?'visible:article-heading':null;
     const author = extractAuthorFromHtml(html, articleLd, item.author||'');
     const articleScope=[...html.matchAll(/<(?:article|main)\b[^>]*>([\s\S]*?)<\/(?:article|main)>/gi)].map(m=>m[1]).join('\n');
     const hasArticleImage=/<img\b/i.test(articleScope);
@@ -1309,7 +1361,7 @@ async function enrichPage(item) {
       image:imageUrls[0]||null,
       published_at:pagePublished||(String(item?.raw?.kind||'').includes('configured_site_sitemap')?null:item.published_at),
       author:author||item.author||null,
-      raw:{...(item.raw||{}),enriched:true,article_parser_version:3,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
+      raw:{...(item.raw||{}),enriched:true,article_parser_version:4,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
     };
   } catch { return item; }
 }
@@ -2159,7 +2211,7 @@ for (const org of plan.organizations) {
   // təşkilata sərt uyğunlaşdırılmış profillərin real postlarını oxuyuruq. Meta icazəsi
   // hansı profilə çatmırsa run qırılmır; aşağıdakı public Web discovery fallback qalır.
   const metaProfiles=verifiedSocialProfiles.filter(x=>['Facebook','Instagram'].includes(x.platform)).slice(0,4);
-  if(metaProfiles.length && !gatewayBudgetLow()){
+  if(!OPEN_SOCIAL_ONLY && metaProfiles.length && !gatewayBudgetLow()){
     try{
       const metaScan=await callMonitor({mode:'meta_public_profile_scan',organization_id:org.id,social_sources:metaProfiles},45000,1);
       totalReceived += Number(metaScan?.items||0);
@@ -2181,6 +2233,39 @@ for (const org of plan.organizations) {
     const current=Array.isArray(socialItemsByPlatform.get(profile.platform))?socialItemsByPlatform.get(profile.platform):[];
     socialItemsByPlatform.set(profile.platform,dedupe([...directItems,...current]).slice(0,Math.min(40,MAX_INGEST_ITEMS)));
     console.log(`[${org.short_name}] ${profile.platform} məlum profil postları (public fallback): ${directItems.length} | ${profile.url}`);
+  }
+
+  if(OPEN_SOCIAL_ONLY){
+    console.log(`[${org.short_name}] 🌐 Açıq sosial şəbəkə lane-i: API-siz public discovery nəticələri yazılır.`);
+    for(const [socialPlatform,socialItems] of socialItemsByPlatform.entries()){
+      if(gatewayBudgetLow()) break;
+      if(!Array.isArray(socialItems)||!socialItems.length) continue;
+      const marked=socialItems.map(item=>({...item,raw:{...(item?.raw||{}),open_social_discovery:true,discovery_channel:'open_social_web',discovered_without_platform_api:true}}));
+      const result=await ingestInChunks({org,platform:socialPlatform,label:`🌐 Açıq sosial şəbəkə • ${socialPlatform}`,items:marked});
+      totalReceived += Number(result?.received||0);
+      totalAccepted += Number(result?.accepted||0);
+      totalRejected += Number(result?.rejected||0);
+      totalInserted += Number(result?.inserted||0);
+      totalChunkFailures += Number(result?.chunk_failures||0);
+      const acceptedTargets=Array.isArray(result?.accepted_targets)?result.accepted_targets:[];
+      for(const target of acceptedTargets.slice(0,MAX_ENRICH_ITEMS)){
+        if(gatewayBudgetLow()) break;
+        const enriched=await enrichSocialPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:target.image||null,author:target.author||null,raw:{...(target.raw||{}),open_social_discovery:true,discovery_channel:'open_social_web',discovered_without_platform_api:true}},socialPlatform);
+        try{
+          await callMonitor({
+            mode:'social_enrich',organization_id:org.id,source_url:target.url,source_platform:socialPlatform,
+            title:enriched.title||target.title||'',text:enriched.text||target.text||'',
+            image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],
+            published_at:enriched.published_at||null,author:enriched.author||null,canonical_url:enriched.raw?.canonical_url||target.url,
+            page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',
+            date_parser_version:Number(enriched.raw?.date_parser_version||0),like_count:enriched.raw?.like_count,comments_count:enriched.raw?.comments_count,
+            raw_patch:{...(enriched.raw||{}),open_social_discovery:true,discovery_channel:'open_social_web',discovered_without_platform_api:true}
+          },35000,1);
+        }catch(e){console.log(`[${org.short_name}] Açıq sosial metadata yenilənmədi: ${e?.message||e}`);}
+      }
+    }
+    console.log(`[${org.short_name}] 🌐 Açıq sosial şəbəkə tamamlandı.`);
+    continue;
   }
 
   const shardPool=sourceShard(configuredSources);
@@ -2343,7 +2428,7 @@ for (const org of plan.organizations) {
           mode:'news_enrich', organization_id:org.id, source_url:target.url,
           title:enriched.title||target.title||'', text:enriched.text||target.text||'',
           image_url:enriched.image||'', image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[], published_at:reliablePublishedAt(enriched,target),
-          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true, published_date_source:enriched.raw?.published_date_source||'', date_parser_version:Number(enriched.raw?.date_parser_version||0), article_parser_version:Number(enriched.raw?.article_parser_version||3)
+          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true, published_date_source:enriched.raw?.published_date_source||'', date_parser_version:Number(enriched.raw?.date_parser_version||0), article_parser_version:Number(enriched.raw?.article_parser_version||4)
         });
         if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);
       } catch(e) { console.log(`[${org.short_name}] Tam mətn yeniləmə xətası: ${e?.message||e}`); }
@@ -2412,7 +2497,7 @@ for (const org of plan.organizations) {
             title:enriched.title||target.title||'',text:enriched.text||target.text||'',
             image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],
             published_at:reliablePublishedAt(enriched,target),author:enriched.author||null,
-            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0),article_parser_version:Number(enriched.raw?.article_parser_version||3)
+            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0),article_parser_version:Number(enriched.raw?.article_parser_version||4)
           });
           if(refreshed?.ok) refreshedCount++;
           if(!target.has_screenshot) screenshotQueue.push({title:enriched.title||target.title||'',url:target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});

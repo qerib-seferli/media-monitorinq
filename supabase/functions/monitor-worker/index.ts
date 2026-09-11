@@ -739,7 +739,7 @@ Deno.serve(async (req) => {
           const hasShot=media.some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot' && Boolean(m?.url));
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase()) && Boolean(m?.url));
           const dateNeedsCheck=webDateNeedsVerification(raw,row?.published_at,row?.detected_at);
-          const parserNeedsRefresh=Number(raw?.article_parser_version||0)<3;
+          const parserNeedsRefresh=Number(raw?.article_parser_version||0)<4;
           const textMissing=text.length<450 || raw?.enrichment_complete!==true;
           const needs=parserNeedsRefresh || textMissing || !row?.published_at || dateNeedsCheck || !row?.author_name || !hasShot || !hasCover;
           if(!needs) continue;
@@ -873,6 +873,14 @@ Deno.serve(async (req) => {
         if (current?.error) throw current.error;
         if (!current?.data?.id) return json({ok:true,run_id:runId,mode:'news_enrich',updated:false,skipped:'mention-not-found'},200);
 
+        // Gateway tarixən `title/text/published_at/author` adları ilə göndərib, worker isə
+        // `news_*` sahələrini gözləyirdi. Hər iki müqaviləni qəbul edirik ki köhnə workflow
+        // və yeni parser eyni anda təhlükəsiz işləsin.
+        const newsTitle=String(options.news_title ?? options.title ?? '').trim();
+        const newsText=String(options.news_text ?? options.text ?? '');
+        const newsPublishedAt=options.news_published_at ?? options.published_at ?? null;
+        const newsAuthor=String(options.news_author ?? options.author ?? '').trim();
+
         // Axtarış nəticəsi doğru xəbərə işarə etsə də bəzi saytlar köhnə URL-ni ana səhifəyə,
         // başqa xəbərə və ya “Yay Fest 2026” kimi tam əlaqəsiz məzmuna yönləndirir. Belə səhifə
         // mövcud düzgün başlıq/tarix/snippet-i korlamamalıdır. Enrichment yalnız eyni hekayə
@@ -880,43 +888,43 @@ Deno.serve(async (req) => {
         const titleKey=(value:any)=>normalizeForMatch(String(value||''));
         const titleTokens=(value:any)=>new Set(titleKey(value).split(/\s+/).filter((x:string)=>x.length>=4 && !['berde','rayonu','rayonunda','haqqinda','ucun','olan'].includes(x)));
         const oldTokens=titleTokens(current.data.title);
-        const newTokens=titleTokens(options.news_title);
+        const newTokens=titleTokens(newsTitle);
         let shared=0; for (const t of newTokens) if(oldTokens.has(t)) shared++;
-        const titleConsistent=!options.news_title || oldTokens.size===0 || newTokens.size===0 || shared>=Math.min(2,Math.max(1,Math.min(oldTokens.size,newTokens.size)));
+        const titleConsistent=!newsTitle || oldTokens.size===0 || newTokens.size===0 || shared>=Math.min(2,Math.max(1,Math.min(oldTokens.size,newTokens.size)));
         const oldYear=current.data.published_at ? new Date(current.data.published_at).getUTCFullYear() : 0;
-        const newYear=options.news_published_at ? new Date(options.news_published_at).getUTCFullYear() : 0;
+        const newYear=newsPublishedAt ? new Date(newsPublishedAt).getUTCFullYear() : 0;
         const oldDateSuspect=webDateNeedsVerification(current.data.raw_payload,current.data.published_at,null);
         const dateConsistent=oldDateSuspect || !oldYear || !newYear || Math.abs(oldYear-newYear)<=1;
 
         let contentRelevant=true;
-        if (options.news_text || options.news_title) {
+        if (newsText || newsTitle) {
           const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 2400);
           const positiveKeywords = installKeywordContext(org, activeKeywordRows);
           const villageNames:string[] = org.district_id
             ? await fetchDistrictPlaceNames(admin, String(org.district_id)).catch(()=>[])
             : [];
-          const candidate:Item={title:options.news_title||current.data.title||'',text:options.news_text||'',url:options.canonical_url||options.source_url,published_at:options.news_published_at||current.data.published_at||null,raw:{kind:'web_enrich',provider:'web'}};
+          const candidate:Item={title:newsTitle||current.data.title||'',text:newsText||'',url:options.canonical_url||options.source_url,published_at:newsPublishedAt||current.data.published_at||null,raw:{kind:'web_enrich',provider:'web'}};
           contentRelevant=evaluateMatch(org,candidate,positiveKeywords.map((x:string)=>x.toLocaleLowerCase('az-AZ')),villageNames).accepted;
         }
         // Qeyd artıq monitorinq filtrindən keçib. Enrichment zamanı əsas qoruma eyni
         // hekayənin açılmasıdır: başlıq uyğunluğu + tarix təhlükəsizliyi. Tam mətnin içində
         // açar sözün təkrar görünməməsi təkbaşına düzgün xəbərin metadata-sını bloklamamalıdır.
-        const storyConsistent = titleConsistent && dateConsistent && (contentRelevant || shared>=1 || !options.news_title);
+        const storyConsistent = titleConsistent && dateConsistent && (contentRelevant || shared>=1 || !newsTitle);
         const pageEnriched=options.page_enriched===true;
         const safeMetadata = storyConsistent;
         const patch:any = {last_seen_at:new Date().toISOString(),last_verified_at:new Date().toISOString(),source_status:'active'};
-        if (safeMetadata && options.news_title) patch.title=options.news_title;
-        if (safeMetadata && pageEnriched && clean(options.news_text||'').length>=80) {
-          patch.original_text=options.news_text;
-          patch.summary=clean(options.news_text).slice(0,700);
+        if (safeMetadata && newsTitle) patch.title=newsTitle;
+        if (safeMetadata && pageEnriched && clean(newsText).length>=80) {
+          patch.original_text=newsText.slice(0,120000);
+          patch.summary=clean(newsText).slice(0,700);
         }
-        if (safeMetadata && options.news_published_at && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(options.published_date_source)) patch.published_at=options.news_published_at;
+        if (safeMetadata && newsPublishedAt && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading','url:embedded-published-at'].includes(options.published_date_source)) patch.published_at=newsPublishedAt;
         else if (safeMetadata && oldDateSuspect) patch.published_at=null;
-        if (safeMetadata && options.news_author) patch.author_name=options.news_author;
+        if (safeMetadata && newsAuthor) patch.author_name=newsAuthor.slice(0,300);
         const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,12);
-        const trustedIncomingDate=Boolean(safeMetadata && options.news_published_at && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(options.published_date_source));
+        const trustedIncomingDate=Boolean(safeMetadata && newsPublishedAt && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading','url:embedded-published-at'].includes(options.published_date_source));
         if(!trustedIncomingDate && safeMetadata && oldDateSuspect) patch.published_at=null;
-        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:trustedIncomingDate,published_date_status:safeMetadata?(trustedIncomingDate?'verified':'not-found'):'unverified',published_date_source:trustedIncomingDate?options.published_date_source:null,date_parser_version:trustedIncomingDate?options.date_parser_version:2,article_parser_version:Number(options.article_parser_version||3),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(newsText).length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:trustedIncomingDate,published_date_status:safeMetadata?(trustedIncomingDate?'verified':'not-found'):'unverified',published_date_source:trustedIncomingDate?options.published_date_source:null,date_parser_version:trustedIncomingDate?options.date_parser_version:2,article_parser_version:Number(options.article_parser_version||4),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
         const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
         if (updated?.error) throw updated.error;
         if(safeMetadata && externalImages.length){
