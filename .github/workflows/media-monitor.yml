@@ -219,8 +219,53 @@ jobs:
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_BROAD_QUERY_LIMIT: '0'
-          NEWS_MAX_INGEST_ITEMS: '80'
+          NEWS_OPEN_SOCIAL_QUERY_LIMIT: '10'
+          NEWS_OPEN_SOCIAL_PAGE_LIMIT: '2'
+          NEWS_OPEN_SOCIAL_TARGET_PER_PLATFORM: '50'
+          NEWS_MAX_INGEST_ITEMS: '100'
           NEWS_MAX_ENRICH_ITEMS: '8'
+          NEWS_MAX_SCREENSHOTS: '0'
+        run: node scripts/news-gateway.mjs
+
+
+  open-social-pilot-berde:
+    # Pilot təşkilat üçün ayrıca dərin API-siz sosial discovery. Mövcud Meta API xəttini
+    # dəyişmir; yalnız açıq indekslənmiş post/reel/status URL-lərini və public profilləri axtarır.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '26 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    concurrency:
+      group: media-monitor-open-social-pilot-berde
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deep open social discovery — Bərdə SMSİİ
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_OPEN_SOCIAL_ONLY: '1'
+          NEWS_ORG_SHORT_NAME: 'Bərdə SMSİİ'
+          NEWS_GLOBAL_ORGS: '0'
+          NEWS_ORG_SHARD_COUNT: '1'
+          NEWS_ORG_SHARD_INDEX: '0'
+          NEWS_ORG_BATCH: '0'
+          NEWS_DIRECT_ONLY: '1'
+          NEWS_REFILTER_EXISTING: '0'
+          # Bərdə pilotunda yalnız 2 Brave fallback sorğusu icazəlidir; əsas yük pulsuz
+          # Bing public index üzərindədir. Buna görə aylıq Search API limiti sürətlə yeyilmir.
+          NEWS_BRAVE_REQUEST_BUDGET: '2'
+          NEWS_BRAVE_ROTATE_SHARDS: '0'
+          NEWS_GATEWAY_BUDGET_MS: '390000'
+          NEWS_SOURCE_SHARD_COUNT: '1'
+          NEWS_SOURCE_SHARD_INDEX: '0'
+          NEWS_OPEN_SOCIAL_QUERY_LIMIT: '20'
+          NEWS_OPEN_SOCIAL_PAGE_LIMIT: '3'
+          NEWS_OPEN_SOCIAL_TARGET_PER_PLATFORM: '50'
+          NEWS_BROAD_QUERY_LIMIT: '0'
+          NEWS_MAX_INGEST_ITEMS: '140'
+          NEWS_MAX_ENRICH_ITEMS: '20'
           NEWS_MAX_SCREENSHOTS: '0'
         run: node scripts/news-gateway.mjs
 
