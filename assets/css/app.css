@@ -3392,3 +3392,7 @@ body.detail-modal-open .bottom-nav{visibility:visible!important;pointer-events:a
 #detail-bg .detail-modal-head .open-social-chip{margin-left:6px;vertical-align:middle;font-size:8.5px;padding:4px 7px}
 .detail-media-video{width:100%;max-height:520px;background:#050d17;border-radius:12px;object-fit:contain}
 @media(max-width:720px){.mention-card>.open-social-chip{right:6px;top:5px;font-size:6.6px;padding:2px 5px;max-width:130px}.mention-card:has(>.open-social-chip)>.toolbar{padding-top:10px}}
+
+/* Hesabatda bazada saxlanılan, amma istifadəçiyə göstərilməyən zəif nəticələr */
+.report-row.weak-hidden{opacity:.62}
+.report-row.weak-hidden span::before{content:'↳ ';opacity:.7}

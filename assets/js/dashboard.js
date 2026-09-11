@@ -27,7 +27,7 @@ async function fetchDashboardData(){
   const todayIso=today.toISOString();
   const countQuery=(extra=(q)=>q)=>extra(scoped(
     supabase.from('mentions').select('id',{count:'exact',head:true})
-      .gt('relevance_score',0).gte('detected_at',todayIso)
+      .gt('relevance_score',0).or('priority_score.gte.31,relevance_score.gte.31').gte('detected_at',todayIso)
   ));
   // Dashboard statistikası üçün 1000 tam sətir yükləmək əvəzinə yalnız server count gəlir.
   // Bu xüsusilə mərkəzi istifadəçidə aylıq Supabase egressini kəskin azaldır.
@@ -36,7 +36,7 @@ async function fetchDashboardData(){
     countQuery(q=>q.gte('priority_score',81)),
     countQuery(q=>q.eq('sentiment','negative')),
     countQuery(q=>q.eq('sentiment','positive')),
-    scoped(supabase.from('mentions').select('id,title,summary,original_text,source_platform,source_url,priority_score,sentiment,detected_at,published_at,source_status,raw_payload,organization_id,organizations(short_name),service_point:organization_service_points!mentions_service_point_id_fkey(short_name,name),mention_media(url,media_type)').gt('relevance_score',0).not('published_at','is',null).order('published_at',{ascending:false}).limit(48)),
+    scoped(supabase.from('mentions').select('id,title,summary,original_text,source_platform,source_url,priority_score,relevance_score,sentiment,detected_at,published_at,source_status,raw_payload,organization_id,organizations(short_name),service_point:organization_service_points!mentions_service_point_id_fkey(short_name,name),mention_media(url,media_type)').gt('relevance_score',0).or('priority_score.gte.31,relevance_score.gte.31').not('published_at','is',null).order('published_at',{ascending:false}).limit(48)),
     scoped(supabase.from('notifications').select('id,organization_id,mention_id,title,body,kind,created_at').order('created_at',{ascending:false}).limit(32))
   ]);
   const fatal=[allCount,highCount,negCount,posCount,latestRes,notifRes].find(x=>x.error); if(fatal?.error) console.warn(friendlyError(fatal.error));
@@ -88,10 +88,10 @@ let notifRows=notifs||[];
 const notifIds=[...new Set(notifRows.map(x=>x.mention_id).filter(Boolean))];
 let mentionMap=new Map();
 if(notifIds.length){
-  const {data:linked=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,organizations(short_name),service_point:organization_service_points!mentions_service_point_id_fkey(short_name,name)').in('id',notifIds);
+  const {data:linked=[]}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,priority_score,source_status,title,summary,original_text,author_name,organizations(short_name),service_point:organization_service_points!mentions_service_point_id_fkey(short_name,name)').in('id',notifIds);
   mentionMap=new Map(linked.map(x=>[x.id,x]));
 }
-notifRows=notifRows.filter(x=>!x.mention_id||(Number(mentionMap.get(x.mention_id)?.relevance_score||0)>0&&!isMentionExcluded(mentionMap.get(x.mention_id),results.excludes))).sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,8);
+notifRows=notifRows.filter(x=>{if(!x.mention_id)return true;const m=mentionMap.get(x.mention_id);return Number(m?.relevance_score||0)>0&&(Number(m?.priority_score||0)>=31||Number(m?.relevance_score||0)>=31)&&!isMentionExcluded(m,results.excludes);}).sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,8);
 n.innerHTML=notifRows.length?notifRows.map(x=>{const m=mentionMap.get(x.mention_id);const comment=isComment(m);const removed=String(m?.source_status||'active')==='removed';const unavailable=String(m?.source_status||'active')==='unavailable';const status=removed?`<span class="dashboard-status-chip removed">${comment?'Şərh silinib':'Material silinib'}</span>`:unavailable?'<span class="dashboard-status-chip unavailable">Əlçatan deyil</span>':'';return `<a class="dashboard-notification${comment?' is-comment':''}${removed?' is-removed':''}" href="${x.mention_id ? `./monitorinq.html?id=${x.mention_id}` : './bildirisler.html'}"><span class="notification-dot ${removed?'removed':x.kind==='critical'?'critical':'system'}"></span><span class="dashboard-notification-copy"><strong>${escapeHtml(x.title||'Bildiriş')}${comment?'<span class="dashboard-comment-chip">✉ Şərh</span>':''}${status}</strong><small>${escapeHtml(x.body||'')}</small></span><time>${fmtDate(x.created_at)}</time><span class="dashboard-notification-arrow">›</span></a>`}).join(''):'<div class="empty compact-empty">Yeni bildiriş yoxdur.</div>';
 
 }

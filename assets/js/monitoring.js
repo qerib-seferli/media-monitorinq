@@ -37,8 +37,16 @@ function mentionSourceUrl(m){
 }
 function isOpenSocialDiscovery(m){
   const raw=m?.raw_payload||{};
-  if(raw?.open_social_discovery===true || raw?.discovered_without_platform_api===true || raw?.discovery_channel==='open_social_web') return true;
-  return ['public_social_direct_page','public_social_link_discovery','known_social_profile_post'].includes(String(raw?.kind||''));
+  // Bu nişan yalnız API-siz açıq sosial discovery lane-i tərəfindən açıq şəkildə
+  // işarələnmiş materiallara aiddir. Köhnə public/known profile qeydləri təkcə
+  // kind dəyərinə görə açıq sosial material hesab edilmir.
+  return raw?.open_social_discovery===true || raw?.discovered_without_platform_api===true || raw?.discovery_channel==='open_social_web';
+}
+function applyUserVisibleQuality(q){
+  // 1–30 zəif nəticələr bazada/admin yoxlamasında saxlanılır, amma adi istifadəçi
+  // monitorinqinə çıxmır. Legacy qeydlərdə priority boş/0 ola bildiyi üçün
+  // relevance >=31 olan düzgün köhnə materialları da qoruyuruq.
+  return q.gt('relevance_score',0).or('priority_score.gte.31,relevance_score.gte.31');
 }
 function openSocialChip(m){
   return isOpenSocialDiscovery(m)?'<span class="open-social-chip" title="Platform API-sindən asılı olmayan açıq internet kəşfiyyatı">🌐 Açıq sosial şəbəkə</span>':'';
@@ -347,8 +355,7 @@ async function load({reset=false}={}){
     // Əvvəl filtrdən sonra 50 görünən nəticə toplamaq üçün bir çağırışda 6 səhifəyədək
     // (300 sətir) yüklənə bilirdi. İndi növbəti 50 yalnız istifadəçi aşağı sürüşəndə gəlir.
     const from=page*PAGE_SIZE, to=from+PAGE_SIZE-1;
-    let q=supabase.from('mentions').select('id,title,summary,original_text,source_platform,source_url,author_name,priority_score,relevance_score,sentiment,published_at,detected_at,source_status,raw_payload,organization_id,district_id,village_id,organizations(short_name),service_point:organization_service_points!mentions_service_point_id_fkey(short_name,name),districts(name),villages(name),mention_media(url,media_type,captured_at)')
-      .gt('relevance_score',0);
+    let q=applyUserVisibleQuality(supabase.from('mentions').select('id,title,summary,original_text,source_platform,source_url,author_name,priority_score,relevance_score,sentiment,published_at,detected_at,source_status,raw_payload,organization_id,district_id,village_id,organizations(short_name),service_point:organization_service_points!mentions_service_point_id_fkey(short_name,name),districts(name),villages(name),mention_media(url,media_type,captured_at)'));
     // Tarix filtri yalnız real paylaşım tarixinə tətbiq edilir. detected_at sistemin
     // aşkarlama vaxtıdır və köhnə xəbəri "Bu ay" kimi göstərməməlidir.
     if(period.value!=='all') q=q.gte('published_at',range.from).lte('published_at',range.to);
@@ -409,7 +416,7 @@ function speak(m,button){
 async function fetchMentionById(id){
   const {data,error}=await supabase.from('mentions')
     .select('*, districts(name), villages(name), mention_media(*)')
-    .eq('id',id).gt('relevance_score',0).maybeSingle();
+    .eq('id',id).gt('relevance_score',0).or('priority_score.gte.31,relevance_score.gte.31').maybeSingle();
   if(error) throw error;
   return data || null;
 }

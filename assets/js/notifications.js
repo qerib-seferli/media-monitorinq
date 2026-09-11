@@ -40,7 +40,7 @@ function ownPortalNoise(m){try{const u=new URL(String(m?.source_url||''));const 
 function validNotification(item){
   if(!item.mention_id) return true;
   const m=mentionMap.get(item.mention_id);
-  return Number(m?.relevance_score||0)>0 && !ownPortalNoise(m) && !isMentionExcluded(m,globalExcludes);
+  return Number(m?.relevance_score||0)>0 && (Number(m?.priority_score||0)>=31 || Number(m?.relevance_score||0)>=31) && !ownPortalNoise(m) && !isMentionExcluded(m,globalExcludes);
 }
 function card(item){
   const href = item.mention_id ? `./monitorinq.html?id=${encodeURIComponent(item.mention_id)}` : '';
@@ -71,7 +71,7 @@ async function loadNext({reset=false}={}){
     const batch=data||[];
     const ids=[...new Set(batch.map(x=>x.mention_id).filter(Boolean))];
     if(ids.length){
-      const {data:mentions=[],error:mentionError}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,source_status,title,summary,original_text,author_name,source_url,source_platform,organizations(short_name)').in('id',ids);
+      const {data:mentions=[],error:mentionError}=await supabase.from('mentions').select('id,published_at,raw_payload,relevance_score,priority_score,source_status,title,summary,original_text,author_name,source_url,source_platform,organizations(short_name)').in('id',ids);
       if(mentionError) throw mentionError;
       mentions.forEach(x=>mentionMap.set(x.id,x));
     }

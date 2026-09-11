@@ -30,11 +30,14 @@ function rangeIso(){
   const end=new Date(to.value+'T23:59:59.999');
   return [start.toISOString(),end.toISOString()];
 }
-async function counted(filter=(q)=>q){
+async function counted(filter=(q)=>q,{includeWeak=false}={}){
   const [a,b]=rangeIso();
   let q=supabase.from('mentions').select('id',{count:'exact',head:true})
     .gt('relevance_score',0)
     .or(`and(published_at.gte.${a},published_at.lte.${b}),and(published_at.is.null,detected_at.gte.${a},detected_at.lte.${b})`);
+  // Hesabatın əsas rəqəmləri istifadəçiyə real göstərilən keyfiyyət həddi ilə eyni olsun.
+  // 1–30 zəif nəticələr silinmir; ayrıca "istifadəçidən gizli" kimi sayılır.
+  if(!includeWeak) q=q.or('priority_score.gte.31,relevance_score.gte.31');
   q=applyOrganizationScope(q,c.profile,organizationFilter?.value||'');
   q=filter(q);
   const r=await q;
@@ -60,13 +63,18 @@ async function load(){
       counted(q=>platformCountFilter(q,'Web')),
       counted(q=>q.gte('priority_score',61).lt('priority_score',81)),
       counted(q=>q.gte('priority_score',31).lt('priority_score',61)),
-      counted(q=>q.lt('priority_score',31))
+      counted(q=>q.lt('priority_score',31),{includeWeak:true})
     ]);
     document.querySelector('#metrics').innerHTML=[['Ümumi',total],['Mənfi',neg],['Müsbət',pos],['Kritik',critical]].map(([l,n])=>`<div class="card metric"><div class="label">${l}</div><div class="num">${n}</div></div>`).join('');
     const platforms=[['YouTube',youtube],['Web',web],['Facebook',facebook],['Instagram',instagram],['LinkedIn',linkedin],['TikTok',tiktok],['X',xPlatform]];
     document.querySelector('#platforms').innerHTML=platforms.map(([k,v])=>`<div class="report-row"><span>${k}</span><strong>${v}</strong></div>`).join('')||'<div class="empty">Məlumat yoxdur</div>';
-    const buckets=[['81–100',critical],['61–80',p61],['31–60',p31],['0–30',p30]];
-    document.querySelector('#priorities').innerHTML=buckets.map(([k,v])=>`<div class="report-row"><span>${k}</span><strong>${v}</strong></div>`).join('');
+    const buckets=[
+      ['81–100 • Yüksək / kritik',critical,''],
+      ['61–80 • Mühüm',p61,''],
+      ['31–60 • Yoxlanmalı',p31,''],
+      ['1–30 • Zəif — istifadəçidən gizli',p30,'weak-hidden']
+    ];
+    document.querySelector('#priorities').innerHTML=buckets.map(([k,v,cls])=>`<div class="report-row ${cls}"><span>${k}</span><strong>${v}</strong></div>`).join('');
   }catch(e){toast(e,'error')}finally{hidePageLoader()}
 }
 if(organizationFilter) organizationFilter.onchange=load;period.onchange=()=>{setPeriod(period.value);if(period.value!=='custom')load()};from.onchange=()=>period.value='custom';to.onchange=()=>period.value='custom';document.querySelector('#apply').onclick=load;load();
