@@ -6,6 +6,8 @@ on:
     - cron: '*/15 * * * *'
     # Meta ayrıca 5 dəqiqəlik yüngül rotasiya ilə işləyir; */15 canlı run-la eyni dəqiqəyə düşmür.
     - cron: '3-58/5 * * * *'
+    # API-siz açıq sosial kəşfiyyat ayrıca yüngül lane: saatda 2 dəfə.
+    - cron: '11,41 * * * *'
     - cron: '7 * * * *'
     - cron: '17 * * * *'
     - cron: '37 * * * *'
@@ -171,6 +173,56 @@ jobs:
             -H "Content-Type: application/json" \
             -H "x-monitor-secret: $MONITOR_SECRET" \
             -d "$FALLBACK" "$URL"
+
+  open-social-discovery:
+    # Meta API xəttindən TAM AYRIDIR. Yalnız açıq internet indeksləri və public səhifələr.
+    # Manual Media Monitoring Worker başladıldıqda da işləyir; periodikdə saatda 2 dəfə.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '11,41 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    concurrency:
+      group: media-monitor-open-social-${{ matrix.shard }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check monitor secret
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          if [ -z "$MONITOR_SECRET" ]; then
+            echo "MONITOR_SECRET təyin edilməyib; Açıq sosial şəbəkə worker-i buraxılır."
+            exit 0
+          fi
+
+      - name: Open social network discovery
+        env:
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+          MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
+          NEWS_OPEN_SOCIAL_ONLY: '1'
+          NEWS_GLOBAL_ORGS: '0'
+          NEWS_ORG_SHARD_COUNT: '5'
+          NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
+          NEWS_ORG_BATCH: '1'
+          NEWS_ORG_ROTATION_MINUTES: '30'
+          NEWS_DIRECT_ONLY: '1'
+          NEWS_REFILTER_EXISTING: '0'
+          # Brave ödənişli/pulsuz limiti bu lane tərəfindən yeyilmir. Bing/public index əsasdır.
+          NEWS_BRAVE_REQUEST_BUDGET: '0'
+          NEWS_GATEWAY_BUDGET_MS: '210000'
+          NEWS_SOURCE_SHARD_COUNT: '5'
+          NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
+          NEWS_BROAD_QUERY_LIMIT: '0'
+          NEWS_MAX_INGEST_ITEMS: '80'
+          NEWS_MAX_ENRICH_ITEMS: '8'
+          NEWS_MAX_SCREENSHOTS: '0'
+        run: node scripts/news-gateway.mjs
 
   web-fast-watch:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
