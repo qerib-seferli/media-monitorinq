@@ -3281,3 +3281,106 @@ body.detail-modal-open .bottom-nav{visibility:visible!important;pointer-events:a
 }
 
 .comment-context-technical-only{padding:6px 8px!important;background:transparent!important;border-style:dashed!important}.comment-context-technical-only .comment-technical{margin-top:0!important}
+
+/* =========================================================
+   v96 — kart başlığı/platforma etiketi + desktop dashboard düzümü
+   Yalnız təqdimat qatına aiddir; data/toplama/filtr məntiqinə toxunmur.
+   ========================================================= */
+
+/* Platforma düymələrində marka ikonları rəngli qala bilər, adlar isə vahid ağdır. */
+.platform-pill-label,
+.platform-pill.active .platform-pill-label,
+.platform-pill:hover .platform-pill-label{
+  color:#f4f7fb!important;
+  text-shadow:none!important;
+}
+
+/* Kart üzərindəki platforma etiketi şəkilin üstündə deyil, kartın yuxarı-solundadır. */
+.mention-card,
+.dashboard-mention-card{position:relative!important}
+.mention-card{padding-top:31px!important}
+.dashboard-mention-card{padding-top:26px!important}
+.mention-card .thumb-platform-chip,
+.dashboard-mention-card .thumb-platform-chip{
+  position:absolute!important;
+  left:11px!important;
+  top:7px!important;
+  right:auto!important;
+  bottom:auto!important;
+  margin:0!important;
+  width:max-content!important;
+  max-width:calc(100% - 22px)!important;
+  z-index:3!important;
+  padding:2px 6px!important;
+  border-radius:999px!important;
+  background:rgba(8,24,40,.72)!important;
+  border:1px solid rgba(255,255,255,.12)!important;
+  box-shadow:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  color:#f4f7fb!important;
+}
+.mention-card .thumb-platform-chip>span:last-child,
+.dashboard-mention-card .thumb-platform-chip>span:last-child{color:#f4f7fb!important}
+
+/* Şəkil sütununda platforma etiketi üçün artıq ayrıca boş sətir saxlanmır. */
+.mention-media-col,
+.dashboard-mention-card .dashboard-media-col{
+  align-content:center!important;
+  gap:4px!important;
+}
+
+/* Əsas səhifə / Son paylaşımlar — desktop-da kartlar bir-birinə yapışmasın. */
+@media(min-width:901px){
+  .dashboard-panels #latest{
+    display:flex!important;
+    flex-direction:column!important;
+    gap:8px!important;
+    align-content:initial!important;
+  }
+  .dashboard-mention-card{
+    flex:0 0 auto!important;
+    min-height:86px!important;
+    grid-template-columns:92px minmax(0,1fr)!important;
+    gap:10px!important;
+    padding:27px 10px 9px!important;
+    align-items:center!important;
+    overflow:hidden!important;
+  }
+  .dashboard-mention-card .dashboard-media-col{width:92px!important}
+  .dashboard-mention-card .thumb{width:92px!important;height:58px!important}
+  .dashboard-mention-card h3{
+    margin:0 0 3px!important;
+    font-size:11px!important;
+    line-height:1.22!important;
+    -webkit-line-clamp:1!important;
+  }
+  .dashboard-mention-card p{
+    margin:0 0 4px!important;
+    font-size:9px!important;
+    line-height:1.3!important;
+    -webkit-line-clamp:2!important;
+  }
+  .dashboard-mention-card .mention-meta{
+    margin-top:1px!important;
+    row-gap:3px!important;
+    column-gap:4px!important;
+  }
+  .dashboard-mention-card .badge,
+  .dashboard-mention-card .muted{font-size:7.6px!important;line-height:1.1!important}
+  .dashboard-thumb-like{font-size:6.6px!important;padding:2px 4px!important}
+}
+
+/* Mobil/PWA-da kart başlığındakı platforma etiketi də kartın sol yuxarısında qalır. */
+@media(max-width:720px){
+  .mention-card{padding-top:28px!important}
+  .dashboard-mention-card{padding-top:25px!important}
+  .mention-card .thumb-platform-chip,
+  .dashboard-mention-card .thumb-platform-chip{
+    left:8px!important;
+    top:6px!important;
+    max-width:calc(100% - 16px)!important;
+    font-size:6.8px!important;
+    padding:2px 5px!important;
+  }
+}
