@@ -3396,3 +3396,16 @@ body.detail-modal-open .bottom-nav{visibility:visible!important;pointer-events:a
 /* Hesabatda bazada saxlanılan, amma istifadəçiyə göstərilməyən zəif nəticələr */
 .report-row.weak-hidden{opacity:.62}
 .report-row.weak-hidden span::before{content:'↳ ';opacity:.7}
+
+/* Hesabat: platforma ikonları və uyğunluq bölgüsü */
+.report-platform-label{display:inline-flex;align-items:center;gap:9px;min-width:0}
+.report-platform-icon{width:17px;height:17px;display:grid;place-items:center;flex:0 0 17px;color:#8fb6da}
+.report-platform-icon svg{width:17px;height:17px;display:block}
+.report-platform-youtube .report-platform-icon{color:#ff0033}
+.report-platform-facebook .report-platform-icon{color:#1877f2}
+.report-platform-instagram .report-platform-icon{color:#e45aa9}
+.report-platform-tiktok .report-platform-icon{color:#69f4e8}
+.report-platform-linkedin .report-platform-icon{color:#0a66c2}
+.report-platform-x .report-platform-icon{color:#f2f5f7}
+.report-platform-web .report-platform-icon{color:#53cfa8}
+.report-row.weak-hidden{opacity:.62}

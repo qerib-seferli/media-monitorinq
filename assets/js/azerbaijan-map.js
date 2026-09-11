@@ -115,7 +115,7 @@ async function loadMapData(){
   const orgs=orgRes.data||[],districts=distRes.data||[],servicePoints=pointRes.data||[],serviceAreas=areaRes.data||[];
   const counts=new Map(),districtCounts=new Map(),unscopedCounts=new Map(),latest=new Map(),districtLatest=new Map(),unscopedLatest=new Map();
   for(let from=0;from<20000;from+=1000){
-    const {data,error}=await supabase.from('mentions').select('organization_id,district_id,source_platform,detected_at,relevance_score,priority_score').gt('relevance_score',0).or('priority_score.gte.31,relevance_score.gte.31').order('detected_at',{ascending:false}).range(from,from+999);
+    const {data,error}=await supabase.from('mentions').select('organization_id,district_id,source_platform,detected_at,relevance_score,priority_score').gte('relevance_score',31).order('detected_at',{ascending:false}).range(from,from+999);
     if(error)throw error;const rows=data||[];
     for(const m of rows){
       if(!m.organization_id)continue;

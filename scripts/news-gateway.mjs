@@ -20,6 +20,10 @@ const RECENT_PRIORITY = ['1','true','yes'].includes(String(process.env.NEWS_RECE
 const REFILTER_EXISTING = ['1','true','yes'].includes(String(process.env.NEWS_REFILTER_EXISTING || '').toLowerCase());
 const FULL_RADAR = ['1','true','yes'].includes(String(process.env.NEWS_FULL_RADAR || '').toLowerCase());
 const OPEN_SOCIAL_ONLY = ['1','true','yes'].includes(String(process.env.NEWS_OPEN_SOCIAL_ONLY || '').toLowerCase());
+const TARGET_ORG_SHORT_NAME = String(process.env.NEWS_ORG_SHORT_NAME || '').trim();
+const OPEN_SOCIAL_QUERY_LIMIT = Math.max(4, Math.min(24, Number(process.env.NEWS_OPEN_SOCIAL_QUERY_LIMIT || (OPEN_SOCIAL_ONLY ? 10 : 6))));
+const OPEN_SOCIAL_PAGE_LIMIT = Math.max(1, Math.min(4, Number(process.env.NEWS_OPEN_SOCIAL_PAGE_LIMIT || (OPEN_SOCIAL_ONLY ? 2 : 1))));
+const OPEN_SOCIAL_TARGET_PER_PLATFORM = Math.max(10, Math.min(80, Number(process.env.NEWS_OPEN_SOCIAL_TARGET_PER_PLATFORM || 50)));
 const QUERY_PASS_COUNT = Math.max(1, Math.min(12, Number(process.env.NEWS_QUERY_PASS_COUNT || 1)));
 const QUERY_PASS = Math.max(0, Math.min(QUERY_PASS_COUNT - 1, Number(process.env.NEWS_QUERY_PASS || 0)));
 const CURRENT_YEAR = new Date().getFullYear();
@@ -59,6 +63,11 @@ function braveShardEligible(){
   // ilə davam edir. Növbəti saat seçilmiş shard dəyişir və əhatə rotasiya olunur.
   const bucket=Math.floor(Date.now()/(60*60*1000));
   return ORG_SHARD_INDEX === (bucket % ORG_SHARD_COUNT);
+}
+
+function isPilotOrganization(org={}){
+  const raw=String(`${org?.short_name||''} ${org?.name||''}`).toLocaleLowerCase('az-AZ');
+  return raw.includes('bərdə') && raw.includes('sms');
 }
 
 const SOCIAL_PLATFORM_DOMAINS = {
@@ -102,7 +111,7 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], pro
   const rotationKey=`${org?.id||org?.short_name||''}|${platform}|${SOURCE_SHARD_INDEX}|${QUERY_PASS}`;
   const rotationSeed=[...rotationKey].reduce((n,ch)=>((n*33)+ch.charCodeAt(0))>>>0,5381);
   const rotationBucket=Math.floor(Date.now()/(15*60*1000));
-  const keywordWindowSize=Math.min(allKeywordTerms.length,FULL_RADAR?32:16);
+  const keywordWindowSize=Math.min(allKeywordTerms.length,isPilotOrganization(org)?64:(OPEN_SOCIAL_ONLY?36:(FULL_RADAR?32:16)));
   const keywordTerms=[];
   if(allKeywordTerms.length){
     const start=(rotationSeed + rotationBucket*Math.max(1,keywordWindowSize)) % allKeywordTerms.length;
@@ -155,7 +164,8 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], pro
   }
   const must=[...new Set(priority)].filter(Boolean);
   const pool=[...new Set(extras)].filter(Boolean).filter(q=>!must.includes(q));
-  const limit=Math.min(must.length+pool.length,FULL_RADAR?12:6);
+  const desiredLimit=isPilotOrganization(org)?Math.max(OPEN_SOCIAL_QUERY_LIMIT,18):(OPEN_SOCIAL_ONLY?OPEN_SOCIAL_QUERY_LIMIT:(FULL_RADAR?12:6));
+  const limit=Math.min(must.length+pool.length,desiredLimit);
   if(!limit) return [];
   const out=must.slice(0,Math.min(limit,3));
   const remaining=limit-out.length;
@@ -678,6 +688,37 @@ function socialLinkOnlyDiscoveryItem(url,platform,org,query=''){
 }
 
 
+function socialIndexedDiscoveryItem(item={},platform,org,query='',provider='public search index'){
+  const url=String(item?.url||'').trim();
+  if(!isSocialPostUrl(url,platform)) return null;
+  const title=cleanArticleText(String(item?.title||'')).slice(0,500);
+  const text=cleanArticleText(String(item?.text||item?.description||'')).slice(0,5000);
+  if(!title && text.length<24) return null;
+  const transient={title,text,url};
+  const profileUrl=canonicalSocialProfileUrl(url,platform);
+  if(!socialProfileCandidateMatchesOrg({platform,url:profileUrl||url},transient,org)) return null;
+  return {
+    title:title || `${org?.short_name||org?.name||'Təşkilat'} — ${platform} açıq paylaşımı`,
+    text,
+    url,
+    published_at:null,
+    image:null,
+    author:null,
+    raw:{
+      kind:'public_social_search_index',
+      social_platform:platform,
+      open_social_discovery:true,
+      discovery_channel:'open_social_web',
+      public_social:true,
+      search_index_snippet:true,
+      content_partial:true,
+      discovery_query:String(query||'').slice(0,500),
+      provider
+    }
+  };
+}
+
+
 function chunks(items, size = 10) {
   const rows = Array.isArray(items) ? items : [];
   const out = [];
@@ -1058,6 +1099,30 @@ async function bingWeb(query, page = 0) {
     const xml = await fetchText(u.toString(),{timeoutMs:13000,retries:0,minGapMs:900});
     return parseFeed(xml,'bing_web',query,'Bing Web RSS');
   } catch { return []; }
+}
+
+async function bingSocialWeb(query, page = 0) {
+  const rss=await bingWeb(query,page);
+  if(rss.length) return rss;
+  // Sosial şəbəkə URL-ləri Bing RSS-də çox vaxt 0 qaytarılır, halbuki normal Web
+  // nəticə səhifəsində indekslənib. Yalnız open-social lane üçün HTML fallback oxuyuruq.
+  const u=new URL('https://www.bing.com/search');
+  u.searchParams.set('q',query); u.searchParams.set('setlang','az-AZ'); u.searchParams.set('cc','AZ'); u.searchParams.set('count','10');
+  if(page>0) u.searchParams.set('first',String(page*10+1));
+  try{
+    const html=await fetchText(u.toString(),{timeoutMs:13000,retries:0,minGapMs:900});
+    const out=[];
+    const blocks=String(html||'').match(/<li[^>]+class=["'][^"']*b_algo[^"']*["'][\s\S]*?<\/li>/gi)||[];
+    for(const block of blocks.slice(0,12)){
+      const a=block.match(/<h2[^>]*>[\s\S]*?<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+      if(!a?.[1]) continue;
+      const url=decodeXml(a[1]);
+      if(!/^https?:\/\//i.test(url)) continue;
+      const p=block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+      out.push({title:stripHtml(a[2]||''),text:stripHtml(p?.[1]||''),description:stripHtml(p?.[1]||''),url,published_at:null,image:null,author:null,raw:{kind:'bing_web_html',query,provider:'Bing Web HTML'}});
+    }
+    return dedupe(out);
+  }catch{return [];}
 }
 
 function firstMatch(html, patterns) {
@@ -1894,7 +1959,7 @@ function logIngestSamples(orgName, label, result) {
 
 let plan;
 try {
-  plan = await callMonitor({mode:'news_plan', include_archived:false, organization_shard_count:ORG_SHARD_COUNT, organization_shard_index:ORG_SHARD_INDEX, organization_batch:ORG_BATCH, organization_rotation_bucket:ORG_ROTATION_BUCKET}, 60000);
+  plan = await callMonitor({mode:'news_plan', include_archived:false, organization_short_name:TARGET_ORG_SHORT_NAME||'', organization_shard_count:ORG_SHARD_COUNT, organization_shard_index:ORG_SHARD_INDEX, organization_batch:ORG_BATCH, organization_rotation_bucket:ORG_ROTATION_BUCKET}, 60000);
 } catch (e) {
   if (e?.name === 'AbortError') {
     throw new Error('news_plan timeout: Supabase plan cavabı 60 saniyəni keçdi');
@@ -2116,8 +2181,13 @@ for (const org of plan.organizations) {
       for(const q of queries){
         if(gatewayBudgetLow()) break;
         try{
-          const rows=await bingWeb(q,0);
-          const exact=dedupe((rows||[]).filter(item=>socialPlatformFromUrl(item?.url||'')===socialPlatform));
+          const socialPages=isPilotOrganization(org)?Math.max(OPEN_SOCIAL_PAGE_LIMIT,3):OPEN_SOCIAL_PAGE_LIMIT;
+          const pageRows=[];
+          for(let page=0; page<socialPages && !gatewayBudgetLow(); page++){
+            pageRows.push(...await bingSocialWeb(q,page));
+            if(pageRows.length>=OPEN_SOCIAL_TARGET_PER_PLATFORM*2) break;
+          }
+          const exact=dedupe((pageRows||[]).filter(item=>socialPlatformFromUrl(item?.url||'')===socialPlatform));
           bingSocialHits += exact.length;
           for(const item of exact){
             const profileUrl=canonicalSocialProfileUrl(item?.url||'',socialPlatform);
@@ -2133,11 +2203,16 @@ for (const org of plan.organizations) {
               // təşkilata sərt uyğun gəlirsə direct post URL-sini ayrıca material kimi saxlayırıq.
               if(socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl||item.url},transient,org)){
                 const direct=await directSocialPostFromDiscoveredUrl(item.url,socialPlatform,org);
-                collected.push(direct||socialLinkOnlyDiscoveryItem(item.url,socialPlatform,org,q));
+                if(direct) collected.push(direct);
+                else {
+                  const indexed=socialIndexedDiscoveryItem(item,socialPlatform,org,q,'Bing Web public index');
+                  if(indexed) collected.push(indexed);
+                }
               }
             }
           }
           console.log(`[${org.short_name}] ${socialPlatform} public discovery: ${exact.length} | ${q}`);
+          if(dedupe(collected).length>=OPEN_SOCIAL_TARGET_PER_PLATFORM) break;
         }catch(e){
           totalFailures++;
           console.log(`[${org.short_name}] ${socialPlatform} discovery xəta (${q}): ${e?.message||e}`);
@@ -2176,14 +2251,14 @@ for (const org of plan.organizations) {
               const candidateOk=socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl||item.url},transient,org);
               if(!candidateOk) continue;
               const direct=await directSocialPostFromDiscoveredUrl(item.url,socialPlatform,org);
-              const linkOnly=direct?null:socialLinkOnlyDiscoveryItem(item.url,socialPlatform,org,braveQuery);
-              if(direct||linkOnly){ collected.push(direct||linkOnly); directAccepted += direct?1:0; }
+              const indexed=direct?null:socialIndexedDiscoveryItem({title:item?.title||'',text:item?.description||'',description:item?.description||'',url:item?.url||''},socialPlatform,org,braveQuery,'Brave Search public index');
+              if(direct||indexed){ collected.push(direct||indexed); directAccepted += direct?1:0; }
             }
           }
           console.log(`[${org.short_name}] ${socialPlatform} Brave discovery: ${exactBrave.length} URL, direct=${directAccepted}, büdcə=${braveRequestsUsed}/${BRAVE_DISCOVERY_BUDGET} | ${braveQuery}`);
         }
       }
-      socialItemsByPlatform.set(socialPlatform,dedupe(collected).slice(0,Math.min(40,MAX_INGEST_ITEMS)));
+      socialItemsByPlatform.set(socialPlatform,dedupe(collected).slice(0,Math.min(OPEN_SOCIAL_TARGET_PER_PLATFORM,MAX_INGEST_ITEMS)));
     }
   }
 

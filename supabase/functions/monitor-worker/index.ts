@@ -328,7 +328,9 @@ Deno.serve(async (req) => {
     // işləməlidir. Qlobal plan/rotasiya isə bütün reyestri görə bilir; adi lokal monitor
     // əvvəlki kimi yalnız aktiv/grace təşkilatları götürür.
     const requestedOrganizationId = callerOrganizationId || options.organization_id;
+    const requestedOrganizationShortName = String(options.organization_short_name || '').trim();
     if (requestedOrganizationId) orgQuery = orgQuery.eq('id', requestedOrganizationId);
+    else if (requestedOrganizationShortName) orgQuery = orgQuery.ilike('short_name', requestedOrganizationShortName);
     else if (!options.include_archived) orgQuery = orgQuery.in('service_status',['active','grace']);
     const orgResult:any = await orgQuery;
     if (!orgResult || orgResult.error) {
@@ -356,7 +358,7 @@ Deno.serve(async (req) => {
       districts:o?.district_id ? {name:districtNameById.get(String(o.district_id))||''} : null
     }));
 
-    if (!requestedOrganizationId && options.mode !== 'meta_monitor' && (options.include_archived || options.organization_batch > 0)) {
+    if (!requestedOrganizationId && !requestedOrganizationShortName && options.mode !== 'meta_monitor' && (options.include_archived || options.organization_batch > 0)) {
       orgs = rotateOrganizationBatch(orgs, options.organization_shard_count, options.organization_shard_index, options.organization_batch, options.organization_rotation_bucket);
     }
 
@@ -3641,6 +3643,7 @@ type RunOptions = {
   mode:string;
   edge_news_probe:boolean;
   organization_id:string|null;
+  organization_short_name:string;
   source_platform:string;
   source_label:string;
   news_items:Item[];
@@ -3692,6 +3695,7 @@ const DEFAULT_RUN_OPTIONS:RunOptions = {
   mode:'scheduled',
   edge_news_probe:false,
   organization_id:null,
+  organization_short_name:'',
   source_platform:'Web',
   source_label:'',
   news_items:[],
@@ -3759,6 +3763,7 @@ async function readRunOptions(req:Request):Promise<RunOptions> {
       mode:String(body?.mode || 'scheduled'),
       edge_news_probe:body?.edge_news_probe === true,
       organization_id:body?.organization_id ? String(body.organization_id) : null,
+      organization_short_name:String(body?.organization_short_name || '').trim().slice(0,180),
       source_platform:String(body?.source_platform || 'Web'),
       source_label:String(body?.source_label || ''),
       news_items:newsItems,
