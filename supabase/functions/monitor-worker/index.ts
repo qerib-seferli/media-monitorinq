@@ -739,10 +739,11 @@ Deno.serve(async (req) => {
           const hasShot=media.some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot' && Boolean(m?.url));
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase()) && Boolean(m?.url));
           const dateNeedsCheck=webDateNeedsVerification(raw,row?.published_at,row?.detected_at);
+          const parserNeedsRefresh=Number(raw?.article_parser_version||0)<3;
           const textMissing=text.length<450 || raw?.enrichment_complete!==true;
-          const needs=textMissing || !row?.published_at || dateNeedsCheck || !row?.author_name || !hasShot || !hasCover;
+          const needs=parserNeedsRefresh || textMissing || !row?.published_at || dateNeedsCheck || !row?.author_name || !hasShot || !hasCover;
           if(!needs) continue;
-          const priority=(dateNeedsCheck?40:0)+(textMissing?35:0)+(!row?.published_at?25:0)+(!row?.author_name?8:0)+(!hasShot?4:0)+(!hasCover?3:0);
+          const priority=(parserNeedsRefresh?45:0)+(dateNeedsCheck?40:0)+(textMissing?35:0)+(!row?.published_at?25:0)+(!row?.author_name?8:0)+(!hasShot?4:0)+(!hasCover?3:0);
           targets.push({id:row.id,title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:dateNeedsCheck?null:(row.published_at||null),author:row.author_name||null,raw:{...raw,date_needs_verification:dateNeedsCheck},has_screenshot:hasShot,has_cover:hasCover,date_needs_verification:dateNeedsCheck,text_missing:textMissing,priority});
         }
         targets.sort((a:any,b:any)=>Number(b.priority||0)-Number(a.priority||0)); return json({ok:true,run_id:runId,mode:'news_enrich_backfill_targets',organization:org.short_name,targets:targets.slice(0,limit),scanned:rows.length},200);
@@ -912,17 +913,21 @@ Deno.serve(async (req) => {
         if (safeMetadata && options.news_published_at && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(options.published_date_source)) patch.published_at=options.news_published_at;
         else if (safeMetadata && oldDateSuspect) patch.published_at=null;
         if (safeMetadata && options.news_author) patch.author_name=options.news_author;
-        const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,1);
+        const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,12);
         const trustedIncomingDate=Boolean(safeMetadata && options.news_published_at && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading'].includes(options.published_date_source));
         if(!trustedIncomingDate && safeMetadata && oldDateSuspect) patch.published_at=null;
-        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:trustedIncomingDate,published_date_status:safeMetadata?(trustedIncomingDate?'verified':'not-found'):'unverified',published_date_source:trustedIncomingDate?options.published_date_source:null,date_parser_version:trustedIncomingDate?options.date_parser_version:2,canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(options.news_text||'').length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:trustedIncomingDate,published_date_status:safeMetadata?(trustedIncomingDate?'verified':'not-found'):'unverified',published_date_source:trustedIncomingDate?options.published_date_source:null,date_parser_version:trustedIncomingDate?options.date_parser_version:2,article_parser_version:Number(options.article_parser_version||3),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
         const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
         if (updated?.error) throw updated.error;
         if(safeMetadata && externalImages.length){
-          const mediaResult:any=await admin.from('mention_media').select('url,media_type').eq('mention_id',current.data.id);
-          const existingUrls=new Set((Array.isArray(mediaResult?.data)?mediaResult.data:[]).map((x:any)=>String(x?.url||'')));
-          const missing=externalImages.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()}));
-          if(missing.length){const mediaInsert:any=await admin.from('mention_media').insert(missing); if(mediaInsert?.error) console.error('news-enrich-media',mediaInsert.error);}
+          // Web enrichment-in əvvəlki yanlış placeholder/logo preview-lərini yalnız
+          // etibarlı yeni məqalə şəkilləri əldə ediləndə əvəz edirik. Screenshot və
+          // başqa media növlərinə toxunulmur.
+          const stale:any=await admin.from('mention_media').delete().eq('mention_id',current.data.id).eq('media_type','preview_external');
+          if(stale?.error) console.error('news-enrich-media-cleanup',stale.error);
+          const mediaRows=externalImages.map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()}));
+          const mediaInsert:any=await admin.from('mention_media').insert(mediaRows);
+          if(mediaInsert?.error) console.error('news-enrich-media',mediaInsert.error);
         }
         return json({ok:true,run_id:runId,mode:'news_enrich',updated:true,metadata_updated:safeMetadata,mention_id:current.data.id,media_count:externalImages.length},200);
       } catch(e) {

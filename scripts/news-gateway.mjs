@@ -1075,40 +1075,60 @@ function absoluteUrl(base, value='') {
   if (!value) return '';
   try { return new URL(decodeXml(value),base).toString(); } catch { return decodeXml(value); }
 }
-function extractArticleImages(html='', base='', primary='', articleTitle='') {
+function extractArticleImages(html='', base='', primary=[], articleTitle='') {
   const raw=String(html||'');
-  const genericRe=/(?:logo|icon|avatar|sprite|banner|emoji|tracking|pixel|favicon|heyder|heydar|president|prezident|gerb|emblem|facebook|instagram|linkedin|telegram|twitter|youtube)/i;
+  const genericRe=/(?:logo|icon|avatar|sprite|banner|emoji|tracking|pixel|favicon|heyder|heydar|president|prezident|gerb|emblem|facebook|instagram|linkedin|telegram|twitter|youtube|placeholder|no[-_]?image|default[-_]?image|loading|spinner|home(?:\.|[-_])|share(?:\.|[-_])|blank\.)/i;
   const candidates=[];
   const genericContextUrls=new Set();
-  for(const m of raw.matchAll(/<a\b[^>]*>[\s\S]{0,900}?<\/a>/gi)){
+  for(const m of raw.matchAll(/<a\b[^>]*>[\s\S]{0,1200}?<\/a>/gi)){
     const block=m[0];
-    if(!/(?:ulu\s+onder|ulu\s+öndər|heyder|heydar|prezident|president|vitse-prezident|fond|dovlet\s+qurumlari|dövlət\s+qurumları)/i.test(cleanArticleText(block))) continue;
-    for(const im of block.matchAll(/<img\b[^>]+(?:src|data-src|data-original)=['\"]([^'\"]+)['\"]/gi)){
+    if(!/(?:ulu\s+onder|ulu\s+öndər|heyder|heydar|prezident|president|vitse-prezident|fond|dovlet\s+qurumlari|dövlət\s+qurumları|nazirlər\s+kabineti)/i.test(cleanArticleText(block))) continue;
+    for(const im of block.matchAll(/<img\b[^>]+(?:src|data-src|data-original|data-lazy-src)=['\"]([^'\"]+)['\"]/gi)){
       const u=absoluteUrl(base,im[1]); if(u) genericContextUrls.add(u.split('?')[0]);
     }
   }
   const add=(value,score=0,source='')=>{
     const url=absoluteUrl(base,String(value||'').trim());
     if(!/^https?:\/\//i.test(url) || genericRe.test(url) || genericContextUrls.has(url.split('?')[0])) return;
+    if(/(?:\/|^)(?:ads?|advert|reklam|banner|logo|icon|uploads?\/logo)(?:\/|[-_.])/i.test(url)) return;
     const key=url.split('?')[0];
     const existing=candidates.find(x=>x.key===key);
     if(existing){existing.score=Math.max(existing.score,score);return;}
-    candidates.push({url,key,score,source});
+    candidates.push({url,key,score,source,order:candidates.length});
   };
-  // JSON-LD/real article image is strongest. Generic site-wide OG images are deliberately weak.
-  add(primary,90,'primary');
+  for(const x of (Array.isArray(primary)?primary:[primary])) add(x,100,'structured');
   const title=cleanArticleText(articleTitle||'').toLocaleLowerCase('az-AZ');
   const articleBlocks=[...raw.matchAll(/<(?:article|main)\b[^>]*>([\s\S]*?)<\/(?:article|main)>/gi)].map(m=>m[1]);
-  const scope=(articleBlocks.join('\n')||raw);
-  for(const m of scope.matchAll(/<img\b[^>]+(?:src|data-src|data-original)=['\"]([^'\"]+)['\"][^>]*>/gi)) add(m[1],75,'article-img');
-  // OG/Twitter şəkli yalnız URL generic görünmürsə və səhifə başlığı real məqalə başlığına uyğundursa saxlanır.
+  const contentBlocks=[...raw.matchAll(/<(?:div|section)\b[^>]*(?:class|id)=['\"][^'\"]*(?:article|news|post|entry|story|detail|single|content|text|body)[^'\"]*['\"][^>]*>([\s\S]*?)<\/(?:div|section)>/gi)].map(m=>m[1]);
+  let aroundTitle='';
+  if(title){
+    const plainTitle=cleanArticleText(articleTitle||'');
+    const idx=raw.toLocaleLowerCase('az-AZ').indexOf(String(plainTitle||'').toLocaleLowerCase('az-AZ'));
+    if(idx>=0) aroundTitle=raw.slice(Math.max(0,idx-12000),idx+90000);
+  }
+  const scopes=[...articleBlocks,...contentBlocks,aroundTitle].filter(Boolean);
+  const seenScope=new Set();
+  for(const scope of scopes){
+    const scopeKey=scope.slice(0,500); if(seenScope.has(scopeKey)) continue; seenScope.add(scopeKey);
+    for(const m of scope.matchAll(/<img\b([^>]*?)>/gi)){
+      const tag=m[0];
+      const src=firstMatch(tag,[/(?:src|data-src|data-original|data-lazy-src)=['\"]([^'\"]+)['\"]/i]);
+      if(!src) continue;
+      const width=Number(firstMatch(tag,[/\bwidth=['\"]?(\d{2,5})/i])||0);
+      const height=Number(firstMatch(tag,[/\bheight=['\"]?(\d{2,5})/i])||0);
+      if((width&&width<180)||(height&&height<120)) continue;
+      const alt=cleanArticleText(firstMatch(tag,[/\balt=['\"]([^'\"]*)['\"]/i]));
+      if(/logo|icon|banner|reklam|advert|avatar|gerb|emblem/i.test(alt)) continue;
+      add(src,82,'article-img');
+    }
+  }
   const pageTitle=cleanArticleText(firstMatch(raw,[/<meta[^>]+property=['\"]og:title['\"][^>]+content=['\"]([^'\"]+)['\"]/i,/<title[^>]*>([\s\S]*?)<\/title>/i])).toLocaleLowerCase('az-AZ');
   const titleOk=!title || !pageTitle || title.split(/\s+/).filter(x=>x.length>=5).some(x=>pageTitle.includes(x));
   if(titleOk){
-    for(const m of raw.matchAll(/<meta[^>]+(?:property|name)=['\"](?:og:image(?::secure_url)?|twitter:image(?::src)?)['\"][^>]+content=['\"]([^'\"]+)['\"]/gi)) add(m[1],50,'meta');
+    for(const m of raw.matchAll(/<meta[^>]+(?:property|name)=['\"](?:og:image(?::secure_url)?|twitter:image(?::src)?)['\"][^>]+content=['\"]([^'\"]+)['\"]/gi)) add(m[1],60,'meta');
   }
-  candidates.sort((a,b)=>b.score-a.score);
-  return candidates.slice(0,1).map(x=>x.url);
+  candidates.sort((a,b)=>(b.score-a.score)||(a.order-b.order));
+  return candidates.slice(0,12).map(x=>x.url);
 }
 
 function jsonLdObjects(html='') {
@@ -1129,6 +1149,47 @@ function jsonLdObjects(html='') {
 }
 function cleanArticleText(value='') {
   return stripHtml(String(value||'').replace(/<br\s*\/?\s*>/gi,'\n').replace(/<\/p>/gi,'\n')).replace(/\s*\n\s*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+function cleanArticleBody(value='', title='') {
+  let text=cleanArticleText(value||'')
+    .replace(/(?:-->|→|»){1,}/g,' ')
+    .replace(/[ \t]{2,}/g,' ')
+    .trim();
+  if(!text) return '';
+  const cleanTitle=cleanArticleText(title||'').trim();
+  if(cleanTitle.length>=6){
+    const low=text.toLocaleLowerCase('az-AZ');
+    const needle=cleanTitle.toLocaleLowerCase('az-AZ');
+    const idx=low.lastIndexOf(needle);
+    if(idx>=0 && idx<Math.min(18000,Math.floor(text.length*0.72))) text=text.slice(idx+cleanTitle.length).trim();
+  }
+  const hardStop=[
+    'bizə yazın','bize yazin','müəllif hüquqları qorunur','muellif huquqlari qorunur',
+    'saytın idarəetməsi','saytin idareetmesi','bütün hüquqlar qorunur','butun huquqlar qorunur',
+    '© 20','related news','oxşar xəbərlər','digər xəbərlər','son xəbərlər','ən çox oxunan'
+  ];
+  const lines=text.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+  const out=[];
+  const navWords=['haqqımızda','fəaliyyətimiz','nailiyyətlərimiz','normativ baza','əlaqə','ümumi məlumat','rəhbərlik','struktur','nizamnamə','lisenziya','patentlər','qanunvericilik','məcəllələr','qanunlar və qərarlar','fərman və sərəncamlar'];
+  for(const line0 of lines){
+    const line=line0.replace(/(?:-->|→|»){1,}/g,' ').replace(/\s{2,}/g,' ').trim();
+    if(!line) continue;
+    const low=line.toLocaleLowerCase('az-AZ');
+    if(out.join(' ').length>120 && hardStop.some(x=>low.includes(x))) break;
+    const navHits=navWords.filter(x=>low.includes(x)).length;
+    if(navHits>=3) continue;
+    if(/^(?:az|ru|en)(?:\s+(?:az|ru|en)){1,}\b/i.test(line)) continue;
+    if(/^(?:ünvan|tel\.?\/?faks|telefon|e-?mail)\s*:/i.test(line)) continue;
+    if(/^(?:ana səhifə|home|menu|axtarış|search|abunə ol|subscribe)\b/i.test(line)) continue;
+    if(/^(?:facebook|instagram|telegram|linkedin|twitter|youtube|x\.com)(?:\s|$)/i.test(line)) continue;
+    if(line.length<24 && !/[.!?…:]$/.test(line)) continue;
+    if(/(?:cookie|reklam|advert|google play|app store)/i.test(line)) continue;
+    if(out.length && out[out.length-1]===line) continue;
+    out.push(line);
+  }
+  let joined=out.join('\n\n').trim();
+  if(cleanTitle && joined.toLocaleLowerCase('az-AZ').startsWith(cleanTitle.toLocaleLowerCase('az-AZ'))) joined=joined.slice(cleanTitle.length).trim();
+  return joined.slice(0,120000);
 }
 function titleAnchoredArticleText(html='', title='') {
   const cleanedTitle=cleanArticleText(title||'');
@@ -1214,17 +1275,21 @@ async function enrichPage(item) {
     const articleLd=ld.find(x=>String(x?.['@type']||'').toLowerCase().includes('article')) || ld.find(x=>x?.articleBody) || {};
     const title = articleLd?.headline || firstMatch(html,[/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,/<title[^>]*>([\s\S]*?)<\/title>/i]);
     const desc = articleLd?.description || firstMatch(html,[/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i]);
-    const structuredBody=cleanArticleText(articleLd?.articleBody || '');
-    const paragraphBody=paragraphText(html);
-    const anchoredBody=titleAnchoredArticleText(html, stripHtml(title)||item.title||'');
-    // Bəzi saytların JSON-LD articleBody sahəsi yalnız 1-2 cümlə olur, amma səhifədə
-    // tam məqalə var. Ən uzun etibarlı mətn namizədini götürürük.
-    const bodyCandidates=[structuredBody,anchoredBody,paragraphBody].filter(x=>String(x||'').length>=80).sort((a,b)=>b.length-a.length);
-    const body = bodyCandidates[0] || stripHtml(desc) || item.text || '';
-    let structuredImage = '';
-    if(typeof articleLd?.image==='string') structuredImage=articleLd.image;
-    else if(Array.isArray(articleLd?.image)) structuredImage=typeof articleLd.image[0]==='string'?articleLd.image[0]:(articleLd.image[0]?.url||'');
-    else if(articleLd?.image?.url) structuredImage=articleLd.image.url;
+    const effectiveTitle=stripHtml(title)||item.title||'';
+    const structuredBody=cleanArticleBody(articleLd?.articleBody || '', effectiveTitle);
+    const paragraphBody=cleanArticleBody(paragraphText(html), effectiveTitle);
+    const anchoredBody=cleanArticleBody(titleAnchoredArticleText(html, effectiveTitle), effectiveTitle);
+    // Uzunluq tək meyar deyil: əvvəl məqaləyə başlıqla bağlanan mətn, sonra JSON-LD,
+    // sonra məqalə konteynerinin paraqrafları götürülür. Hər namizəd nav/footer/contact
+    // tullantılarından təmizlənir. Beləliklə sayt menyusu və footer xəbərin mətninə qarışmır.
+    const bodyCandidates=[anchoredBody,structuredBody,paragraphBody].filter(x=>String(x||'').length>=80);
+    const body = bodyCandidates[0] || cleanArticleBody(stripHtml(desc),effectiveTitle) || cleanArticleBody(item.text||'',effectiveTitle) || '';
+    const structuredImages=[];
+    const imageNode=articleLd?.image;
+    if(typeof imageNode==='string') structuredImages.push(imageNode);
+    else if(Array.isArray(imageNode)) for(const x of imageNode){if(typeof x==='string')structuredImages.push(x);else if(x?.url)structuredImages.push(x.url);else if(x?.contentUrl)structuredImages.push(x.contentUrl);}
+    else if(imageNode?.url) structuredImages.push(imageNode.url);
+    else if(imageNode?.contentUrl) structuredImages.push(imageNode.contentUrl);
     const metaImage=firstMatch(html,[/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i]);
     const structuredRaw = articleLd?.datePublished || firstMatch(html,[/<meta[^>]+property=["']article:published_time["'][^>]+content=["']([^"']+)["']/i,/<meta[^>]+(?:name|itemprop)=["']datePublished["'][^>]+content=["']([^"']+)["']/i,/"datePublished"\s*:\s*"([^"]+)"/i]);
     const structuredPublished=validatePublishedForTarget(normalizeDate(structuredRaw),item);
@@ -1234,9 +1299,9 @@ async function enrichPage(item) {
     const author = extractAuthorFromHtml(html, articleLd, item.author||'');
     const articleScope=[...html.matchAll(/<(?:article|main)\b[^>]*>([\s\S]*?)<\/(?:article|main)>/gi)].map(m=>m[1]).join('\n');
     const hasArticleImage=/<img\b/i.test(articleScope);
-    const primaryCandidate=structuredImage || (hasArticleImage?metaImage:'') || '';
-    const primaryImage=absoluteUrl(finalUrl,primaryCandidate)||null;
-    const imageUrls=extractArticleImages(html,finalUrl,primaryImage||'',stripHtml(title)||item.title||'');
+    const primaryCandidates=[...structuredImages];
+    if(hasArticleImage && metaImage) primaryCandidates.push(metaImage);
+    const imageUrls=extractArticleImages(html,finalUrl,primaryCandidates,effectiveTitle);
     return {
       ...item,
       title:stripHtml(title)||item.title,
@@ -1244,7 +1309,7 @@ async function enrichPage(item) {
       image:imageUrls[0]||null,
       published_at:pagePublished||(String(item?.raw?.kind||'').includes('configured_site_sitemap')?null:item.published_at),
       author:author||item.author||null,
-      raw:{...(item.raw||{}),enriched:true,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
+      raw:{...(item.raw||{}),enriched:true,article_parser_version:3,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
     };
   } catch { return item; }
 }
@@ -2278,7 +2343,7 @@ for (const org of plan.organizations) {
           mode:'news_enrich', organization_id:org.id, source_url:target.url,
           title:enriched.title||target.title||'', text:enriched.text||target.text||'',
           image_url:enriched.image||'', image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[], published_at:reliablePublishedAt(enriched,target),
-          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true, published_date_source:enriched.raw?.published_date_source||'', date_parser_version:Number(enriched.raw?.date_parser_version||0)
+          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true, published_date_source:enriched.raw?.published_date_source||'', date_parser_version:Number(enriched.raw?.date_parser_version||0), article_parser_version:Number(enriched.raw?.article_parser_version||3)
         });
         if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);
       } catch(e) { console.log(`[${org.short_name}] Tam mətn yeniləmə xətası: ${e?.message||e}`); }
@@ -2347,7 +2412,7 @@ for (const org of plan.organizations) {
             title:enriched.title||target.title||'',text:enriched.text||target.text||'',
             image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],
             published_at:reliablePublishedAt(enriched,target),author:enriched.author||null,
-            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0)
+            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0),article_parser_version:Number(enriched.raw?.article_parser_version||3)
           });
           if(refreshed?.ok) refreshedCount++;
           if(!target.has_screenshot) screenshotQueue.push({title:enriched.title||target.title||'',url:target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});
