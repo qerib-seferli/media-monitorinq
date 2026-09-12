@@ -855,7 +855,7 @@ Deno.serve(async (req) => {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'social_enrich_backfill_targets',error:'Təşkilat tapılmadı'},200);
       try {
-        const limit=Math.max(1,Math.min(8,Number(options.social_limit||4)));
+        const limit=Math.max(1,Math.min(16,Number(options.social_limit||10)));
         const result:any=await admin.from('mentions')
           .select('id,title,summary,original_text,source_url,source_platform,published_at,detected_at,author_name,raw_payload,mention_media(media_type,url)')
           .eq('organization_id',org.id)
@@ -870,7 +870,7 @@ Deno.serve(async (req) => {
           const raw:any=row?.raw_payload||{};
           const media=Array.isArray(row?.mention_media)?row.mention_media:[];
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase())&&Boolean(m?.url)) || Boolean(raw?.image_url);
-          const needs=!row?.published_at || !row?.author_name || !hasCover || raw?.social_enriched!==true || raw?.date_parser_version<4;
+          const needs=!row?.published_at || !row?.author_name || !hasCover || raw?.social_enriched!==true || Number(raw?.date_parser_version||0)<5;
           if(!needs) continue;
           targets.push({title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:row.published_at||null,author:row.author_name||null,raw,source_platform:row.source_platform||''});
           if(targets.length>=limit) break;
@@ -886,13 +886,32 @@ Deno.serve(async (req) => {
       if (!org) return json({ok:false,run_id:runId,mode:'social_enrich',error:'Təşkilat tapılmadı'},200);
       if (!options.source_url) return json({ok:false,run_id:runId,mode:'social_enrich',error:'source_url tələb olunur'},200);
       try {
-        const current:any = await admin.from('mentions')
+        let current:any = await admin.from('mentions')
           .select('id,title,original_text,published_at,raw_payload,relevance_score,priority_score,source_platform')
           .eq('organization_id',org.id)
           .eq('source_url',options.source_url)
           .limit(1)
           .maybeSingle();
         if (current?.error) throw current.error;
+        if (!current?.data?.id) {
+          const requestedPlatform=canonicalPlatform(String(options.source_platform||inferPlatform(String(options.source_url||''))||''));
+          const requestedCanonical=canonicalSocialStoryUrl(String(options.canonical_url||options.source_url||''),requestedPlatform);
+          const requestedIdentity=String((options.raw_patch||{})?.source_post_identity||socialPostIdentity(requestedCanonical||String(options.source_url||''),requestedPlatform)).trim();
+          if(requestedIdentity){
+            const byIdentity:any=await admin.from('mentions')
+              .select('id,title,original_text,published_at,raw_payload,relevance_score,priority_score,source_platform')
+              .eq('organization_id',org.id).eq('raw_payload->>source_post_identity',requestedIdentity)
+              .order('detected_at',{ascending:true}).limit(1).maybeSingle();
+            if(!byIdentity?.error && byIdentity?.data?.id) current=byIdentity;
+          }
+          if(!current?.data?.id && requestedCanonical){
+            const byCanonical:any=await admin.from('mentions')
+              .select('id,title,original_text,published_at,raw_payload,relevance_score,priority_score,source_platform')
+              .eq('organization_id',org.id).eq('source_url',requestedCanonical)
+              .order('detected_at',{ascending:true}).limit(1).maybeSingle();
+            if(!byCanonical?.error && byCanonical?.data?.id) current=byCanonical;
+          }
+        }
         if (!current?.data?.id) return json({ok:true,run_id:runId,mode:'social_enrich',updated:false,skipped:'mention-not-found'},200);
 
         const activeKeywordRows = await fetchOrganizationMatchKeywords(admin, org, 2400);
@@ -918,10 +937,11 @@ Deno.serve(async (req) => {
         rawPatch.published_from_page=trustedDate;
         rawPatch.published_date_status=trustedDate?'verified':'not-found';
         rawPatch.published_date_source=trustedDate?options.published_date_source:null;
-        rawPatch.date_parser_version=trustedDate?Number(options.date_parser_version||4):4;
+        rawPatch.date_parser_version=trustedDate?Number(options.date_parser_version||5):5;
 
         const patch:any={
-          last_seen_at:new Date().toISOString(),last_verified_at:new Date().toISOString(),source_status:'active',raw_payload:rawPatch
+          last_seen_at:new Date().toISOString(),last_verified_at:new Date().toISOString(),source_status:'active',raw_payload:rawPatch,
+          ...(options.canonical_url?{source_url:canonicalSocialStoryUrl(String(options.canonical_url),String(current.data.source_platform||options.source_platform||''))||options.canonical_url}:{})
         };
         const cleanText=clean(options.text||'');
         if(options.title) patch.title=String(options.title).slice(0,500);
@@ -939,11 +959,44 @@ Deno.serve(async (req) => {
         if(externalVideos.length){rawPatch.video_url=externalVideos[0];rawPatch.video_urls=externalVideos;}
         const updated:any=await admin.from('mentions').update(patch).eq('id',current.data.id);
         if(updated?.error) throw updated.error;
-        if(match.accepted && externalImages.length){
+
+        // Eyni sosial post müxtəlif share/tracking URL-ləri ilə indeksə düşə bilər.
+        // Enrichment stabil post identifikatoru tapdıqdan sonra yalnız ən köhnə qeyd
+        // istifadəçidə qalır, qalan variantlar arxivdə canonical_duplicate kimi gizlənir.
+        const stableSocialIdentity=String(rawPatch.source_post_identity||socialPostIdentity(String(options.canonical_url||options.source_url||''),String(current.data.source_platform||options.source_platform||''))).trim();
+        if(match.accepted && stableSocialIdentity){
+          const duplicates:any=await admin.from('mentions')
+            .select('id,detected_at,raw_payload')
+            .eq('organization_id',org.id)
+            .eq('raw_payload->>source_post_identity',stableSocialIdentity)
+            .order('detected_at',{ascending:true,nullsFirst:false})
+            .limit(20);
+          const dupRows=Array.isArray(duplicates?.data)?duplicates.data:[];
+          if(!duplicates?.error && dupRows.length>1){
+            const keeper=dupRows[0]?.id;
+            for(const duplicate of dupRows.slice(1)){
+              const duplicateRaw:any=duplicate?.raw_payload||{};
+              const hidden:any=await admin.from('mentions').update({
+                relevance_score:0,priority_score:0,
+                raw_payload:{...duplicateRaw,canonical_duplicate:true,canonical_duplicate_of:keeper,source_post_identity:stableSocialIdentity,duplicate_checked_at:new Date().toISOString()}
+              }).eq('id',duplicate.id);
+              if(hidden?.error) console.error('social-canonical-dedupe',hidden.error);
+            }
+          }
+        }
+
+        if(match.accepted){
+          // Sosial səhifələr çox vaxt menyu/logo/tövsiyə şəkillərini də HTML-ə salır.
+          // Kart və detalda yalnız əsas post mediasını saxlayırıq; screenshot ayrıca qorunur.
+          if(externalImages.length){
+            const stale:any=await admin.from('mention_media').delete().eq('mention_id',current.data.id).in('media_type',['preview_external','preview']);
+            if(stale?.error) console.error('social-enrich-media-cleanup',stale.error);
+          }
           const mediaResult:any=await admin.from('mention_media').select('url,media_type').eq('mention_id',current.data.id);
           const existingUrls=new Set((Array.isArray(mediaResult?.data)?mediaResult.data:[]).map((x:any)=>String(x?.url||'')));
-          const missing=externalImages.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()}));
-          const missingVideos=externalVideos.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'video_external',url,captured_at:new Date().toISOString()}));
+          const primaryImages=externalImages.slice(0,2);
+          const missing=primaryImages.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()}));
+          const missingVideos=externalVideos.slice(0,2).filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'video_external',url,captured_at:new Date().toISOString()}));
           const mediaToInsert=[...missing,...missingVideos];
           if(mediaToInsert.length){const mediaInsert:any=await admin.from('mention_media').insert(mediaToInsert);if(mediaInsert?.error)console.error('social-enrich-media',mediaInsert.error);}
         }
@@ -3458,6 +3511,43 @@ function canonicalStoryUrl(item:Item):string {
   }catch{return candidate.replace(/\/$/,'');}
 }
 
+function socialPostIdentity(value:string='', platform:string=''):string {
+  try{
+    const u=new URL(String(value||''));
+    const p=canonicalPlatform(platform||inferPlatform(u.toString())||'');
+    if(p==='Facebook'){
+      const id=u.searchParams.get('story_fbid')||u.searchParams.get('fbid')||u.searchParams.get('v');
+      if(id) return `facebook:${id}`;
+      const m=u.pathname.match(/\/(?:posts|videos|reel|reels)\/([^/?#]+)/i); if(m) return `facebook:${m[1]}`;
+    }
+    if(p==='Instagram'){const m=u.pathname.match(/\/(?:p|reel|reels|tv)\/([^/?#]+)/i);if(m)return `instagram:${m[1]}`;}
+    if(p==='TikTok'){const m=u.pathname.match(/\/video\/(\d+)/i);if(m)return `tiktok:${m[1]}`;}
+    if(p==='LinkedIn'){const m=u.pathname.match(/\/(?:posts|feed\/update)\/([^/?#]+)/i);if(m)return `linkedin:${m[1]}`;}
+    if(p==='X'){const m=u.pathname.match(/\/status\/(\d+)/i);if(m)return `x:${m[1]}`;}
+  }catch{}
+  return '';
+}
+
+function canonicalSocialStoryUrl(value:string='', platform:string=''):string {
+  const raw=String(value||'').trim(); if(!raw) return '';
+  try{
+    const u=new URL(raw); const p=canonicalPlatform(platform||inferPlatform(raw)||''); u.hash='';
+    for(const key of [...u.searchParams.keys()]) if(/^utm_|^(fbclid|gclid|ref|source|__cft__|__tn__)$/i.test(key)) u.searchParams.delete(key);
+    if(p==='Facebook'){
+      const story=u.searchParams.get('story_fbid')||u.searchParams.get('fbid')||u.searchParams.get('v');
+      const owner=u.searchParams.get('id');
+      if(story && owner) return `https://www.facebook.com/permalink.php?story_fbid=${encodeURIComponent(story)}&id=${encodeURIComponent(owner)}`;
+      const m=u.pathname.match(/^\/([^/]+)\/(posts|videos|reel|reels)\/([^/?#]+)/i);
+      if(m) return `https://www.facebook.com/${m[1]}/${m[2].toLowerCase()}/${m[3]}`;
+    }
+    if(p==='Instagram'){const m=u.pathname.match(/\/(?:p|reel|reels|tv)\/([^/?#]+)/i);if(m)return `https://www.instagram.com/p/${m[1]}/`;}
+    if(p==='TikTok'){const m=u.pathname.match(/\/@([^/]+)\/video\/(\d+)/i);if(m)return `https://www.tiktok.com/@${m[1]}/video/${m[2]}`;}
+    if(p==='LinkedIn'){return u.origin+u.pathname.replace(/\/$/,'');}
+    if(p==='X'){const m=u.pathname.match(/^\/([^/]+)\/status\/(\d+)/i);if(m)return `https://x.com/${m[1]}/status/${m[2]}`;}
+    return u.toString().replace(/\/$/,'');
+  }catch{return raw.replace(/\/$/,'');}
+}
+
 async function save(admin:any, org:any, source:any, item:Item, keywords:string[], villages:string[] = []) {
   if (!item.url) return 0;
   const match = evaluateMatch(org, item, keywords, villages);
@@ -3479,16 +3569,19 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
 
   const canonicalSourcePlatform = canonicalPlatform(source.platform || inferPlatform(item.url || '') || 'Web');
   const isWebNews = canonicalSourcePlatform === 'Web';
+  const isSocial = ['Facebook','Instagram','TikTok','LinkedIn','X'].includes(canonicalSourcePlatform);
   const storyTitleKey = normalizeForMatch(item.title || '');
-  const canonicalUrl=isWebNews?canonicalStoryUrl(item):'';
+  const canonicalUrl=isWebNews?canonicalStoryUrl(item):(isSocial?canonicalSocialStoryUrl(String((item.raw as any)?.canonical_url||item.url||''),canonicalSourcePlatform):'');
   const rawIdentity:any=item?.raw||{};
   const commentIdentity=String(rawIdentity.comment_id||rawIdentity.commentId||'').trim();
   const videoIdentity=String(rawIdentity.video_id||rawIdentity.videoId||rawIdentity.parent_video_id||'').trim();
-  const stableSource=canonicalStoryUrl(item);
+  const socialIdentity=String(rawIdentity.source_post_identity||socialPostIdentity(canonicalUrl||item.url||'',canonicalSourcePlatform)).trim();
+  const stableSource=isSocial?(canonicalUrl||canonicalStoryUrl(item)):canonicalStoryUrl(item);
   const hash = await sha256(isWebNews
     ? `${org.id}|web-canonical|${canonicalUrl||storyTitleKey}`
     : commentIdentity ? `${org.id}|comment|${commentIdentity}`
     : videoIdentity ? `${org.id}|youtube|${videoIdentity}`
+    : socialIdentity ? `${org.id}|social|${socialIdentity}`
     : `${org.id}|source|${stableSource||item.url}`);
 
   // Eyni material hər run-da yenidən aşkarlana bilər. Əvvəlcə yeni content_hash ilə yoxla.
@@ -3501,6 +3594,9 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
 
   if(!existing?.id && commentIdentity){const r:any=await admin.from('mentions').select('id,raw_payload,published_at,source_url').eq('organization_id',org.id).eq('raw_payload->>comment_id',commentIdentity).order('detected_at',{ascending:true}).limit(1).maybeSingle();if(!r?.error&&r?.data?.id)existing=r.data;}
   if(!existing?.id && videoIdentity && !commentIdentity){const r:any=await admin.from('mentions').select('id,raw_payload,published_at,source_url').eq('organization_id',org.id).eq('raw_payload->>video_id',videoIdentity).order('detected_at',{ascending:true}).limit(1).maybeSingle();if(!r?.error&&r?.data?.id)existing=r.data;}
+
+  if(!existing?.id && isSocial && socialIdentity){const r:any=await admin.from('mentions').select('id,raw_payload,published_at,source_url,relevance_score').eq('organization_id',org.id).eq('raw_payload->>source_post_identity',socialIdentity).order('detected_at',{ascending:true}).limit(1).maybeSingle();if(!r?.error&&r?.data?.id)existing=r.data;}
+  if(!existing?.id && isSocial && canonicalUrl){const r:any=await admin.from('mentions').select('id,raw_payload,published_at,source_url,relevance_score').eq('organization_id',org.id).eq('raw_payload->>canonical_url',canonicalUrl).order('detected_at',{ascending:true}).limit(1).maybeSingle();if(!r?.error&&r?.data?.id)existing=r.data;}
 
   if (!existing?.id && isWebNews && canonicalUrl) {
     const canonicalResult:any = await admin.from('mentions')
@@ -3529,6 +3625,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     // like_count sonradan dəyişə bildiyi üçün köhnə 0 dəyəri saxlanmamalıdır.
     const refresh:any = {
       ...(matchedServicePoint?.id?{service_point_id:matchedServicePoint.id,district_id:matchedServicePoint.district_id||org.district_id||null}:{}),
+      ...(isSocial&&canonicalUrl?{source_url:canonicalUrl}:{}),
       source_status:'active',
       last_seen_at:new Date().toISOString(),
       last_verified_at:new Date().toISOString(),
@@ -3538,7 +3635,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
       raw_payload:{
         ...((existing as any)?.raw_payload || {}),
         ...((item.raw as any) || item),
-        ...(isWebNews&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
+        ...((isWebNews||isSocial)&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
+        ...(isSocial&&socialIdentity?{source_post_identity:socialIdentity}:{}),
         monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches,acceptance_strength:match.acceptance_strength||'weak',stable:match.stable_acceptance===true},
         ...(matchedServicePoint?.id?{service_point_match:{id:matchedServicePoint.id,short_name:matchedServicePoint.short_name||null,name:matchedServicePoint.name||null,matched_at:new Date().toISOString()}}:{}),
         ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),
@@ -3571,7 +3669,7 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     service_point_id:matchedServicePoint?.id || null,
     district_id:matchedServicePoint?.district_id || org.district_id || null,
     source_platform:canonicalSourcePlatform,
-    source_url:item.url,
+    source_url:(isSocial&&canonicalUrl)?canonicalUrl:item.url,
     author_name:item.author || null,
     title:item.title || 'Monitorinq qeydi',
     original_text:item.text || '',
@@ -3585,7 +3683,8 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     content_hash:hash,
     raw_payload:{
       ...((item.raw as any) || item),
-      ...(isWebNews&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
+      ...((isWebNews||isSocial)&&canonicalUrl?{canonical_url:canonicalUrl}:{}),
+      ...(isSocial&&socialIdentity?{source_post_identity:socialIdentity}:{}),
       monitor_acceptance:{accepted:true,accepted_at:new Date().toISOString(),reason:match.reason,matches:match.matches,acceptance_strength:match.acceptance_strength||'weak',stable:match.stable_acceptance===true},
       ...(ai?.__ai_meta ? {ai_analysis:ai.__ai_meta} : {}),
       ...(autoLearned?.kind==='phrase'?{admin_review_status:'auto-kept',auto_learning:{kind:autoLearned.kind,value:autoLearned.value,at:new Date().toISOString()}}:{}),

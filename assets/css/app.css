@@ -3429,3 +3429,14 @@ body.detail-modal-open .bottom-nav{visibility:visible!important;pointer-events:a
 .keyword-engine-copy{overflow-wrap:anywhere}
 @media(max-width:1100px){.keyword-engine-flow{grid-template-columns:repeat(2,minmax(0,1fr))!important}.keyword-engine-flow>div:last-of-type{grid-column:1/-1}.keyword-bank-overview-single{grid-template-columns:1fr 1fr!important}.keyword-bank-overview-single span:first-of-type{grid-column:1/-1}}
 @media(max-width:620px){.keyword-engine-flow{grid-template-columns:1fr!important}.keyword-engine-flow>div:last-of-type{grid-column:auto}.keyword-bank-overview-single{grid-template-columns:1fr!important}.keyword-bank-overview-single span:first-of-type{grid-column:auto}.keyword-engine-guide>summary{gap:8px}.keyword-engine-copy{font-size:11px;line-height:1.55}}
+
+/* =========================================================
+   v98 — Açıq sosial kartlarda real media/fallback sabitliyi
+   ========================================================= */
+.mention-thumb-wrap{position:relative;overflow:hidden;border-radius:13px;background:#08101b}
+.mention-thumb-wrap .thumb{display:block;max-width:100%}
+.mention-thumb-wrap .thumb.thumb-fallback{object-fit:contain;padding:10px;background:linear-gradient(145deg,#0b1b2d,#08101b)}
+.mention-copy{min-width:0;overflow:hidden}
+.mention-copy h3{line-height:1.35;overflow-wrap:anywhere;word-break:normal}
+.mention-copy p{overflow-wrap:anywhere;word-break:normal}
+@media(max-width:700px){.mention-thumb-wrap{border-radius:10px}.mention-thumb-wrap .thumb.thumb-fallback{padding:6px}}
