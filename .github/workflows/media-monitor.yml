@@ -179,12 +179,14 @@ jobs:
     # Manual Media Monitoring Worker başladıldıqda da işləyir; periodikdə saatda 2 dəfə.
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '11,41 * * * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     strategy:
       fail-fast: false
-      max-parallel: 2
+      # 10 shard x 2 təşkilat = hər run-da maksimum 20 təşkilat. Job-lar paralel
+      # işlədiyi üçün 106 təşkilatın açıq sosial rotasiyası saatlarla deyil, bir neçə run-da tamamlanır.
+      max-parallel: 5
       matrix:
-        shard: [0, 1, 2, 3, 4]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     concurrency:
       group: media-monitor-open-social-${{ matrix.shard }}
       cancel-in-progress: false
@@ -207,19 +209,19 @@ jobs:
           MONITOR_URL: https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker
           NEWS_OPEN_SOCIAL_ONLY: '1'
           NEWS_GLOBAL_ORGS: '0'
-          NEWS_ORG_SHARD_COUNT: '5'
+          NEWS_ORG_SHARD_COUNT: '10'
           NEWS_ORG_SHARD_INDEX: ${{ matrix.shard }}
-          NEWS_ORG_BATCH: '1'
+          NEWS_ORG_BATCH: '2'
           NEWS_ORG_ROTATION_MINUTES: '30'
           NEWS_DIRECT_ONLY: '1'
           NEWS_REFILTER_EXISTING: '0'
           # Brave ödənişli/pulsuz limiti bu lane tərəfindən yeyilmir. Bing/public index əsasdır.
           NEWS_BRAVE_REQUEST_BUDGET: '0'
-          NEWS_GATEWAY_BUDGET_MS: '210000'
-          NEWS_SOURCE_SHARD_COUNT: '5'
+          NEWS_GATEWAY_BUDGET_MS: '420000'
+          NEWS_SOURCE_SHARD_COUNT: '10'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_BROAD_QUERY_LIMIT: '0'
-          NEWS_OPEN_SOCIAL_QUERY_LIMIT: '14'
+          NEWS_OPEN_SOCIAL_QUERY_LIMIT: '12'
           NEWS_OPEN_SOCIAL_PAGE_LIMIT: '2'
           NEWS_OPEN_SOCIAL_TARGET_PER_PLATFORM: '50'
           NEWS_MAX_INGEST_ITEMS: '120'
