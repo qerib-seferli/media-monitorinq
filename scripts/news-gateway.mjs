@@ -1039,7 +1039,14 @@ function dedupe(items) {
     const urlKey=canonicalUrlKey(x?.url||'');
     const titleKey=normalizeTitleKey(x?.title||'');
     const day=x?.published_at ? String(x.published_at).slice(0,10) : '';
-    const storyKey=titleKey.length>=18 ? `${titleKey}|${day}` : '';
+    const rawKind=String(x?.raw?.kind||'').toLowerCase();
+    const socialPlatform=String(x?.raw?.social_platform||socialPlatformFromUrl(x?.url||'')||'');
+    // Social profil səhifəsindən çıxarılan postların title-i çox vaxt eyni generik mətn olur
+    // (məs: "Bərdə SMSİİ — Facebook paylaşımı"). Köhnə storyKey dedupe həmin 17 ayrı
+    // permalink-i bir dənəyə salırdı. Sosial materiallarda URL əsas identifikatordur;
+    // title+gün dedupe yalnız real tarixli və qeyri-sosial materiallarda işləyir.
+    const socialUrlIdentity=Boolean(socialPlatform || rawKind.includes('social') || rawKind.includes('profile_post'));
+    const storyKey=(!socialUrlIdentity && titleKey.length>=18 && day) ? `${titleKey}|${day}` : '';
     if((urlKey && seenUrl.has(urlKey)) || (storyKey && seenStory.has(storyKey))) return false;
     if(urlKey) seenUrl.add(urlKey);
     if(storyKey) seenStory.add(storyKey);
@@ -2288,7 +2295,9 @@ for (const org of plan.organizations) {
           console.log(`[${org.short_name}] ${socialPlatform} Brave discovery: ${exactBrave.length} URL, direct=${directAccepted}, büdcə=${braveRequestsUsed}/${BRAVE_DISCOVERY_BUDGET} | ${braveQuery}`);
         }
       }
-      socialItemsByPlatform.set(socialPlatform,dedupe(collected).slice(0,Math.min(OPEN_SOCIAL_TARGET_PER_PLATFORM,MAX_INGEST_ITEMS)));
+      const platformItems=dedupe(collected).slice(0,Math.min(OPEN_SOCIAL_TARGET_PER_PLATFORM,MAX_INGEST_ITEMS));
+      socialItemsByPlatform.set(socialPlatform,platformItems);
+      console.log(`[${org.short_name}] ${socialPlatform} yekun namizəd: ${platformItems.length} | indeks-hit=${bingSocialHits} | profil-namizəd=${discoveredSocialProfiles.filter(x=>x.platform===socialPlatform).length}`);
     }
   }
 
