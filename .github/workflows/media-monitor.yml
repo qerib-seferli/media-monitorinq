@@ -55,7 +55,7 @@ jobs:
           # Beləliklə ümumi rotasiya sürəti qorunur, amma hər funksiyanın yaddaş/CPU yükü azalır.
           ROTATION_BUCKET=$(( $(date +%s) / 900 ))
           URL="https://xsmahlsqdszxqordgcvt.supabase.co/functions/v1/monitor-worker"
-          BODY="{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":true,\"browser_quick\":true,\"verify_existing\":false,\"refilter_existing\":false,\"organization_shard_count\":3,\"organization_shard_index\":${SHARD},\"organization_batch\":2,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1}"
+          BODY="{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":true,\"browser_quick\":true,\"verify_existing\":false,\"refilter_existing\":true,\"organization_shard_count\":3,\"organization_shard_index\":${SHARD},\"organization_batch\":2,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1}"
           if curl --fail-with-body --silent --show-error \
             --connect-timeout 15 \
             --max-time 95 \
@@ -72,7 +72,7 @@ jobs:
           # təkrarlamırıq. Son bir təhlükəsiz fallback yalnız 1 təşkilatı yoxlayır.
           echo "İlkin YouTube shard uğursuz oldu; 1 təşkilatlıq təhlükəsiz fallback işləyir."
           sleep 5
-          FALLBACK="{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":true,\"browser_quick\":true,\"verify_existing\":false,\"refilter_existing\":false,\"organization_shard_count\":3,\"organization_shard_index\":${SHARD},\"organization_batch\":1,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1}"
+          FALLBACK="{\"mode\":\"scheduled\",\"debug\":false,\"quick_youtube_comments\":true,\"browser_quick\":true,\"verify_existing\":false,\"refilter_existing\":true,\"organization_shard_count\":3,\"organization_shard_index\":${SHARD},\"organization_batch\":1,\"organization_rotation_bucket\":${ROTATION_BUCKET},\"youtube_query_limit\":1}"
           curl --fail-with-body --silent --show-error \
             --connect-timeout 15 \
             --max-time 80 \
