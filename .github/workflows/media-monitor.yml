@@ -141,7 +141,7 @@ jobs:
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
         run: |
           # Meta API hər invocation-da yalnız 1 dəfə çağırılır. Edge Function daxilində
-          # 6 təşkilatın 12k-lıq açar söz bankını eyni run-da emal etmək əvəzinə hər 5
+          # təşkilatın aktiv qlobal söz bankını eyni run-da ağır emal etmək əvəzinə hər 5
           # dəqiqədə 2 təşkilat rotasiya olunur. Beləliklə 15 dəqiqədə yenə 6 təşkilat
           # əhatə olunur, amma bir Edge invocation-un pik yaddaş/CPU yükü xeyli azalır.
           ROTATION_BUCKET=$(( $(date +%s) / 300 ))
@@ -231,9 +231,10 @@ jobs:
 
 
   open-social-pilot-berde:
-    # Pilot təşkilat üçün ayrıca dərin API-siz sosial discovery. Mövcud Meta API xəttini
-    # dəyişmir; yalnız açıq indekslənmiş post/reel/status URL-lərini və public profilləri axtarır.
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '26 * * * *'
+    # Manual diaqnostik pilot. Production sosial axın bütün təşkilatlar üçün yuxarıdakı
+    # open-social-discovery + meta-monitor kombinasiyasıdır; Bərdə üçün ayrıca periodik
+    # paralel run saxlanmır ki, dublikat sorğu və resurs itkisi yaranmasın.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     concurrency:
