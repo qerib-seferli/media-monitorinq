@@ -157,11 +157,11 @@ function socialDiscoveryQueries(org, platform, keywordBank=[], aliasBank=[], pro
     const strongest=base[0]||district||'';
     if(strongest){
       const q=String(strongest).replace(/"/g,'');
-      if(platform==='Facebook') priority.push(`site:facebook.com/posts "${q}"`);
-      else if(platform==='Instagram') priority.push(`site:instagram.com/p "${q}"`);
-      else if(platform==='TikTok') priority.push(`site:tiktok.com/video "${q}"`);
-      else if(platform==='LinkedIn') priority.push(`site:linkedin.com/posts "${q}"`);
-      else if(platform==='X') priority.push(`site:x.com/status "${q}"`);
+      if(platform==='Facebook') { priority.push(`site:facebook.com/posts "${q}"`); priority.push(`site:facebook.com inurl:posts "${q}"`); priority.push(`site:facebook.com inurl:story_fbid "${q}"`); }
+      else if(platform==='Instagram') { priority.push(`site:instagram.com/p "${q}"`); priority.push(`site:instagram.com inurl:/p/ "${q}"`); priority.push(`site:instagram.com inurl:/reel/ "${q}"`); }
+      else if(platform==='TikTok') { priority.push(`site:tiktok.com/video "${q}"`); priority.push(`site:tiktok.com inurl:/video/ "${q}"`); }
+      else if(platform==='LinkedIn') { priority.push(`site:linkedin.com/posts "${q}"`); priority.push(`site:linkedin.com inurl:/posts/ "${q}"`); priority.push(`site:linkedin.com inurl:/feed/update/ "${q}"`); }
+      else if(platform==='X') { priority.push(`site:x.com/status "${q}"`); priority.push(`site:x.com inurl:/status/ "${q}"`); priority.push(`site:twitter.com inurl:/status/ "${q}"`); }
     }
     for(const ident of base.slice(2)) extras.push(`site:${domain} "${ident.replace(/"/g,'')}"`);
     for(const area of (districts.length?districts.slice(0,isPilotOrganization(org)?4:3):(district?[district]:[]))){
@@ -569,11 +569,15 @@ async function directSocialProfileItems(source,org){
   }catch{}
   if(!html) return [];
   const links=socialPostLinksFromHtml(html,profileUrl,platform);
-  return links.map((row,index)=>({
-    title:socialHeadline(row.text||'', '', platform, source?.name||org?.short_name||'') || `${platform} paylaşımı`,
-    text:row.text||'',
+  // Profil HTML-i bəzən yalnız permalink-ləri verir, post mətnini vermir. Belə boş
+  // permalink-ləri görünən mention kimi yazmaq eyni görünən generic kartlar yaradır.
+  // Yalnız real mətn/snippet olan postları ingest edirik; boş linklər növbəti search-index
+  // dövründə konkret post nəticəsi kimi yenidən tapıla bilər.
+  return links.filter(row=>cleanArticleText(row.text||'').length>=24).map((row,index)=>({
+    title:socialHeadline(row.text||'', '', platform, source?.name||org?.short_name||'') || `${platform} açıq paylaşımı`,
+    text:cleanArticleText(row.text||''),
     url:row.url,published_at:null,image:null,author:source?.name||org?.short_name||null,
-    raw:{kind:'known_social_profile_post',provider:`${platform} public profile`,social_platform:platform,profile_url:profileUrl,trusted_org_profile:true,profile_discovery_rank:index+1,source_post_identity:socialPostIdentity(row.url,platform)||null,open_social_discovery:true,discovery_channel:'open_social_web'}
+    raw:{kind:'known_social_profile_post',provider:`${platform} public profile`,social_platform:platform,profile_url:profileUrl,trusted_org_profile:true,profile_discovery_rank:index+1,source_post_identity:socialPostIdentity(row.url,platform)||null,open_social_discovery:true,discovery_channel:'open_social_web',content_partial:true}
   }));
 }
 
@@ -736,13 +740,19 @@ function socialIndexedDiscoveryItem(item={},platform,org,query='',provider='publ
   const identityVerified=socialProfileCandidateMatchesOrg({platform,url:profileUrl||url},transient,org);
   if(!identityVerified) return null;
   const profileStrongMatch=Boolean(profileUrl && socialProfileMatchesOrg({platform,url:profileUrl},org));
+  const indexedDate=item?.published_at||null;
+  const indexedImage=item?.image||null;
+  const indexedAuthor=item?.author||null;
   return {
-    title:socialHeadline(text,title,platform,'') || `${platform} açıq paylaşımı`,
+    title:socialHeadline(text,title,platform,indexedAuthor||'') || `${platform} açıq paylaşımı`,
     text,
     url,
+    // Axtarış indeksinin RSS tarixini sosial paylaşımın real tarixi kimi göstərmirik.
+    // O yalnız audit/raw məlumatında qalır; real published_at səhifənin özündən
+    // strukturlaşdırılmış tarix tapılanda yazılır.
     published_at:null,
-    image:null,
-    author:null,
+    image:indexedImage,
+    author:indexedAuthor,
     raw:{
       kind:'public_social_search_index',
       social_platform:platform,
@@ -756,6 +766,7 @@ function socialIndexedDiscoveryItem(item={},platform,org,query='',provider='publ
       social_profile_url:profileUrl||null,
       discovery_query:String(query||'').slice(0,500),
       provider,
+      ...(indexedDate?{search_index_published_at:indexedDate}:{}),
       source_post_identity:socialPostIdentity(url,platform)||null
     }
   };
@@ -2367,10 +2378,11 @@ for (const org of plan.organizations) {
   }
 
   // Meta API public profilə icazə verməsə də məlum/təsdiqlənmiş profilin açıq HTML/JSON
-  // hissəsindən real post permalink-lərini çıxarmağa çalışırıq. Facebook/Instagram da bu
-  // fallback-a daxildir; yalnız verified profile və maksimum 2 profil işlənir ki,
-  // fast-watch vaxtı/YouTube/Web işinə təsir etməsin.
-  for(const profile of verifiedSocialProfiles.slice(0,2)){
+  // hissəsindən real post permalink-lərini çıxarmağa çalışırıq. Əvvəl yalnız ilk 2 profil
+  // işlənirdi və Facebook/Instagram slotları tutduğu üçün TikTok/X/LinkedIn praktik olaraq
+  // növbəyə düşmürdü. İndi hər platformadan maksimum 1 təsdiqlənmiş profil yoxlanır.
+  const directProfileFallback=[...new Map(verifiedSocialProfiles.map(x=>[x.platform,x])).values()].slice(0,5);
+  for(const profile of directProfileFallback){
     if(gatewayBudgetLow()) break;
     const directItems=await directSocialProfileItems(profile,org).catch(()=>[]);
     if(!directItems.length) continue;
@@ -2412,6 +2424,29 @@ for (const org of plan.organizations) {
           },35000,1);
         }catch(e){console.log(`[${org.short_name}] Açıq sosial metadata yenilənmədi: ${e?.message||e}`);}
       }
+    }
+    // OPEN_SOCIAL_ONLY əvvəl burada birbaşa `continue` edirdi. Buna görə qəbul edilən
+    // sosial postların screenshot/backfill mərhələsi heç vaxt işləmirdi. İndi həmin lane
+    // daxilində ayrıca kiçik tamamlama növbəsi işləyir.
+    if(!gatewayBudgetLow()){
+      try{
+        const backlog=await callMonitor({mode:'social_enrich_backfill_targets',organization_id:org.id,social_limit:isPilotOrganization(org)?20:12},35000,1);
+        const targets=Array.isArray(backlog?.targets)?backlog.targets:[];
+        let refreshed=0, shots=0;
+        for(const target of targets){
+          if(gatewayBudgetLow()) break;
+          const p=normalizeSocialPlatform(target?.source_platform)||socialPlatformFromUrl(target?.url||'');
+          if(!p) continue;
+          const enriched=await enrichSocialPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:null,author:target.author||null,raw:target.raw||{}},p);
+          const result=await callMonitor({mode:'social_enrich',organization_id:org.id,source_url:target.url,source_platform:p,title:enriched.title||target.title||'',text:enriched.text||target.text||'',image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],published_at:enriched.published_at||null,author:enriched.author||null,canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0),like_count:enriched.raw?.like_count,comments_count:enriched.raw?.comments_count,raw_patch:enriched.raw||{}},35000,1).catch(()=>null);
+          if(result?.ok) refreshed++;
+          if(MAX_SCREENSHOTS>0 && shots<MAX_SCREENSHOTS && !gatewayBudgetLow()){
+            const saved=await saveScreenshotForTarget(org,{title:enriched.title||target.title||'',url:enriched.raw?.canonical_url||target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});
+            if(saved?.saved || saved?.skipped==='already-exists') shots++;
+          }
+        }
+        if(targets.length) console.log(`[${org.short_name}] 🌐 Sosial tamamlama: namizəd=${targets.length}, yeniləndi=${refreshed}, screenshot=${shots}`);
+      }catch(e){console.log(`[${org.short_name}] 🌐 Sosial tamamlama xətası: ${e?.message||e}`);}
     }
     const reasonSummary=Object.entries(orgSocialReasonCounts).sort((a,b)=>Number(b[1]||0)-Number(a[1]||0)).slice(0,6).map(([k,v])=>`${k}:${v}`).join(', ');
     console.log(`[${org.short_name}] 🌐 Açıq sosial şəbəkə tamamlandı — received=${orgSocialReceived} accepted=${orgSocialAccepted} rejected=${orgSocialRejected} inserted=${orgSocialInserted}${reasonSummary?` | səbəblər: ${reasonSummary}`:''}.`);
@@ -2604,7 +2639,7 @@ for (const org of plan.organizations) {
   // beləliklə əvvəlki generic title / NULL tarixli qeydlər də öz-özünə düzəlir.
   if(!gatewayBudgetLow()) {
     try{
-      const backlog=await callMonitor({mode:'social_enrich_backfill_targets',organization_id:org.id,social_limit:10},35000,1);
+      const backlog=await callMonitor({mode:'social_enrich_backfill_targets',organization_id:org.id,social_limit:isPilotOrganization(org)?20:12},35000,1);
       const socialTargets=Array.isArray(backlog?.targets)?backlog.targets:[];
       let socialRefreshed=0;
       for(const target of socialTargets){

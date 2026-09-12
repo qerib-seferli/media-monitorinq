@@ -855,7 +855,7 @@ Deno.serve(async (req) => {
       const org = orgs.find((x:any)=>String(x.id) === String(options.organization_id || ''));
       if (!org) return json({ok:false,run_id:runId,mode:'social_enrich_backfill_targets',error:'Təşkilat tapılmadı'},200);
       try {
-        const limit=Math.max(1,Math.min(16,Number(options.social_limit||10)));
+        const limit=Math.max(1,Math.min(24,Number(options.social_limit||12)));
         const result:any=await admin.from('mentions')
           .select('id,title,summary,original_text,source_url,source_platform,published_at,detected_at,author_name,raw_payload,mention_media(media_type,url)')
           .eq('organization_id',org.id)
@@ -863,19 +863,23 @@ Deno.serve(async (req) => {
           .in('source_platform',['Facebook','Instagram','TikTok','LinkedIn','X','Twitter'])
           .not('source_url','is',null)
           .order('detected_at',{ascending:false})
-          .limit(60);
+          .limit(140);
         if(result?.error) throw result.error;
         const targets:any[]=[];
         for(const row of (Array.isArray(result?.data)?result.data:[])){
           const raw:any=row?.raw_payload||{};
           const media=Array.isArray(row?.mention_media)?row.mention_media:[];
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase())&&Boolean(m?.url)) || Boolean(raw?.image_url);
-          const needs=!row?.published_at || !row?.author_name || !hasCover || raw?.social_enriched!==true || Number(raw?.date_parser_version||0)<5;
+          const text=clean(String(row?.original_text||row?.summary||''));
+          const generic=isGenericSocialTitle(String(row?.title||''),String(row?.source_platform||''));
+          const contentMissing=generic && text.length<18 && !hasCover;
+          const needs=contentMissing || !row?.published_at || !row?.author_name || !hasCover || raw?.social_enriched!==true || Number(raw?.date_parser_version||0)<5;
           if(!needs) continue;
-          targets.push({title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:row.published_at||null,author:row.author_name||null,raw,source_platform:row.source_platform||''});
-          if(targets.length>=limit) break;
+          const priority=(contentMissing?120:0)+(generic?35:0)+(!hasCover?25:0)+(!row?.published_at?20:0)+(!row?.author_name?8:0)+(raw?.social_enriched!==true?12:0);
+          targets.push({title:row.title||'',text:row.original_text||row.summary||'',url:row.source_url,published_at:row.published_at||null,author:row.author_name||null,raw,source_platform:row.source_platform||'',priority,content_missing:contentMissing});
         }
-        return json({ok:true,run_id:runId,mode:'social_enrich_backfill_targets',organization:org.short_name,targets,scanned:Array.isArray(result?.data)?result.data.length:0},200);
+        targets.sort((a:any,b:any)=>Number(b?.priority||0)-Number(a?.priority||0));
+        return json({ok:true,run_id:runId,mode:'social_enrich_backfill_targets',organization:org.short_name,targets:targets.slice(0,limit),scanned:Array.isArray(result?.data)?result.data.length:0},200);
       }catch(e){
         return json({ok:false,run_id:runId,mode:'social_enrich_backfill_targets',error:errorInfo(e).message},200);
       }
@@ -930,6 +934,7 @@ Deno.serve(async (req) => {
           raw:{...((current.data.raw_payload||{}) as any),...((options.raw_patch||{}) as any),trusted_org_profile:false,parent_is_relevant:false,kind:'social_enrich'}
         };
         const match=evaluateMatch(org,candidate,positiveKeywords.map((x:string)=>x.toLocaleLowerCase('az-AZ')),villageNames);
+        const socialContentUsable=hasUsableSocialContent(candidate,String(current.data.source_platform||options.source_platform||''));
         const rawPatch:any={...((current.data.raw_payload||{}) as any),...((options.raw_patch||{}) as any),social_enriched:true,enrichment_checked_at:new Date().toISOString(),canonical_url:options.canonical_url||options.source_url};
         if(options.like_count!==undefined&&options.like_count!==null) rawPatch.like_count=Number(options.like_count);
         if(options.comments_count!==undefined&&options.comments_count!==null) rawPatch.comments_count=Number(options.comments_count);
@@ -948,10 +953,13 @@ Deno.serve(async (req) => {
         if(cleanText.length>=5){patch.original_text=String(options.text).slice(0,120000);patch.summary=cleanText.slice(0,700);}
         if(options.author) patch.author_name=String(options.author).slice(0,300);
         if(trustedDate) patch.published_at=options.published_at;
-        if(!match.accepted){
-          patch.relevance_score=0; patch.priority_score=0; rawPatch.enrichment_rejected=true; rawPatch.enrichment_reject_reason=match.reason;
+        const openDiscovery=rawPatch?.open_social_discovery===true || rawPatch?.discovered_without_platform_api===true || rawPatch?.discovery_channel==='open_social_web';
+        if(!match.accepted || (openDiscovery && !socialContentUsable)){
+          patch.relevance_score=0; patch.priority_score=0; rawPatch.enrichment_rejected=true;
+          rawPatch.enrichment_reject_reason=!match.accepted?match.reason:'sosial-məzmun-oxunmadı';
+          if(openDiscovery && !socialContentUsable) rawPatch.content_unavailable_after_enrich=true;
         } else {
-          rawPatch.enrichment_rejected=false;
+          rawPatch.enrichment_rejected=false; rawPatch.content_unavailable_after_enrich=false;
         }
         const externalImages=[...new Set([options.image_url,...(Array.isArray(options.image_urls)?options.image_urls:[])].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,12);
         if(externalImages.length){rawPatch.image_url=externalImages[0];rawPatch.image_urls=externalImages;}
@@ -1000,7 +1008,8 @@ Deno.serve(async (req) => {
           const mediaToInsert=[...missing,...missingVideos];
           if(mediaToInsert.length){const mediaInsert:any=await admin.from('mention_media').insert(mediaToInsert);if(mediaInsert?.error)console.error('social-enrich-media',mediaInsert.error);}
         }
-        return json({ok:true,run_id:runId,mode:'social_enrich',updated:true,accepted_after_enrich:match.accepted,reason:match.reason,mention_id:current.data.id,media_count:externalImages.length,published_at:trustedDate?options.published_at:null},200);
+        const acceptedAfterEnrich=Boolean(match.accepted && (!openDiscovery || socialContentUsable));
+        return json({ok:true,run_id:runId,mode:'social_enrich',updated:true,accepted_after_enrich:acceptedAfterEnrich,reason:acceptedAfterEnrich?match.reason:(rawPatch.enrichment_reject_reason||match.reason),mention_id:current.data.id,media_count:externalImages.length,published_at:trustedDate?options.published_at:null},200);
       } catch(e) {
         return json({ok:false,run_id:runId,mode:'social_enrich',updated:false,error:errorInfo(e).message},200);
       }
@@ -3548,6 +3557,27 @@ function canonicalSocialStoryUrl(value:string='', platform:string=''):string {
   }catch{return raw.replace(/\/$/,'');}
 }
 
+function isGenericSocialTitle(value:string='', platform:string=''):boolean {
+  const title=clean(String(value||'')).toLocaleLowerCase('az-AZ');
+  if(!title) return true;
+  const p=canonicalPlatform(platform||'').toLocaleLowerCase('az-AZ');
+  if(/(?:paylaşımı|açıq paylaşımı|paylaşım linki)$/.test(title) && title.length<140) return true;
+  if(p && (title===p || title.endsWith(`— ${p}`) || title.endsWith(`- ${p}`))) return true;
+  return false;
+}
+
+function hasUsableSocialContent(item:Item, platform:string=''):boolean {
+  const raw:any=item?.raw||{};
+  const text=clean(String(item?.text||''));
+  const title=clean(String(item?.title||''));
+  const image=String(item?.image||raw?.image_url||'').trim();
+  const video=String(raw?.video_url||'').trim();
+  if(text.length>=18) return true;
+  if(title.length>=24 && !isGenericSocialTitle(title,platform)) return true;
+  if(/^https?:\/\//i.test(image) || /^https?:\/\//i.test(video)) return true;
+  return false;
+}
+
 async function save(admin:any, org:any, source:any, item:Item, keywords:string[], villages:string[] = []) {
   if (!item.url) return 0;
   const match = evaluateMatch(org, item, keywords, villages);
@@ -3570,6 +3600,10 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
   const canonicalSourcePlatform = canonicalPlatform(source.platform || inferPlatform(item.url || '') || 'Web');
   const isWebNews = canonicalSourcePlatform === 'Web';
   const isSocial = ['Facebook','Instagram','TikTok','LinkedIn','X'].includes(canonicalSourcePlatform);
+  // Açıq discovery-dən gələn yalnız-link/generic nəticələri görünən mention kimi saxlamırıq.
+  // Bunlar real post məzmunu oxunmadan kartlara düşəndə eyni görünən dublikatlar yaradır.
+  const openSocialDiscovery=isSocial && ((item.raw as any)?.open_social_discovery===true || (item.raw as any)?.discovered_without_platform_api===true || (item.raw as any)?.discovery_channel==='open_social_web');
+  if(openSocialDiscovery && !hasUsableSocialContent(item,canonicalSourcePlatform)) return 0;
   const storyTitleKey = normalizeForMatch(item.title || '');
   const canonicalUrl=isWebNews?canonicalStoryUrl(item):(isSocial?canonicalSocialStoryUrl(String((item.raw as any)?.canonical_url||item.url||''),canonicalSourcePlatform):'');
   const rawIdentity:any=item?.raw||{};
