@@ -2391,7 +2391,7 @@ for (const org of plan.organizations) {
       }
       const platformItems=dedupe(collected).slice(0,Math.min(OPEN_SOCIAL_TARGET_PER_PLATFORM,MAX_INGEST_ITEMS));
       socialItemsByPlatform.set(socialPlatform,platformItems);
-      console.log(`[${org.short_name}] ${socialPlatform} yekun namizəd: ${platformItems.length} | indeks-hit=${bingSocialHits} | profil-namizəd=${discoveredSocialProfiles.filter(x=>x.platform===socialPlatform).length}`);
+      console.log(`[${org.short_name}] ${socialPlatform} discovery: indeks-hit=${bingSocialHits} | profil-namizəd=${discoveredSocialProfiles.filter(x=>x.platform===socialPlatform).length} | real-post-namizəd=${platformItems.length}`);
     }
   }
 
@@ -2415,20 +2415,12 @@ for (const org of plan.organizations) {
     }catch(e){ console.log(`[${org.short_name}] Sosial profil reyestri public discovery yazılmadı: ${e?.message||e}`); }
   }
 
-  // Facebook/Instagram üçün mövcud Meta secret-lərindən istifadə edərək yalnız həmin
-  // təşkilata sərt uyğunlaşdırılmış profillərin real postlarını oxuyuruq. Meta icazəsi
-  // hansı profilə çatmırsa run qırılmır; aşağıdakı public Web discovery fallback qalır.
-  const metaProfiles=verifiedSocialProfiles.filter(x=>['Facebook','Instagram'].includes(x.platform)).slice(0,4);
-  if(!OPEN_SOCIAL_ONLY && metaProfiles.length && !gatewayBudgetLow()){
-    try{
-      const metaScan=await callMonitor({mode:'meta_public_profile_scan',organization_id:org.id,social_sources:metaProfiles},45000,1);
-      totalReceived += Number(metaScan?.items||0);
-      totalAccepted += Number(metaScan?.inserted||0);
-      totalInserted += Number(metaScan?.inserted||0);
-      console.log(`[${org.short_name}] Meta profil scan: profil=${Number(metaScan?.profiles||0)} items=${Number(metaScan?.items||0)} inserted=${Number(metaScan?.inserted||0)} fb=${Number(metaScan?.facebook_items||0)} ig=${Number(metaScan?.instagram_items||0)}`);
-      if(Array.isArray(metaScan?.failures)) for(const f of metaScan.failures.slice(0,3)) console.log(`[${org.short_name}] Meta profil scan fallback: ${f?.platform||''} ${f?.message||''}`);
-    }catch(e){ console.log(`[${org.short_name}] Meta profil scan alınmadı, public discovery davam edir: ${e?.message||e}`); }
-  }
+  // Facebook/Instagram real postlarının əsas yolu artıq `meta-monitor` job-dur.
+  // Bu gateway yalnız yeni rəsmi profil / konkret public post URL-si kəşf edir və
+  // profili `sources` reyestrinə yazır. Beləliklə 10 open-social shard eyni Meta API-ni
+  // paralel çağırmır; növbəti yüngül Meta rotasiyası reyestrdəki profili özü oxuyur.
+  const metaProfiles=verifiedSocialProfiles.filter(x=>['Facebook','Instagram'].includes(x.platform)).slice(0,8);
+  if(metaProfiles.length) console.log(`[${org.short_name}] Meta reyestr növbəsi: ${metaProfiles.length} profil meta-monitor tərəfindən yoxlanacaq.`);
 
   // Meta API public profilə icazə verməsə də məlum/təsdiqlənmiş profilin açıq HTML/JSON
   // hissəsindən real post permalink-lərini çıxarmağa çalışırıq. Əvvəl yalnız ilk 2 profil

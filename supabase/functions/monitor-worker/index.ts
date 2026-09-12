@@ -580,6 +580,30 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Meta monitoru üçün təşkilata artıq bağlanmış Facebook/Instagram profillərini
+    // yüngül şəkildə oxuyuruq. Bu reyestr `sources` cədvəlində qalır; radar, xəritə və
+    // digər mənbə axınlarının strukturuna toxunulmur. Search engine yalnız yeni profil
+    // tapmağa kömək edir, real paylaşımı isə mümkün olduqda Meta Graph API gətirir.
+    async function registeredMetaProfiles(organizationId:string, limit=12):Promise<any[]> {
+      const result:any=await admin.from('sources')
+        .select('id,organization_id,platform,url,is_active')
+        .eq('organization_id',organizationId)
+        .eq('is_active',true)
+        .limit(Math.max(1,Math.min(40,limit)));
+      if(result?.error) throw result.error;
+      const seen=new Set<string>();
+      const rows:any[]=[];
+      for(const row of (Array.isArray(result?.data)?result.data:[])){
+        const platform=canonicalPlatform(row?.platform||inferPlatform(row?.url||''));
+        if(!['Facebook','Instagram'].includes(platform)) continue;
+        const url=String(row?.url||'').trim(); if(!url) continue;
+        const key=`${platform}|${url.replace(/\/+$/,'').toLowerCase()}`;
+        if(seen.has(key)) continue; seen.add(key);
+        rows.push({platform,url,name:platform});
+      }
+      return rows.slice(0,Math.max(1,Math.min(20,limit)));
+    }
+
     // Meta monitoru təşkilatların ağır sources/alias/service-point kontekstini yükləməzdən
     // əvvəl işləyir. Meta Graph API materiallarının uyğunluq yoxlaması üçün təşkilatın əsas
     // məlumatları, açar-söz bankı və rayon yaşayış məntəqələri kifayətdir. Bu erkən çıxış
@@ -596,12 +620,46 @@ Deno.serve(async (req) => {
         const meta = await metaManagedItems(token, appSecret, options.meta_page_limit);
         let metaInserted = 0;
         let candidateOrganizations = 0;
+        let registryProfilesChecked = 0;
+        let registryItemsChecked = 0;
+        let registryFacebookItems = 0;
+        let registryInstagramItems = 0;
+        const registryFailures:any[]=[];
         for (const org of orgs) {
           if (Date.now() >= stopAt) break;
-          const relevantEntries = meta.items.filter((entry:any)=>metaEntryLikelyForOrg(entry,org));
+
+          // 1) Bizim Meta tətbiqinə birbaşa bağlı asset-lər.
+          const managedEntries = meta.items.filter((entry:any)=>metaEntryLikelyForOrg(entry,org));
+
+          // 2) Open-social discovery və ya admin tərəfindən `sources` reyestrinə
+          // bağlanmış rəsmi Facebook/Instagram profilləri. Bu hissə əvvəl ayrıca
+          // gateway lane-də qalırdı və OPEN_SOCIAL_ONLY zamanı real Meta scan-a
+          // çatmırdı. İndi kiçik təşkilat rotasiyası daxilində birbaşa yoxlanılır.
+          let registryScan:any={items:[],profiles:0,instagram_items:0,facebook_items:0,failures:[]};
+          try {
+            const profiles=await registeredMetaProfiles(String(org.id),12);
+            registryProfilesChecked += profiles.length;
+            if(profiles.length && Date.now() < stopAt-2500){
+              registryScan=await metaPublicProfileItems(token,appSecret,profiles);
+              registryItemsChecked += Number(registryScan?.items?.length||0);
+              registryFacebookItems += Number(registryScan?.facebook_items||0);
+              registryInstagramItems += Number(registryScan?.instagram_items||0);
+              if(Array.isArray(registryScan?.failures)) registryFailures.push(...registryScan.failures.slice(0,8).map((x:any)=>({organization:org.short_name,...x})));
+            }
+          } catch(e) { registryFailures.push({organization:org.short_name,stage:'registered-profiles',...errorInfo(e)}); }
+
+          // Eyni post həm managed asset, həm də registry scan ilə gəlirsə yalnız bir dəfə
+          // qiymətləndirilsin. URL + native ID/kind sabit dedup açarıdır.
+          const combined=[...managedEntries,...(Array.isArray(registryScan?.items)?registryScan.items:[])];
+          const seenEntries=new Set<string>();
+          const relevantEntries=combined.filter((entry:any)=>{
+            const raw=entry?.item?.raw||{};
+            const key=`${canonicalPlatform(entry?.platform||'')}|${String(entry?.item?.url||'').replace(/\/+$/,'').toLowerCase()}|${String(raw?.post_id||raw?.media_id||raw?.comment_id||'')}|${String(raw?.kind||'')}`;
+            if(seenEntries.has(key)) return false; seenEntries.add(key); return true;
+          });
           if (!relevantEntries.length) continue;
           candidateOrganizations++;
-          const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 12000);
+          const activeKeywordRows = await fetchOrganizationKeywords(admin, org.id, 2000);
           const keywords = installKeywordContext(org, activeKeywordRows);
           const lowerKeywords = keywords.map((k:string)=>k.toLocaleLowerCase('az-AZ'));
           let villageNames:string[] = [];
@@ -610,21 +668,24 @@ Deno.serve(async (req) => {
           for (const entry of relevantEntries) {
             if (Date.now() >= stopAt) break;
             const kind=String(entry?.item?.raw?.kind||'');
+            const trustedRegistry=String(entry?.item?.raw?.trusted_org_profile||'')==='true' || entry?.item?.raw?.trusted_org_profile===true;
             const trustedItem:any={
               ...entry.item,
               raw:{
                 ...(entry?.item?.raw||{}),
-                meta_asset_matched:true,
+                meta_asset_matched: managedEntries.includes(entry),
+                registered_org_profile: trustedRegistry || Boolean(entry?.profile_url),
                 ...(kind.includes('comment')?{parent_is_relevant:true}:{trusted_org_profile:true})
               }
             };
-            orgInserted += await safeSave(admin,org,{platform:entry.platform,url:entry.source},trustedItem,lowerKeywords,villageNames,errors,org.short_name,entry.platform);
+            const sourceUrl=String(entry?.profile_url||entry?.source||trustedItem?.url||'');
+            orgInserted += await safeSave(admin,org,{platform:entry.platform,url:sourceUrl},trustedItem,lowerKeywords,villageNames,errors,org.short_name,entry.platform);
           }
           metaInserted += orgInserted;
-          if (options.debug || orgInserted) details.push({organization:org.short_name,source:'Meta Graph API',items_checked:relevantEntries.length,inserted:orgInserted});
+          if (options.debug || orgInserted || registryScan?.profiles) details.push({organization:org.short_name,source:'Meta Graph API + profil reyestri',managed_items:managedEntries.length,registered_profiles:Number(registryScan?.profiles||0),items_checked:relevantEntries.length,inserted:orgInserted});
         }
         inserted += metaInserted;
-        return json({ok:true,run_id:runId,mode:'meta_monitor',checked:meta.items.length,new_mentions:metaInserted,pages:meta.pages,instagram_accounts:meta.instagram_accounts,facebook_items:meta.facebook_items,instagram_items:meta.instagram_items,candidate_organizations:candidateOrganizations,visible_assets:meta.visible_assets,failures:meta.failures,errors,details},200);
+        return json({ok:true,run_id:runId,mode:'meta_monitor',checked:meta.items.length+registryItemsChecked,new_mentions:metaInserted,pages:meta.pages,instagram_accounts:meta.instagram_accounts,facebook_items:meta.facebook_items+registryFacebookItems,instagram_items:meta.instagram_items+registryInstagramItems,candidate_organizations:candidateOrganizations,registered_profiles_checked:registryProfilesChecked,registered_profile_items:registryItemsChecked,visible_assets:meta.visible_assets,failures:[...(meta.failures||[]),...registryFailures.slice(0,20)],errors,details},200);
       } catch (e) {
         return json({ok:false,run_id:runId,mode:'meta_monitor',stage:currentStage,error:errorInfo(e).message,errors,details},200);
       }
@@ -2325,6 +2386,25 @@ async function metaGraph(path:string, token:string, appSecret:string):Promise<an
   return body;
 }
 
+function collectMetaAttachmentMedia(node:any):{images:string[];videos:string[]} {
+  const images:string[]=[]; const videos:string[]=[];
+  const add=(bucket:string[],value:any)=>{const v=String(value||'').trim();if(/^https?:\/\//i.test(v)&&!bucket.includes(v))bucket.push(v);};
+  const walk=(value:any)=>{
+    if(!value)return;
+    if(Array.isArray(value)){for(const x of value)walk(x);return;}
+    if(typeof value!=='object')return;
+    const type=String(value?.media_type||value?.type||'').toLowerCase();
+    const src=value?.media?.image?.src||value?.media?.source||value?.source||value?.url||'';
+    if(type.includes('video') || /\.(?:mp4|m3u8)(?:[?#]|$)/i.test(String(src||''))) add(videos,src);
+    else add(images,src);
+    if(value?.media?.image?.src)add(images,value.media.image.src);
+    if(value?.media?.source)add(videos,value.media.source);
+    if(value?.subattachments?.data)walk(value.subattachments.data);
+  };
+  walk(node);
+  return {images:images.slice(0,12),videos:videos.slice(0,8)};
+}
+
 async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1):Promise<{items:any[];pages:number;instagram_accounts:number;facebook_items:number;instagram_items:number;visible_assets:any[];failures:any[]}> {
   const out:any[]=[]; const failures:any[]=[]; const visibleAssets:any[]=[];
   const accounts=await metaGraph(`me/accounts?fields=id,name,access_token&limit=100`,userToken,appSecret);
@@ -2335,12 +2415,14 @@ async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1)
     if(!pageId||!pageToken) continue;
     visibleAssets.push({platform:'Facebook',id:pageId,name:pageName});
     try{
-      let path=`${pageId}/posts?fields=id,message,created_time,permalink_url,shares,reactions.limit(0).summary(true),comments.limit(50){id,message,created_time,from,like_count,comments.limit(50){id,message,created_time,from,like_count}}&limit=50`;
+      let path=`${pageId}/posts?fields=id,message,created_time,permalink_url,full_picture,attachments{media_type,media,target,url,subattachments{media_type,media,target,url}},shares,reactions.limit(0).summary(true),comments.limit(50){id,message,created_time,from,like_count,comments.limit(50){id,message,created_time,from,like_count}}&limit=50`;
       for(let pg=0;pg<pageLimit && path;pg++){
         const data=await metaGraph(path,pageToken,appSecret);
         for(const post of (Array.isArray(data?.data)?data.data:[])){
           const postText=String(post?.message||''); const postUrl=String(post?.permalink_url||`https://www.facebook.com/${post?.id||pageId}`);
-          out.push({platform:'Facebook',source:`Facebook: ${pageName}`,item:{title:postText.slice(0,180)||`${pageName} Facebook paylaşımı`,text:postText,url:postUrl,published_at:post?.created_time||null,author:pageName,raw:{kind:'facebook_post',post_id:post?.id||null,page_id:pageId,page_name:pageName,reaction_count:Number(post?.reactions?.summary?.total_count||0),comment_count:Number(post?.comments?.summary?.total_count||post?.comments?.data?.length||0),share_count:Number(post?.shares?.count||0),provider:'Meta Graph API v26.0'}}}); facebookItems++;
+          const fbMedia=collectMetaAttachmentMedia(post?.attachments?.data||[]);
+          if(post?.full_picture && !fbMedia.images.includes(String(post.full_picture))) fbMedia.images.unshift(String(post.full_picture));
+          out.push({platform:'Facebook',source:`Facebook: ${pageName}`,item:{title:postText.slice(0,180)||`${pageName} Facebook paylaşımı`,text:postText,url:postUrl,published_at:post?.created_time||null,image:fbMedia.images[0]||null,author:pageName,raw:{kind:'facebook_post',post_id:post?.id||null,page_id:pageId,page_name:pageName,reaction_count:Number(post?.reactions?.summary?.total_count||0),comment_count:Number(post?.comments?.summary?.total_count||post?.comments?.data?.length||0),share_count:Number(post?.shares?.count||0),image_url:fbMedia.images[0]||null,image_urls:fbMedia.images,video_url:fbMedia.videos[0]||null,video_urls:fbMedia.videos,provider:'Meta Graph API v26.0'}}}); facebookItems++;
           for(const c of (Array.isArray(post?.comments?.data)?post.comments.data:[])){
             const commentText=String(c?.message||'');
             out.push({platform:'Facebook',source:`Facebook: ${pageName}`,item:{title:`Facebook şərhi — ${pageName}`,text:`${postText}\n${commentText}`,url:postUrl,published_at:c?.created_time||null,author:c?.from?.name||null,raw:{kind:'facebook_comment',comment_id:c?.id||null,parent_post_id:post?.id||null,comment_text:commentText,parent_text:postText,like_count:Number(c?.like_count||0),author_id:c?.from?.id||null,page_id:pageId,provider:'Meta Graph API v26.0'}}}); facebookItems++;
@@ -2358,12 +2440,12 @@ async function metaManagedItems(userToken:string, appSecret:string, pageLimit=1)
       const link=await metaGraph(`${pageId}?fields=instagram_business_account{id,username,name}`,pageToken,appSecret);
       const ig=link?.instagram_business_account; if(!ig?.id) continue; instagramAccounts++;
       visibleAssets.push({platform:'Instagram',id:String(ig.id),username:String(ig.username||''),name:String(ig.name||'')});
-      let path=`${ig.id}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp,comments_count,like_count,thumbnail_url,comments.limit(50){id,text,timestamp,username,like_count,replies.limit(50){id,text,timestamp,username,like_count}}&limit=50`;
+      let path=`${ig.id}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp,comments_count,like_count,media_url,thumbnail_url,comments.limit(50){id,text,timestamp,username,like_count,replies.limit(50){id,text,timestamp,username,like_count}}&limit=50`;
       for(let pg=0;pg<pageLimit && path;pg++){
         const data=await metaGraph(path,pageToken,appSecret);
         for(const media of (Array.isArray(data?.data)?data.data:[])){
           const caption=String(media?.caption||''); const mediaUrl=String(media?.permalink||`https://www.instagram.com/${ig.username||''}/`);
-          out.push({platform:'Instagram',source:`Instagram: @${ig.username||ig.id}`,item:{title:caption.slice(0,180)||`@${ig.username||''} Instagram paylaşımı`,text:caption,url:mediaUrl,published_at:media?.timestamp||null,image:media?.thumbnail_url||null,author:ig?.username?`@${ig.username}`:null,raw:{kind:'instagram_media',media_id:media?.id||null,instagram_user_id:ig.id,username:ig?.username||null,media_type:media?.media_type||null,media_product_type:media?.media_product_type||null,comments_count:Number(media?.comments_count||0),like_count:Number(media?.like_count||0),provider:'Meta Graph API v26.0'}}}); instagramItems++;
+          out.push({platform:'Instagram',source:`Instagram: @${ig.username||ig.id}`,item:{title:caption.slice(0,180)||`@${ig.username||''} Instagram paylaşımı`,text:caption,url:mediaUrl,published_at:media?.timestamp||null,image:media?.media_url||media?.thumbnail_url||null,author:ig?.username?`@${ig.username}`:null,raw:{kind:'instagram_media',media_id:media?.id||null,instagram_user_id:ig.id,username:ig?.username||null,media_type:media?.media_type||null,media_product_type:media?.media_product_type||null,comments_count:Number(media?.comments_count||0),like_count:Number(media?.like_count||0),image_url:media?.media_url||media?.thumbnail_url||null,thumbnail_url:media?.thumbnail_url||null,provider:'Meta Graph API v26.0'}}}); instagramItems++;
           for(const c of (Array.isArray(media?.comments?.data)?media.comments.data:[])){
             const commentText=String(c?.text||'');
             out.push({platform:'Instagram',source:`Instagram: @${ig.username||ig.id}`,item:{title:`Instagram şərhi — @${ig.username||''}`,text:`${caption}\n${commentText}`,url:mediaUrl,published_at:c?.timestamp||null,author:c?.username?`@${c.username}`:null,raw:{kind:'instagram_comment',comment_id:c?.id||null,parent_media_id:media?.id||null,comment_text:commentText,parent_text:caption,username:c?.username||null,like_count:Number(c?.like_count||0),provider:'Meta Graph API v26.0'}}}); instagramItems++;
@@ -2437,28 +2519,30 @@ async function metaPublicProfileItems(userToken:string, appSecret:string, social
       const username=metaProfileUsername(profileUrl,'Instagram');
       if(!username || !managedIgId || !managedPageToken) continue;
       try{
-        const fields=`business_discovery.username(${username}){id,username,name,followers_count,media.limit(50){id,caption,media_type,media_product_type,permalink,timestamp,comments_count,like_count,thumbnail_url}}`;
+        const fields=`business_discovery.username(${username}){id,username,name,followers_count,media.limit(50){id,caption,media_type,media_product_type,permalink,timestamp,comments_count,like_count,media_url,thumbnail_url}}`;
         const data=await metaGraph(`${managedIgId}?fields=${encodeURIComponent(fields)}`,managedPageToken,appSecret);
         const bd=data?.business_discovery; if(!bd?.id) continue; profiles++;
         for(const media of (Array.isArray(bd?.media?.data)?bd.media.data:[])){
           const caption=String(media?.caption||'');
           const permalink=String(media?.permalink||profileUrl);
           items.push({platform:'Instagram',profile_url:profileUrl,source:`Instagram: @${bd?.username||username}`,item:{
-            title:caption.slice(0,180)||`@${bd?.username||username} Instagram paylaşımı`,text:caption,url:permalink,published_at:media?.timestamp||null,image:media?.thumbnail_url||null,author:`@${bd?.username||username}`,
-            raw:{kind:'instagram_business_discovery_media',provider:'Meta Graph API Business Discovery',trusted_org_profile:true,profile_url:profileUrl,instagram_user_id:bd?.id||null,username:bd?.username||username,media_id:media?.id||null,media_type:media?.media_type||null,media_product_type:media?.media_product_type||null,comments_count:Number(media?.comments_count||0),like_count:Number(media?.like_count||0),followers_count:Number(bd?.followers_count||0)}
+            title:caption.slice(0,180)||`@${bd?.username||username} Instagram paylaşımı`,text:caption,url:permalink,published_at:media?.timestamp||null,image:media?.media_url||media?.thumbnail_url||null,author:`@${bd?.username||username}`,
+            raw:{kind:'instagram_business_discovery_media',provider:'Meta Graph API Business Discovery',trusted_org_profile:true,profile_url:profileUrl,instagram_user_id:bd?.id||null,username:bd?.username||username,media_id:media?.id||null,media_type:media?.media_type||null,media_product_type:media?.media_product_type||null,comments_count:Number(media?.comments_count||0),like_count:Number(media?.like_count||0),image_url:media?.media_url||media?.thumbnail_url||null,thumbnail_url:media?.thumbnail_url||null,followers_count:Number(bd?.followers_count||0)}
           }}); instagramItems++;
         }
       }catch(e){failures.push({platform:'Instagram',profile:username,...errorInfo(e)});}
     } else if(platform==='Facebook'){
       const ref=metaProfileUsername(profileUrl,'Facebook'); if(!ref) continue;
       try{
-        const data=await metaGraph(`${ref}?fields=id,name,posts.limit(50){id,message,created_time,permalink_url,shares,reactions.limit(0).summary(true),comments.limit(0).summary(true)}`,managedPageToken||userToken,appSecret);
+        const data=await metaGraph(`${ref}?fields=id,name,posts.limit(50){id,message,created_time,permalink_url,full_picture,attachments{media_type,media,target,url,subattachments{media_type,media,target,url}},shares,reactions.limit(0).summary(true),comments.limit(0).summary(true)}`,managedPageToken||userToken,appSecret);
         if(!data?.id) continue; profiles++;
         for(const post of (Array.isArray(data?.posts?.data)?data.posts.data:[])){
           const text=String(post?.message||''); const permalink=String(post?.permalink_url||profileUrl);
+          const fbMedia=collectMetaAttachmentMedia(post?.attachments?.data||[]);
+          if(post?.full_picture && !fbMedia.images.includes(String(post.full_picture))) fbMedia.images.unshift(String(post.full_picture));
           items.push({platform:'Facebook',profile_url:profileUrl,source:`Facebook: ${data?.name||source?.name||ref}`,item:{
-            title:text.slice(0,180)||`${data?.name||'Facebook'} paylaşımı`,text,url:permalink,published_at:post?.created_time||null,author:data?.name||null,
-            raw:{kind:'facebook_public_page_post',provider:'Meta Graph API',trusted_org_profile:true,profile_url:profileUrl,page_id:data?.id||null,post_id:post?.id||null,reaction_count:Number(post?.reactions?.summary?.total_count||0),comment_count:Number(post?.comments?.summary?.total_count||0),share_count:Number(post?.shares?.count||0)}
+            title:text.slice(0,180)||`${data?.name||'Facebook'} paylaşımı`,text,url:permalink,published_at:post?.created_time||null,image:fbMedia.images[0]||null,author:data?.name||null,
+            raw:{kind:'facebook_public_page_post',provider:'Meta Graph API',trusted_org_profile:true,profile_url:profileUrl,page_id:data?.id||null,post_id:post?.id||null,reaction_count:Number(post?.reactions?.summary?.total_count||0),comment_count:Number(post?.comments?.summary?.total_count||0),share_count:Number(post?.shares?.count||0),image_url:fbMedia.images[0]||null,image_urls:fbMedia.images,video_url:fbMedia.videos[0]||null,video_urls:fbMedia.videos}
           }}); facebookItems++;
         }
       }catch(e){failures.push({platform:'Facebook',profile:ref,...errorInfo(e)});}
