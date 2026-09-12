@@ -492,9 +492,14 @@ function renderKeywords() {
       <span><small>Prioritet axtarılan</small><b>${keywordBankTotals.positive}</b></span>
       <span><small>Prioritet filtr</small><b>${keywordBankTotals.exclude}</b></span>
       <span><small>Ehtiyat rotasiya bankı</small><b>${keywordBankTotals.inactive}</b></span>
-      <div class="keyword-bank-note"><b>${keywordBankTotals.records_total}</b> qeyd artıq sistemdə istifadədədir: <b>${keywordBankTotals.total}</b> aktiv/prioritet qeyd hər taramada birinci işləyir, <b>${keywordBankTotals.inactive}</b> arxiv/deaktiv qeyd isə təhlükəsiz <strong>rotasiya bankı</strong> kimi mərhələli istifadə olunur. Beləliklə baza silinmir və birdən-birə bütün köhnə sözlər aktivləşdirilib əlaqəsiz nəticə yaratmır. <strong>Gemini AI</strong> radar zamanı bankı ələkdən keçirərək uyğun frazaları prioritet bankına daşıya bilər.</div>
+      <div class="keyword-bank-note"><b>${keywordBankTotals.positive}</b> aktiv mövzu frazası axtarış planına siqnal verir, <b>${keywordBankTotals.exclude}</b> aktiv filtr isə əlaqəsiz materialın saxlanmasının qarşısını alır. Təşkilatın adı/qısa adı/ad variantları və xidmət etdiyi rayon–yaşayış məntəqələri ayrıca identifikasiya qatıdır; onlar bu sayğaca süni şəkildə açar söz kimi doldurulmur. <b>${keywordBankTotals.inactive}</b> deaktiv qeyd axtarışda işləmir. <strong>Gemini AI</strong> yalnız aktivləşdirilmiş AI mərhələsində sərhəd halları analiz edib təhlükəsiz namizəd təklif edə bilər; qərar deterministik qaydalar və admin nəzarəti ilə təsdiqlənir.</div>
     </div>`;
   }
+  const guide=document.querySelector('#keyword-engine-guide');
+  if(guide){
+    guide.innerHTML=`<details class="keyword-engine-guide"><summary><span><strong>Aşkarlama mühərriki necə qərar verir?</strong><small>Bərdə SMSİİ nümunəsi ilə real işləmə ardıcıllığı</small></span><span class="keyword-list-open-mark">Aç ›</span></summary><div class="keyword-engine-flow" role="img" aria-label="Monitorinq uyğunluq ardıcıllığı"><div><b>1. Təşkilat</b><small>Bərdə SMSİİ + ad variantları</small></div><i>→</i><div><b>2. Coğrafiya</b><small>Bərdə + xidmət məntəqələri</small></div><i>→</i><div><b>3. Mövzu</b><small>məs: “subartezian quyusu”</small></div><i>→</i><div><b>4. Filtr</b><small>əlaqəsiz məna varsa kənarlaşdır</small></div><i>→</i><div><b>5. Nəticə</b><small>uyğunluq balı + mənbə + tarix</small></div></div><p class="keyword-engine-copy"><strong>Atomik söz</strong> tək anlayışdır (məs: “subartezian”); <strong>fraza</strong> isə daha dəqiq kontekstdir (məs: “subartezian quyusu”). Sistem sadəcə bir sözün görünməsinə görə materialı avtomatik doğru saymır: təşkilat identifikatoru, coğrafiya, mövzu siqnalı və mənfi filtr birlikdə qiymətləndirilir. Çox ümumi rayon/təşkilat adını mövzu bankına ayrıca əlavə etmək lazım deyil. Yeni söz əlavə ediləndə boşluqlar normallaşdırılır, dublikat yoxlanır və əvvəl deaktiv edilmiş eyni qeyd varsa yeni dublikat yaratmaq əvəzinə yenidən aktivləşdirilir.</p></details>`;
+  }
+
   const positiveGroups = keywordStats.filter(x => x.positive_count > 0);
   el.innerHTML = (positiveGroups.map(x => keywordGroupSummary(x,'positive')).join('') || '<div class="empty compact">Açar söz yoxdur.</div>');
 
@@ -1081,14 +1086,14 @@ async function runFullDatabaseRefilter() {
     toast(`Süzgəc tamamlandı: ${checked} qeyd yoxlandı, ${filtered} uyğunsuz qeyd gizlədildi${failed?`, ${failed} təşkilatda xəta oldu`:''}.`,failed?'error':'success');
     resetGlobalExcludeCache(); await renderRelevanceReview();
   }finally{
-    setTimeout(()=>{btn.disabled=false;setSieveButtonState(btn,0,'Bütün bazanı ələkdən keçir');},900);
+    setTimeout(()=>{btn.disabled=false;setSieveButtonState(btn,0,'Saxlanmış nəticələri yenidən yoxla');},900);
   }
 }
 
 async function runReviewAutoSieve(event) {
   event?.preventDefault?.(); event?.stopPropagation?.();
   const btn=document.querySelector('#review-auto-sieve-btn'); if(!btn||btn.disabled)return;
-  btn.disabled=true; setSieveButtonState(btn,3,'Tövsiyələr ələnir…');
+  btn.disabled=true; setSieveButtonState(btn,3,'AI tövsiyələri yoxlanır…');
   let checked=0,filtered=0,learnedPositive=0,learnedExclude=0,failed=0;
   try{
     const activeOrgs=sortedOrganizations(orgs).filter(o=>o.service_status!=='archived');
@@ -1100,11 +1105,11 @@ async function runReviewAutoSieve(event) {
       checked+=Number(data.checked||0); filtered+=Number(data.filtered_out||0);
       learnedPositive+=Number(data.positive_added||0); learnedExclude+=Number(data.exclude_added||0);
     }
-    setSieveButtonState(btn,100,'Tövsiyələr təmizləndi');
+    setSieveButtonState(btn,100,'AI yoxlaması tamamlandı');
     resetGlobalExcludeCache(); await refresh(); await renderRelevanceReview();
     toast(`Uyğunluq siyahısı yeniləndi: ${checked} qeyd yoxlandı, ${filtered} qeyd kənarlaşdırıldı, ${learnedPositive} yeni açar söz, ${learnedExclude} yeni filtr əlavə edildi${failed?`, ${failed} təşkilatda xəta oldu`:''}.`,failed?'error':'success');
   } finally {
-    setTimeout(()=>{btn.disabled=false;setSieveButtonState(btn,0,'Tövsiyələri avtomatik ələkdən keçir');},900);
+    setTimeout(()=>{btn.disabled=false;setSieveButtonState(btn,0,'AI dəstəkli tövsiyələri yoxla');},900);
   }
 }
 
@@ -1978,23 +1983,40 @@ document.querySelector('#village-form').onsubmit = async e => {
   toast(result.error ? result.error.message : 'Yaşayış məntəqəsi əlavə edildi', result.error ? 'error' : 'success');
   if (!result.error) { e.target.reset(); await refresh(); }
 };
+function cleanAdminKeywordInput(value='') { return String(value||'').normalize('NFKC').replace(/\s+/g,' ').trim(); }
+function validateAdminKeyword(value, mode='positive') {
+  const v=cleanAdminKeywordInput(value); const words=v.split(/\s+/).filter(Boolean);
+  if(v.length<3) return 'Ən az 3 simvolluq mənalı söz və ya fraza yaz.';
+  if(v.length>90 || words.length>6) return 'Açar söz qısa və konkret olmalıdır: maksimum 90 simvol və 6 söz.';
+  if(!/[\p{L}\p{N}]/u.test(v)) return 'Mənalı hərf və ya rəqəm daxil et.';
+  if(mode==='positive' && words.length===1 && orgs.some(o=>[o.name,o.short_name].some(x=>normalizeKeywordValue(x)===normalizeKeywordValue(v)))) return 'Təşkilat adı identifikasiya qatında artıq işləyir; onu tək mövzu sözü kimi əlavə etmə.';
+  return '';
+}
+async function upsertGlobalKeyword(value, kind) {
+  const cleaned=cleanAdminKeywordInput(value); const mode=kind==='exclude'?'exclude':'positive';
+  const validation=validateAdminKeyword(cleaned,mode); if(validation) return {error:{message:validation,validation:true}};
+  const existing=allKeywordRows.find(r=>!r.organization_id&&keywordBucket(r)===mode&&normalizeKeywordValue(r.value)===normalizeKeywordValue(cleaned));
+  if(existing){
+    if(existing.is_active===false){ const res=await supabase.from('keywords').update({is_active:true,value:cleaned}).eq('id',existing.id); return {...res,reactivated:!res.error}; }
+    return {duplicate:true};
+  }
+  return await supabase.from('keywords').insert({organization_id:null,value:cleaned,kind,is_active:true});
+}
 document.querySelector('#keyword-form').onsubmit = async e => {
-  e.preventDefault();
-  const value=document.querySelector('#keyword-value').value.trim();
-  if (!value) return;
-  if(globalKeywordExists(value,'positive')) return toast('Bu qlobal açar söz artıq mövcuddur.','info');
-  const { error } = await supabase.from('keywords').insert({organization_id:null,value,kind:'phrase',is_active:true});
-  toast(error?.code==='23505'?'Bu qlobal açar söz artıq mövcuddur.':(error?.message||'Qlobal açar söz əlavə edildi'),error?'error':'success');
-  if(!error){e.target.reset();await refresh();}
+  e.preventDefault(); const input=document.querySelector('#keyword-value'); const value=cleanAdminKeywordInput(input.value); if(!value)return;
+  const result=await upsertGlobalKeyword(value,'phrase');
+  if(result.duplicate) return toast('Bu qlobal mövzu sözü/frazası artıq aktivdir.','info');
+  if(result.error) return toast(result.error.message,'error');
+  toast(result.reactivated?'Mövcud deaktiv mövzu frazası yenidən aktivləşdirildi.':'Qlobal mövzu sözü/frazası əlavə edildi.','success');
+  e.target.reset(); await refresh();
 };
 document.querySelector('#exclude-form').onsubmit = async e => {
-  e.preventDefault();
-  const value = document.querySelector('#exclude-value').value.trim();
-  if (!value) return;
-  if(globalKeywordExists(value,'exclude')) return toast('Bu qlobal filtr artıq mövcuddur.','info');
-  const { error } = await supabase.from('keywords').insert({organization_id:null,value,kind:'exclude',is_active:true});
-  toast(error?.code==='23505'?'Bu qlobal filtr artıq mövcuddur.':(error?.message||'Qlobal axtarılmamalı söz əlavə edildi'), error ? 'error' : 'success');
-  if (!error) { resetGlobalExcludeCache(); e.target.reset(); await refresh(); toast('Filtr görünüşlərdə dərhal tətbiq olunur; bazadakı köhnə qeydlər növbəti worker yoxlamasında təsdiqlənəcək.','success'); }
+  e.preventDefault(); const input=document.querySelector('#exclude-value'); const value=cleanAdminKeywordInput(input.value); if(!value)return;
+  const result=await upsertGlobalKeyword(value,'exclude');
+  if(result.duplicate) return toast('Bu qlobal filtr artıq aktivdir.','info');
+  if(result.error) return toast(result.error.message,'error');
+  resetGlobalExcludeCache(); toast(result.reactivated?'Mövcud deaktiv filtr yenidən aktivləşdirildi.':'Qlobal filtr əlavə edildi.','success');
+  e.target.reset(); await refresh();
 };
 document.querySelector('#source-form').onsubmit = async e => {
   e.preventDefault();
