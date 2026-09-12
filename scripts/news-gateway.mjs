@@ -704,7 +704,9 @@ function socialIndexedDiscoveryItem(item={},platform,org,query='',provider='publ
   if(!title && text.length<24) return null;
   const transient={title,text,url};
   const profileUrl=canonicalSocialProfileUrl(url,platform);
-  if(!socialProfileCandidateMatchesOrg({platform,url:profileUrl||url},transient,org)) return null;
+  const identityVerified=socialProfileCandidateMatchesOrg({platform,url:profileUrl||url},transient,org);
+  if(!identityVerified) return null;
+  const profileStrongMatch=Boolean(profileUrl && socialProfileMatchesOrg({platform,url:profileUrl},org));
   return {
     title:title || `${org?.short_name||org?.name||'Təşkilat'} — ${platform} açıq paylaşımı`,
     text,
@@ -720,6 +722,9 @@ function socialIndexedDiscoveryItem(item={},platform,org,query='',provider='publ
       public_social:true,
       search_index_snippet:true,
       content_partial:true,
+      discovery_identity_verified:true,
+      trusted_org_profile:profileStrongMatch,
+      social_profile_url:profileUrl||null,
       discovery_query:String(query||'').slice(0,500),
       provider
     }
@@ -741,15 +746,21 @@ async function ingestInChunks({org, platform, label, items}) {
     sample_results: [], screenshot_targets: [], accepted_targets: [], errors: [], chunk_failures: 0
   };
 
+  aggregate.reason_counts = {};
   const mergeResult = (result) => {
     aggregate.received += Number(result?.received || 0);
     aggregate.accepted += Number(result?.accepted || 0);
     aggregate.rejected += Number(result?.rejected || 0);
     aggregate.inserted += Number(result?.inserted || 0);
-    if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,3));
+    if (Array.isArray(result?.sample_results)) aggregate.sample_results.push(...result.sample_results.slice(0,5));
     if (Array.isArray(result?.screenshot_targets)) aggregate.screenshot_targets.push(...result.screenshot_targets);
     if (Array.isArray(result?.accepted_targets)) aggregate.accepted_targets.push(...result.accepted_targets);
     if (Array.isArray(result?.errors)) aggregate.errors.push(...result.errors.slice(0,3));
+    if (result?.reason_counts && typeof result.reason_counts === 'object') {
+      for (const [reason,count] of Object.entries(result.reason_counts)) {
+        aggregate.reason_counts[reason] = Number(aggregate.reason_counts[reason]||0) + Number(count||0);
+      }
+    }
   };
 
   const sendPart = async (part, tag, timeoutMs = 35000, retries = 2) => {
@@ -758,7 +769,11 @@ async function ingestInChunks({org, platform, label, items}) {
       source_label:label, items:part
     }, timeoutMs, retries);
     mergeResult(result);
-    console.log(`[${org.short_name}] ${label}: ${tag} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}`);
+    const reasons=result?.reason_counts && typeof result.reason_counts==='object'
+      ? Object.entries(result.reason_counts).sort((a,b)=>Number(b[1]||0)-Number(a[1]||0)).slice(0,5).map(([k,v])=>`${k}:${v}`).join(', ')
+      : '';
+    console.log(`[${org.short_name}] ${label}: ${tag} — received=${result?.received||0}, accepted=${result?.accepted||0}, rejected=${result?.rejected||0}, inserted=${result?.inserted||0}${reasons?` | səbəblər: ${reasons}`:''}`);
+    logIngestSamples(org.short_name,label,result);
     return result;
   };
 
@@ -2326,16 +2341,21 @@ for (const org of plan.organizations) {
   }
 
   if(OPEN_SOCIAL_ONLY){
-    console.log(`[${org.short_name}] 🌐 Açıq sosial şəbəkə lane-i: API-siz public discovery nəticələri yazılır.`);
+    console.log(`[${org.short_name}] 🌐 Açıq sosial şəbəkə lane-i: API-siz public discovery nəticələri qiymətləndirilir.`);
+    let orgSocialReceived=0,orgSocialAccepted=0,orgSocialRejected=0,orgSocialInserted=0;
+    const orgSocialReasonCounts={};
     for(const [socialPlatform,socialItems] of socialItemsByPlatform.entries()){
       if(gatewayBudgetLow()) break;
       if(!Array.isArray(socialItems)||!socialItems.length) continue;
       const marked=socialItems.map(item=>({...item,raw:{...(item?.raw||{}),open_social_discovery:true,discovery_channel:'open_social_web',discovered_without_platform_api:true}}));
       const result=await ingestInChunks({org,platform:socialPlatform,label:`🌐 Açıq sosial şəbəkə • ${socialPlatform}`,items:marked});
-      totalReceived += Number(result?.received||0);
-      totalAccepted += Number(result?.accepted||0);
-      totalRejected += Number(result?.rejected||0);
-      totalInserted += Number(result?.inserted||0);
+      const rr=Number(result?.received||0), aa=Number(result?.accepted||0), rj=Number(result?.rejected||0), ii=Number(result?.inserted||0);
+      totalReceived += rr;
+      totalAccepted += aa;
+      totalRejected += rj;
+      totalInserted += ii;
+      orgSocialReceived += rr; orgSocialAccepted += aa; orgSocialRejected += rj; orgSocialInserted += ii;
+      if(result?.reason_counts && typeof result.reason_counts==='object') for(const [reason,count] of Object.entries(result.reason_counts)) orgSocialReasonCounts[reason]=Number(orgSocialReasonCounts[reason]||0)+Number(count||0);
       totalChunkFailures += Number(result?.chunk_failures||0);
       const acceptedTargets=Array.isArray(result?.accepted_targets)?result.accepted_targets:[];
       for(const target of acceptedTargets.slice(0,MAX_ENRICH_ITEMS)){
@@ -2354,7 +2374,8 @@ for (const org of plan.organizations) {
         }catch(e){console.log(`[${org.short_name}] Açıq sosial metadata yenilənmədi: ${e?.message||e}`);}
       }
     }
-    console.log(`[${org.short_name}] 🌐 Açıq sosial şəbəkə tamamlandı.`);
+    const reasonSummary=Object.entries(orgSocialReasonCounts).sort((a,b)=>Number(b[1]||0)-Number(a[1]||0)).slice(0,6).map(([k,v])=>`${k}:${v}`).join(', ');
+    console.log(`[${org.short_name}] 🌐 Açıq sosial şəbəkə tamamlandı — received=${orgSocialReceived} accepted=${orgSocialAccepted} rejected=${orgSocialRejected} inserted=${orgSocialInserted}${reasonSummary?` | səbəblər: ${reasonSummary}`:''}.`);
     continue;
   }
 

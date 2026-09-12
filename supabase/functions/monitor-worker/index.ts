@@ -1175,13 +1175,16 @@ Deno.serve(async (req) => {
       let rejected = 0;
       let saved = 0;
       const samples:any[] = [];
+      const reasonCounts:Record<string,number> = {};
       const acceptedItems:Item[] = [];
       for (const incoming of dedupeItems(options.news_items || []).slice(0,250)) {
         const item:Item={...incoming,published_at:source.platform==='Web'?reliableWebPublishedDate(incoming):(incoming?.published_at||null)};
         const match = evaluateMatch(org,item,lowerKeywords,villageNames);
         if (!match.accepted) await autoLearnKeywordBank(admin,org,item,match);
         if (match.accepted) accepted++; else rejected++;
-        if (samples.length < 10) samples.push({title:item.title || '',url:item.url || '',accepted:match.accepted,reason:match.reason,matched_terms:match.matches});
+        const reasonKey=String(match.reason||'naməlum');
+        reasonCounts[reasonKey]=(reasonCounts[reasonKey]||0)+1;
+        if (samples.length < 12) samples.push({title:item.title || '',url:item.url || '',accepted:match.accepted,reason:match.reason,matched_terms:match.matches,excluded_terms:match.excluded_terms||[],acceptance_strength:match.acceptance_strength||'weak'});
         if (!match.accepted) continue;
         acceptedItems.push(item);
         saved += await safeSave(admin,org,source,item,lowerKeywords,villageNames,errors,org.short_name,options.source_label || options.source_platform || 'News Gateway');
@@ -1204,7 +1207,7 @@ Deno.serve(async (req) => {
           }
         }
       }
-      return json({ok:true,run_id:runId,mode:'news_ingest',organization:org.short_name,source_platform:source.platform,received:(options.news_items||[]).length,accepted,rejected,inserted:saved,sample_results:samples,accepted_targets:acceptedTargets,screenshot_targets:screenshotTargets,errors},200);
+      return json({ok:true,run_id:runId,mode:'news_ingest',organization:org.short_name,source_platform:source.platform,received:(options.news_items||[]).length,accepted,rejected,inserted:saved,reason_counts:reasonCounts,sample_results:samples,accepted_targets:acceptedTargets,screenshot_targets:screenshotTargets,errors},200);
     }
 
     for (const org of orgs) {
@@ -4311,6 +4314,13 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // sosial profil paylaşımı özü güclü aidiyyət siqnalıdır. Belə postun mətnində təşkilat adı
   // hər dəfə təkrarlanmadığı üçün adi keyword filtri onu itirməməlidir.
   const trustedOrgProfile = raw.trusted_org_profile === true;
+  // Açıq sosial discovery-də axtarış indeksi post URL-ni təşkilatın handle-i,
+  // tam/qısa adı və ya rayon+su/meliorasiya siqnalı ilə əvvəlcədən təsdiqləyir.
+  // Bu flag yalnız news-gateway-in sərt socialProfileCandidateMatchesOrg yoxlamasından
+  // keçən konkret post/reel/status URL-lərinə yazılır; profil/search landing-page deyil.
+  const verifiedOpenSocialIdentity = raw.open_social_discovery === true
+    && raw.discovery_identity_verified === true
+    && raw.search_index_snippet === true;
 
   // Aidiyyəti video təşkilat filtrlərindən artıq keçibsə, onun bütün rəyləri saxlanılır.
   // Rəyin özündə "Bərdə" və ya "suvarma" sözünün təkrarlanmaması vacib məlumatı itirməsin.
@@ -4443,8 +4453,14 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const hardForeignScript = /[\u0370-\u03FF\u0590-\u05FF\u0600-\u06FF\u0900-\u0D7F\u0E00-\u0FFF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u.test(`${item.title||''} ${item.text||''}`);
   const foreignScriptRejected = hardForeignScript && strongDirectMatches.length===0 && !locationHit && !coreTopicHit && !azerbaijanContext;
 
+  const verifiedOpenSocialTopic = verifiedOpenSocialIdentity && (
+    coreTopicHit || globalTopicHit || organizationBankKeywordHits.length>0 ||
+    scopedKeywordHits.length>0 || flexibleBankHits.length>0 || directMatches.length>0
+  );
+
   const acceptanceStrength =
     trustedParentComment || trustedOrgProfile ? 'trusted'
+    : verifiedOpenSocialTopic ? 'open-social-verified'
     : strongDirectMatches.length>0 ? 'direct'
     : (districtHit && coreTopicHit) || (villageHits.length>0 && coreTopicHit) ? 'location-topic'
     : historicalQueryTopicHit ? 'archive-location-topic'
@@ -4452,9 +4468,10 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     : safeCuratedBankHit ? 'curated'
     : safeFlexibleBankHit ? 'flexible'
     : 'weak';
-  const stableAcceptance = ['trusted','direct','location-topic','archive-location-topic','scoped-acronym'].includes(acceptanceStrength);
+  const stableAcceptance = ['trusted','open-social-verified','direct','location-topic','archive-location-topic','scoped-acronym'].includes(acceptanceStrength);
 
   const standardAccepted = !excludedByRule && (trustedParentComment || (!negativeOnly && !foreignHit && (
+    verifiedOpenSocialTopic ||
     strongDirectMatches.length>0 ||
     ambiguousDirectSafe ||
     safeCuratedBankHit ||
@@ -4487,6 +4504,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
     stable_acceptance:Boolean(accepted && stableAcceptance),
     reason:accepted
       ? (trustedParentComment?'aidiyyəti-videonun-rəyi'
+        :verifiedOpenSocialTopic?'açıq-sosial-təsdiqli-təşkilat-mövzu'
         :directMatches.length?'təşkilat-adı-uyğunluğu'
         :safeCuratedBankHit?'açar-söz-bankı-dəqiq-uyğunluğu'
         :safeFlexibleBankHit?'açar-söz-bankı-elastik-uyğunluğu'
