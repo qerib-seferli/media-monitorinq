@@ -3691,8 +3691,17 @@ async function save(admin:any, org:any, source:any, item:Item, keywords:string[]
     const existingRaw:any=(existing as any)?.raw_payload||{};
     const existingReviewStatus=String(existingRaw?.admin_review_status||'');
     const canRestoreExisting=existingReviewStatus!=='blocked' && existingRaw?.canonical_duplicate!==true;
-    if (isWebNews && canRestoreExisting && Number((existing as any)?.relevance_score||0)<=0) {
-      refresh.relevance_score=Math.min(100,Math.max(50,relevance));
+    if ((isWebNews || isSocial) && canRestoreExisting && Number((existing as any)?.relevance_score||0)<=0) {
+      refresh.relevance_score=Math.min(100,Math.max(isSocial?40:50,relevance));
+      refresh.priority_score=Math.min(100,Math.max(isSocial?40:50,priority));
+      if(isSocial){
+        const mergedRaw:any=refresh.raw_payload||{};
+        mergedRaw.enrichment_rejected=false;
+        mergedRaw.content_unavailable_after_enrich=false;
+        mergedRaw.restored_from_public_index=true;
+        mergedRaw.restored_at=new Date().toISOString();
+        refresh.raw_payload=mergedRaw;
+      }
     }
     const refreshPublished=canonicalSourcePlatform==='Web'?reliableWebPublishedDate(item):item.published_at;
     if (refreshPublished) refresh.published_at=refreshPublished;
@@ -4469,6 +4478,7 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const verifiedOpenSocialIdentity = raw.open_social_discovery === true
     && raw.discovery_identity_verified === true
     && raw.search_index_snippet === true;
+  const verifiedOpenSocialQueryScope = verifiedOpenSocialIdentity && raw.discovery_query_scope_verified === true;
 
   // Aidiyyəti video təşkilat filtrlərindən artıq keçibsə, onun bütün rəyləri saxlanılır.
   // Rəyin özündə "Bərdə" və ya "suvarma" sözünün təkrarlanmaması vacib məlumatı itirməsin.
@@ -4489,6 +4499,11 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   const positiveTopic = webLike
     ? (coreTopicHit || globalTopicHit)
     : (coreTopicHit || globalTopicHit || scopedKeywordHits.length>0 || organizationBankKeywordHits.length>0 || flexibleBankHits.length>0);
+  // Açıq sosial axtarışda konkret post URL-si rayon+su/meliorasiya sorğusundan gəlib
+  // gateway tərəfindən ayrıca təsdiqlənibsə, search indeksinin qısa snippet-i bəzən
+  // rayon adını kəsdiyi üçün həmin scope-u zəif, amma etibarlı əlavə siqnal kimi saxlayırıq.
+  // Yalnız gateway-in discovery_query_scope_verified bayrağı ilə işləyir.
+  const openSocialQueryScopedTopic = verifiedOpenSocialQueryScope && (positiveTopic || locationHit || directMatches.length>0);
 
   const exactSystemExclusionHits = effectiveSystemExcludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
   const exactDatabaseExclusionHits = effectiveDatabaseExcludeTerms.filter(term=>contains(normalized,term)).slice(0,8);
@@ -4603,7 +4618,8 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
 
   const verifiedOpenSocialTopic = verifiedOpenSocialIdentity && (
     coreTopicHit || globalTopicHit || organizationBankKeywordHits.length>0 ||
-    scopedKeywordHits.length>0 || flexibleBankHits.length>0 || directMatches.length>0
+    scopedKeywordHits.length>0 || flexibleBankHits.length>0 || directMatches.length>0 ||
+    openSocialQueryScopedTopic
   );
 
   const acceptanceStrength =

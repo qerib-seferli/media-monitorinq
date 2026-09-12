@@ -292,6 +292,30 @@ function socialProfileCandidateMatchesOrg(profile={}, item={}, org={}){
   return Boolean(concretePost && district && district.length>=4 && hay.includes(district) && topicSignal);
 }
 
+
+function socialSearchEvidenceMatchesOrg(item={}, org={}, query='', platform=''){
+  const url=String(item?.url||'').trim();
+  if(!isSocialPostUrl(url,platform)) return false;
+  const own=asciiToken(`${item?.title||''} ${item?.text||item?.description||''} ${url}`);
+  const q=asciiToken(String(query||''));
+  if(!own) return false;
+  const identities=[org?.short_name,org?.name,...(Array.isArray(org?.aliases)?org.aliases.map(x=>x?.alias||''):[])]
+    .map(x=>asciiToken(String(x||''))).filter(x=>x.length>=5);
+  if(identities.some(x=>own.includes(x))) return true;
+  const districts=organizationDistricts(org).map(x=>asciiToken(String(x||''))).filter(x=>x.length>=4);
+  const ownDistrict=districts.some(d=>own.includes(d));
+  const queryDistrict=districts.some(d=>q.includes(d));
+  const topicRe=/(?:suvar|melior|sukanal|su kanal|kanaliz|drenaj|kollektor|subartez|artez|nasos|hidrotex|irriqas|su techizat|su təminat|su problemi|susuz|su veril|su gelm|su gəlm|su xetti|su xətti|su anbari|su anbar|quyu|kanal temir|kanal təmir|kanal temiz|kanal təmiz)/;
+  const ownTopic=topicRe.test(own);
+  const queryTopic=topicRe.test(q);
+  // Search engine nəticəsi konkret post/reel/status URL-sidir. Sorğu həmin rayon +
+  // su/meliorasiya mövzusuna bağlanıbsa və nəticənin öz title/snippet-ində də ən azı
+  // rayon və ya mövzu siqnalı qalırsa, namizədi enrichment mərhələsinə buraxırıq.
+  // Bu, "index-hit var, received=0" boşluğunu aradan qaldırır, amma sırf query-yə
+  // görə əlaqəsiz nəticəni qəbul etmir.
+  return Boolean((ownDistrict && (ownTopic||queryTopic)) || (queryDistrict && queryTopic && (ownDistrict||ownTopic)));
+}
+
 function isSocialPostUrl(value='', platform=''){
   try{
     const u=new URL(String(value||''));
@@ -737,7 +761,9 @@ function socialIndexedDiscoveryItem(item={},platform,org,query='',provider='publ
   if(!title && text.length<24) return null;
   const transient={title,text,url};
   const profileUrl=canonicalSocialProfileUrl(url,platform);
-  const identityVerified=socialProfileCandidateMatchesOrg({platform,url:profileUrl||url},transient,org);
+  const strictIdentityVerified=socialProfileCandidateMatchesOrg({platform,url:profileUrl||url},transient,org);
+  const queryScopeVerified=socialSearchEvidenceMatchesOrg(transient,org,query,platform);
+  const identityVerified=strictIdentityVerified||queryScopeVerified;
   if(!identityVerified) return null;
   const profileStrongMatch=Boolean(profileUrl && socialProfileMatchesOrg({platform,url:profileUrl},org));
   const indexedDate=item?.published_at||null;
@@ -762,6 +788,7 @@ function socialIndexedDiscoveryItem(item={},platform,org,query='',provider='publ
       search_index_snippet:true,
       content_partial:true,
       discovery_identity_verified:true,
+      discovery_query_scope_verified:queryScopeVerified,
       trusted_org_profile:profileStrongMatch,
       social_profile_url:profileUrl||null,
       discovery_query:String(query||'').slice(0,500),
@@ -2302,7 +2329,9 @@ for (const org of plan.organizations) {
               const transient={title:item?.title||'',text:item?.text||item?.description||'',url:item?.url||''};
               // Axtarış nəticəsinin title/snippet-i bazaya yazılmır. Yalnız həmin nəticə
               // təşkilata sərt uyğun gəlirsə direct post URL-sini ayrıca material kimi saxlayırıq.
-              if(socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl||item.url},transient,org)){
+              const candidateOk=socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl||item.url},transient,org)
+                || socialSearchEvidenceMatchesOrg(transient,org,q,socialPlatform);
+              if(candidateOk){
                 const direct=await directSocialPostFromDiscoveredUrl(item.url,socialPlatform,org);
                 if(direct) collected.push(direct);
                 else {
@@ -2349,7 +2378,8 @@ for (const org of plan.organizations) {
             }
             if(profileUrl && !isSocialPostUrl(item?.url||'',socialPlatform)) continue;
             if(isSocialPostUrl(item?.url||'',socialPlatform)){
-              const candidateOk=socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl||item.url},transient,org);
+              const candidateOk=socialProfileCandidateMatchesOrg({platform:socialPlatform,url:profileUrl||item.url},transient,org)
+                || socialSearchEvidenceMatchesOrg(transient,org,braveQuery,socialPlatform);
               if(!candidateOk) continue;
               const direct=await directSocialPostFromDiscoveredUrl(item.url,socialPlatform,org);
               const indexed=direct?null:socialIndexedDiscoveryItem({title:item?.title||'',text:item?.description||'',description:item?.description||'',url:item?.url||''},socialPlatform,org,braveQuery,'Brave Search public index');
