@@ -48,6 +48,25 @@ function applyUserVisibleQuality(q){
   // relevance >=31 olan düzgün köhnə materialları da qoruyuruq.
   return q.gte('relevance_score',31);
 }
+function isObviousLegacyFalsePositive(m){
+  const p=canonicalPlatform(m?.source_platform);
+  if(p!=='YouTube')return false;
+  const raw=m?.raw_payload||{};
+  const kind=String(raw?.kind||'').toLowerCase();
+  const text=normalizeStoryTitle(`${m?.title||''} ${m?.original_text||''} ${m?.summary||''}`);
+  // Backend refilter köhnə bazanı mərhələli təmizləyənədək istifadəçini ən aydın
+  // false-positive-lərdən qoruyan müdafiə qatıdır. Su/meliorasiya siqnalı varsa gizlətmir.
+  const water=/(suvar|melior|subartez|artez|drenaj|kollektor|irriqas|kanaliz|nasos|su techizat|icmeli su|su xetti|su anbari|hidrotex)/.test(text);
+  const entertainment=/(^| )(toy|toyu|toyda|gelin|bey|nisan|wedding|konsert|futbol|serial|film|music|remix|prank|gameplay)( |$)/.test(text);
+  if(entertainment&&!water)return true;
+  if(/comment|reply/.test(kind)){
+    const parentScore=Number(raw?.parent_relevance_score||raw?.parent_relevance||0);
+    const ownStrong=water || /(?:adsea|smsii|rsmx|sukanal)/.test(text);
+    if(Number(m?.relevance_score||0)<=40 && !ownStrong)return true;
+    if(parentScore>0 && parentScore<50 && !ownStrong)return true;
+  }
+  return false;
+}
 function openSocialChip(m){
   return isOpenSocialDiscovery(m)?'<span class="open-social-chip" title="Platform API-sindən asılı olmayan açıq internet kəşfiyyatı">🌐 Açıq sosial şəbəkə</span>':'';
 }
@@ -397,7 +416,7 @@ async function load({reset=false}={}){
     const dateSafeBatch=period.value==='all' ? rawBatch : rawBatch.filter(hasReliablePublishedDate);
     const batch=filterExcludedMentions(dateSafeBatch,globalExcludes)
       .filter(row=>matchesContentType(row))
-      .filter(row=>!isOpenSocialPlaceholder(row));
+      .filter(row=>!isOpenSocialPlaceholder(row) && !isObviousLegacyFalsePositive(row));
     rows=sortRowsByPublication(mergeUnique(rows,batch));
     done=rawBatch.length<PAGE_SIZE;
     page++;

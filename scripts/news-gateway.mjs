@@ -1332,6 +1332,18 @@ function trimRelatedListingTail(value='') {
   const compactRe=/(?:^|\s)\d{1,4}\s+\d{1,2}\s+(?:sent|sentyabr|oktyabr|noyabr|dekabr|avqust|iyul|iyun|may|aprel|mart|fevral|yanvar)\s+(?:19|20)\d{2}\s+(?:siyas[eə]t|iqtisadiyyat|c[eə]miyy[eə]t|idman|hadis[eə]|dünya|m[eə]d[eə]niyy[eə]t)\b/iu;
   const m=compactRe.exec(text.slice(180));
   if(m) return text.slice(0,180+(m.index||0)).trim();
+
+  // Bəzi xəbər saytlarında "Digər xəbərlər" başlığı DOM-dan çıxsa da kartların tarixləri
+  // əsas mətnin arxasına yapışır. Sətir əvvəlində ardıcıl iki tarix kartı görünürsə,
+  // ilk kartdan sonranı əsas xəbər hesab etmirik. Məqalə daxilindəki adi tarix cümlələrinə
+  // toxunmamaq üçün yalnız yeni sətirdə başlayan tarixlər nəzərə alınır.
+  const lines=text.split(/\n+/);
+  const dateLine=/^\s*(?:\d{1,4}\s+)?\d{1,2}\s+(?:yanvar|fevral|mart|aprel|may|iyun|iyul|avqust|sentyabr|sent|oktyabr|noyabr|dekabr|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(?:19|20)\d{2}\b/iu;
+  let seen=0, charPos=0, firstPos=-1;
+  for(const line of lines){
+    if(dateLine.test(line.trim())){ if(firstPos<0) firstPos=charPos; seen++; if(seen>=2 && firstPos>=180) return text.slice(0,firstPos).trim(); }
+    charPos += line.length + 1;
+  }
   return text;
 }
 
@@ -1362,6 +1374,10 @@ function cleanArticleBody(value='', title='') {
     if(!line) continue;
     const low=line.toLocaleLowerCase('az-AZ');
     if(out.join(' ').length>120 && hardStop.some(x=>low.includes(x))) break;
+    // Xəbər agentliklərində məqalə müəllif imzası / mənbə sətri bitdikdən sonra sağ sütun
+    // kartları eyni konteynerə düşə bilir. Məqalə artıq kifayət qədər uzundursa belə
+    // terminal mənbə sətrindən sonra gələn hissəni kəsirik.
+    if(out.join(' ').length>220 && /^(?:[-–—]?\s*(?:azərbaycan|report|apa|trend|qafqazinfo|oxu\.az|lent\.az))\s*[,.]?$/i.test(line)) { out.push(line); break; }
     const navHits=navWords.filter(x=>low.includes(x)).length;
     if(navHits>=3) continue;
     if(/^(?:az|ru|en)(?:\s+(?:az|ru|en)){1,}\b/i.test(line)) continue;
@@ -1510,7 +1526,7 @@ async function enrichPage(item) {
       image:imageUrls[0]||null,
       published_at:pagePublished||(String(item?.raw?.kind||'').includes('configured_site_sitemap')?null:item.published_at),
       author:author||item.author||null,
-      raw:{...(item.raw||{}),enriched:true,article_parser_version:5,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
+      raw:{...(item.raw||{}),enriched:true,article_parser_version:6,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
     };
   } catch { return item; }
 }

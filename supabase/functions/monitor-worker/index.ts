@@ -2952,9 +2952,10 @@ async function refilterExistingMentions(admin:any,org:any,keywords:string[],vill
   if(result?.error)throw result.error;
   let checked=0,filteredOut=0,positiveAdded=0,excludeAdded=0;
   for(const row of result?.data||[]){
-    // YouTube artıq ayrıca sabit discovery/verification axını ilə idarə olunur.
-    // Ümumi AI/review süzgəcinin işləyən YouTube arxivinə toxunmasına icazə vermirik.
-    if(canonicalPlatform(row?.source_platform||'')==='YouTube') continue;
+    // Konservativ AI ələk işləyən YouTube arxivinə toxunmur. Lakin explicit/scheduled
+    // refilter köhnə false-positive YouTube video və rəylərini də yeni sərt qaydalarla
+    // yoxlamalıdır; əks halda əvvəlki 40–50%-lik lazımsız qeydlər ekranda qalır.
+    if(conservative && canonicalPlatform(row?.source_platform||'')==='YouTube') continue;
     const item:Item={title:row?.title||'',text:row?.original_text||'',url:row?.source_url||'',published_at:row?.published_at||null,author:row?.author_name||null,raw:row?.raw_payload||{}};
     const match=evaluateMatch(org,item,keywords,villages);
     checked++;
@@ -4428,12 +4429,13 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   // "futbol xəbərləri" kimi şəkilçi/söz forması dəyişiklikləri blokdan qaçmır.
   // Tək sözlü filtrlərdə isə yalnız söz sərhədi / təhlükəsiz kök uyğunluğu tətbiq olunur
   // ki, qısa bir filtr təsadüfən başqa sözün içində tapılıb düzgün xəbəri silməsin.
-  const flexibleSystemExcludeMatches = webLike
-    ? effectiveSystemExcludeTerms.map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12)
-    : [];
-  const flexibleDatabaseExcludeMatches = webLike
-    ? effectiveDatabaseExcludeTerms.map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12)
-    : [];
+  // Axtarılmamalı sözlər bütün platformalarda eyni morfoloji qayda ilə işləyir.
+  // Əvvəl yalnız Web-də elastik idi; buna görə YouTube-da "toy" -> "toyu",
+  // "gəlin" -> "gəlinlik" kimi açıq-aşkar əlaqəsiz materiallar qaça bilirdi.
+  const flexibleSystemExcludeMatches = effectiveSystemExcludeTerms
+    .map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12);
+  const flexibleDatabaseExcludeMatches = effectiveDatabaseExcludeTerms
+    .map(term=>flexibleExcludeMatch(normalized,term)).filter(Boolean).slice(0,12);
   const flexibleSystemExcludeHits = flexibleSystemExcludeMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
   const flexibleDatabaseExcludeHits = flexibleDatabaseExcludeMatches.map((hit:any)=>String(hit.term||'')).filter(Boolean);
 
@@ -4451,7 +4453,11 @@ function evaluateMatch(org:any, item:Item, keywords:string[], villages:string[] 
   } catch {}
   const kind=String(raw.kind||'');
   const isComment=kind.includes('comment');
-  const trustedParentComment = isComment && raw.parent_is_relevant === true;
+  const parentRelevance = Number(raw.parent_relevance_score || raw.parent_relevance || 0);
+  // Rəy yalnız həqiqətən aidiyyəti videodan miras alsın. Köhnə 40%-lik zəif videoların
+  // bütün rəylərinin avtomatik qəbul edilməsi Naftalan tipli əlaqəsiz şərhləri göstərirdi.
+  // 50+ valideyn və ya rəyin özündə ayrıca mövzu/təşkilat siqnalı tələb olunur.
+  const trustedParentComment = isComment && raw.parent_is_relevant === true && parentRelevance >= 50;
   // Təşkilata organization_id ilə bağlanmış və ayrıca profil uyğunluğu yoxlanmış rəsmi
   // sosial profil paylaşımı özü güclü aidiyyət siqnalıdır. Belə postun mətnində təşkilat adı
   // hər dəfə təkrarlanmadığı üçün adi keyword filtri onu itirməməlidir.
