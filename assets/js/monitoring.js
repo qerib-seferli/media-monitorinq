@@ -51,6 +51,18 @@ function applyUserVisibleQuality(q){
 function openSocialChip(m){
   return isOpenSocialDiscovery(m)?'<span class="open-social-chip" title="Platform API-sindən asılı olmayan açıq internet kəşfiyyatı">🌐 Açıq sosial şəbəkə</span>':'';
 }
+function isOpenSocialPlaceholder(m){
+  if(!isOpenSocialDiscovery(m))return false;
+  const raw=m?.raw_payload||{};
+  if(raw?.enrichment_rejected===true || raw?.content_unavailable_after_enrich===true || raw?.canonical_duplicate===true)return true;
+  const p=canonicalPlatform(m?.source_platform);
+  const title=String(m?.title||'').trim();
+  const text=cleanSocialDisplayText(m?.original_text||m?.summary||raw?.text||raw?.message||raw?.caption||raw?.description||'');
+  const generic=/(?:facebook|instagram|tiktok|linkedin|x)?\s*(?:paylaşımı|açıq paylaşımı|paylaşım linki)$/i.test(title) || /—\s*(?:facebook|instagram|tiktok|linkedin|x)\s*(?:paylaşımı)?$/i.test(title);
+  // Axtarış indeksi yalnız URL/media tapıb real post mətnini oxuya bilməyibsə, onu
+  // istifadəçiyə nəticə kimi göstərmirik. Qeyd bazada qalır və worker növbəti dövrdə yenidən yoxlayır.
+  return ['Facebook','Instagram','TikTok','LinkedIn','X'].includes(p) && generic && text.length<18;
+}
 function applyPlatformFilter(q,value){
   const p=canonicalPlatform(value);
   if(!value)return q;
@@ -381,7 +393,9 @@ async function load({reset=false}={}){
     // Müəyyən tarix aralığında yalnız təsdiqlənmiş paylaşım tarixi olan materiallar
     // görünür. "Bütün tarix" rejimində tarixsiz köhnə arxiv qeydləri də saxlanılır.
     const dateSafeBatch=period.value==='all' ? rawBatch : rawBatch.filter(hasReliablePublishedDate);
-    const batch=filterExcludedMentions(dateSafeBatch,globalExcludes).filter(row=>matchesContentType(row));
+    const batch=filterExcludedMentions(dateSafeBatch,globalExcludes)
+      .filter(row=>matchesContentType(row))
+      .filter(row=>!isOpenSocialPlaceholder(row));
     rows=sortRowsByPublication(mergeUnique(rows,batch));
     done=rawBatch.length<PAGE_SIZE;
     page++;
@@ -441,8 +455,11 @@ async function openDetail(id){
   window.speechSynthesis?.cancel?.();
   const raw=m.raw_payload||{}; const comment=isComment(m); const platformLabel=canonicalPlatform(m.source_platform); const sourceUrl=mentionSourceUrl(m);
   const storedMedia=orderedMedia(m).filter(x=>x?.url);
-  const rawImageValues=[...(Array.isArray(raw.image_urls)?raw.image_urls:[]),raw.image_url,raw.thumbnail_url,raw.picture,raw.preview_url].filter(Boolean);
-  const rawVideoValues=[...(Array.isArray(raw.video_urls)?raw.video_urls:[]),raw.video_url,raw.playable_url,raw.playable_url_quality_hd].filter(Boolean);
+  const hasStoredSocialMedia=storedMedia.some(x=>['preview','preview_external','video_external'].includes(String(x?.media_type||'').toLowerCase()));
+  // Worker artıq sosial post üçün ən son əsas media sətirlərini saxlayır. Saxlanmış media
+  // varsa raw_payload-dakı köhnə/vaxtı keçmiş CDN URL-lərini yenidən slayda qatmayırıq.
+  const rawImageValues=hasStoredSocialMedia?[]:[...(Array.isArray(raw.image_urls)?raw.image_urls:[]),raw.image_url,raw.thumbnail_url,raw.picture,raw.preview_url].filter(Boolean);
+  const rawVideoValues=hasStoredSocialMedia?[]:[...(Array.isArray(raw.video_urls)?raw.video_urls:[]),raw.video_url,raw.playable_url,raw.playable_url_quality_hd].filter(Boolean);
   const rawImages=rawImageValues.map(url=>({url,media_type:'preview_external'}));
   const rawVideos=rawVideoValues.map(url=>({url,media_type:'video_external'}));
   const ytId=String(raw.video_id||'');

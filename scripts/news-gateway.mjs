@@ -2433,17 +2433,31 @@ for (const org of plan.organizations) {
         const backlog=await callMonitor({mode:'social_enrich_backfill_targets',organization_id:org.id,social_limit:isPilotOrganization(org)?20:12},35000,1);
         const targets=Array.isArray(backlog?.targets)?backlog.targets:[];
         let refreshed=0, shots=0;
-        for(const target of targets){
+        const completed=[];
+        // Sosial səhifələri bir-bir render etmək pilotu 6+ dəqiqəyə uzadırdı və vaxt
+        // büdcəsi bitəndə 12 namizəddən cəmi 2-3-ü tamamlanırdı. Kiçik 4-lük paralel
+        // paket həm Supabase-i yükləmir, həm də bir run-da daha çox köhnə kartı düzəldir.
+        for(let i=0;i<targets.length;i+=4){
           if(gatewayBudgetLow()) break;
-          const p=normalizeSocialPlatform(target?.source_platform)||socialPlatformFromUrl(target?.url||'');
-          if(!p) continue;
-          const enriched=await enrichSocialPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:null,author:target.author||null,raw:target.raw||{}},p);
-          const result=await callMonitor({mode:'social_enrich',organization_id:org.id,source_url:target.url,source_platform:p,title:enriched.title||target.title||'',text:enriched.text||target.text||'',image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],published_at:enriched.published_at||null,author:enriched.author||null,canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0),like_count:enriched.raw?.like_count,comments_count:enriched.raw?.comments_count,raw_patch:enriched.raw||{}},35000,1).catch(()=>null);
-          if(result?.ok) refreshed++;
-          if(MAX_SCREENSHOTS>0 && shots<MAX_SCREENSHOTS && !gatewayBudgetLow()){
-            const saved=await saveScreenshotForTarget(org,{title:enriched.title||target.title||'',url:enriched.raw?.canonical_url||target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});
-            if(saved?.saved || saved?.skipped==='already-exists') shots++;
+          const group=targets.slice(i,i+4);
+          const groupResults=await Promise.all(group.map(async target=>{
+            const p=normalizeSocialPlatform(target?.source_platform)||socialPlatformFromUrl(target?.url||'');
+            if(!p) return null;
+            const enriched=await enrichSocialPage({title:target.title||'',text:target.text||'',url:target.url,published_at:target.published_at||null,image:null,author:target.author||null,raw:target.raw||{}},p);
+            const result=await callMonitor({mode:'social_enrich',organization_id:org.id,source_url:target.url,source_platform:p,title:enriched.title||target.title||'',text:enriched.text||target.text||'',image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],published_at:enriched.published_at||null,author:enriched.author||null,canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0),like_count:enriched.raw?.like_count,comments_count:enriched.raw?.comments_count,raw_patch:enriched.raw||{}},35000,1).catch(()=>null);
+            return {target,enriched,result};
+          }));
+          for(const row of groupResults.filter(Boolean)){
+            if(row.result?.ok) refreshed++;
+            if(row.result?.accepted_after_enrich) completed.push(row);
           }
+        }
+        // Screenshot yalnız həqiqətən məzmunu oxunub qəbul edilən postlara çəkilir.
+        // Login/challenge səhifəsinə və sonradan gizlənəcək generic karta resurs xərcləmirik.
+        for(const row of completed.slice(0,Math.min(MAX_SCREENSHOTS,4))){
+          if(gatewayBudgetLow()) break;
+          const saved=await saveScreenshotForTarget(org,{title:row.enriched.title||row.target.title||'',url:row.enriched.raw?.canonical_url||row.target.url,source_url:row.target.url,capture_url:row.enriched.raw?.canonical_url||row.target.url});
+          if(saved?.saved || saved?.skipped==='already-exists') shots++;
         }
         if(targets.length) console.log(`[${org.short_name}] 🌐 Sosial tamamlama: namizəd=${targets.length}, yeniləndi=${refreshed}, screenshot=${shots}`);
       }catch(e){console.log(`[${org.short_name}] 🌐 Sosial tamamlama xətası: ${e?.message||e}`);}

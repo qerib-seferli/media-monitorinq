@@ -949,7 +949,11 @@ Deno.serve(async (req) => {
           ...(options.canonical_url?{source_url:canonicalSocialStoryUrl(String(options.canonical_url),String(current.data.source_platform||options.source_platform||''))||options.canonical_url}:{})
         };
         const cleanText=clean(options.text||'');
-        if(options.title) patch.title=String(options.title).slice(0,500);
+        const incomingTitle=clean(String(options.title||''));
+        if(cleanText.length>=18 && isGenericSocialTitle(incomingTitle,String(current.data.source_platform||options.source_platform||''))){
+          const sentence=(cleanText.match(/^.{24,220}?(?=[.!?](?:\s|$))/)?.[0]||cleanText).trim();
+          patch.title=(sentence.length>180?`${sentence.slice(0,177).replace(/[,:;\s]+$/,'')}…`:sentence).slice(0,500);
+        } else if(options.title) patch.title=String(options.title).slice(0,500);
         if(cleanText.length>=5){patch.original_text=String(options.text).slice(0,120000);patch.summary=cleanText.slice(0,700);}
         if(options.author) patch.author_name=String(options.author).slice(0,300);
         if(trustedDate) patch.published_at=options.published_at;
@@ -994,18 +998,17 @@ Deno.serve(async (req) => {
         }
 
         if(match.accepted){
-          // Sosial səhifələr çox vaxt menyu/logo/tövsiyə şəkillərini də HTML-ə salır.
-          // Kart və detalda yalnız əsas post mediasını saxlayırıq; screenshot ayrıca qorunur.
-          if(externalImages.length){
-            const stale:any=await admin.from('mention_media').delete().eq('mention_id',current.data.id).in('media_type',['preview_external','preview']);
-            if(stale?.error) console.error('social-enrich-media-cleanup',stale.error);
-          }
-          const mediaResult:any=await admin.from('mention_media').select('url,media_type').eq('mention_id',current.data.id);
-          const existingUrls=new Set((Array.isArray(mediaResult?.data)?mediaResult.data:[]).map((x:any)=>String(x?.url||'')));
-          const primaryImages=externalImages.slice(0,2);
-          const missing=primaryImages.filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()}));
-          const missingVideos=externalVideos.slice(0,2).filter(x=>!existingUrls.has(x)).map(url=>({mention_id:current.data.id,media_type:'video_external',url,captured_at:new Date().toISOString()}));
-          const mediaToInsert=[...missing,...missingVideos];
+          // Sosial CDN URL-ləri tez köhnələ bilir və əvvəlki enrich-lərdən yığılan preview/video
+          // sətirləri detal pəncərəsində 1/6 kimi boş slaydlar yaradırdı. Hər enrich zamanı
+          // yalnız son yoxlamadan keçən əsas şəkil + əsas video saxlanılır; screenshot silinmir.
+          const stale:any=await admin.from('mention_media').delete().eq('mention_id',current.data.id).in('media_type',['preview_external','preview','video_external']);
+          if(stale?.error) console.error('social-enrich-media-cleanup',stale.error);
+          const primaryImages=externalImages.slice(0,1);
+          const primaryVideos=externalVideos.slice(0,1);
+          const mediaToInsert=[
+            ...primaryImages.map(url=>({mention_id:current.data.id,media_type:'preview_external',url,captured_at:new Date().toISOString()})),
+            ...primaryVideos.map(url=>({mention_id:current.data.id,media_type:'video_external',url,captured_at:new Date().toISOString()}))
+          ];
           if(mediaToInsert.length){const mediaInsert:any=await admin.from('mention_media').insert(mediaToInsert);if(mediaInsert?.error)console.error('social-enrich-media',mediaInsert.error);}
         }
         const acceptedAfterEnrich=Boolean(match.accepted && (!openDiscovery || socialContentUsable));
@@ -3572,8 +3575,14 @@ function hasUsableSocialContent(item:Item, platform:string=''):boolean {
   const title=clean(String(item?.title||''));
   const image=String(item?.image||raw?.image_url||'').trim();
   const video=String(raw?.video_url||'').trim();
+  const openDiscovery=raw?.open_social_discovery===true || raw?.discovered_without_platform_api===true || raw?.discovery_channel==='open_social_web';
+  // Açıq internet indeksindən gələn nəticədə tək şəkil/video URL-si real post məzmunu
+  // sayılmır. Sosial CDN-lər profil loqosu, placeholder və vaxtı keçən media URL-ləri də
+  // qaytara bilir; bu əvvəl istifadəçidə eyni başlıqlı boş kartlar yaradırdı. Belə qeydi
+  // bazada saxlayırıq, amma mətn və ya konkret başlıq oxunana qədər monitorinqə çıxarmırıq.
   if(text.length>=18) return true;
   if(title.length>=24 && !isGenericSocialTitle(title,platform)) return true;
+  if(openDiscovery) return false;
   if(/^https?:\/\//i.test(image) || /^https?:\/\//i.test(video)) return true;
   return false;
 }
