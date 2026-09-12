@@ -1426,14 +1426,16 @@ function paragraphText(html='') {
       if(paras.length) candidates.push(paras.join('\n\n'));
     }
   }
-  // Bəzi xəbər saytlarında məqalə nested div-lərlə qurulur və regex ilk bağlanan div-də
-  // dayanır. Ona görə səhifədəki bütün real paraqraflardan ayrıca uzun namizəd də qururuq.
+  // Əgər article/main/content konteynerindən real paraqraflar tapılıbsa bütün səhifənin
+  // <p> elementlərini namizədə qatmırıq. Əks halda sağ sütundakı “Digər xəbərlər”,
+  // “Son xəbərlər” və reklam kartlarının başlıqları əsas xəbər mətninin arxasına yapışır.
+  candidates.sort((a,b)=>b.length-a.length);
+  if(candidates.length) return candidates[0]||'';
+  // Yalnız heç bir məqalə scope-u tapılmadıqda whole-page paraqraflar son fallback-dir.
   const allParas=[...raw.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
     .map(x=>cleanArticleText(x[1]))
-    .filter(x=>x.length>=35 && !/cookie|reklam|advert|abunə|subscribe|copyright|bütün hüquqlar/i.test(x));
-  if(allParas.length) candidates.push([...new Set(allParas)].join('\n\n'));
-  candidates.sort((a,b)=>b.length-a.length);
-  return candidates[0]||'';
+    .filter(x=>x.length>=35 && !/cookie|reklam|advert|abunə|subscribe|copyright|bütün hüquqlar|digər xəbərlər|son xəbərlər|ən çox oxunan/i.test(x));
+  return allParas.length?[...new Set(allParas)].join('\n\n'):'';
 }
 async function fetchPage(url,{timeoutMs=10000}={}) {
   await politeWait(650);
@@ -1475,7 +1477,12 @@ async function enrichPage(item) {
     // daha doludursa onu seçirik; beləliklə xəbər yarıda kəsilmir, sidebar isə cleanArticleBody
     // tərəfindən əvvəlcədən çıxarılmış olur.
     let body=bodyCandidates[0]||'';
-    for(const candidate of bodyCandidates.slice(1)) if(candidate.length>Math.max(body.length*1.35,body.length+500)) body=candidate;
+    // Başlığa bağlanan mətn 250+ simvoldursa onu əsas həqiqət sayırıq. Daha uzun namizədin
+    // sırf uzun olduğuna görə sidebar/related-news tullantısı ilə onu əvəz etməsinə icazə vermirik.
+    // Yalnız anchor həqiqətən yarımçıqdırsa digər scoped mətn daha dolu variant kimi seçilir.
+    if(body.length<250){
+      for(const candidate of bodyCandidates.slice(1)) if(candidate.length>Math.max(body.length*1.35,body.length+350)) body=candidate;
+    }
     body = body || cleanArticleBody(stripHtml(desc),effectiveTitle) || cleanArticleBody(item.text||'',effectiveTitle) || '';
     const structuredImages=[];
     const imageNode=articleLd?.image;
@@ -1503,7 +1510,7 @@ async function enrichPage(item) {
       image:imageUrls[0]||null,
       published_at:pagePublished||(String(item?.raw?.kind||'').includes('configured_site_sitemap')?null:item.published_at),
       author:author||item.author||null,
-      raw:{...(item.raw||{}),enriched:true,article_parser_version:4,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
+      raw:{...(item.raw||{}),enriched:true,article_parser_version:5,canonical_url:finalUrl||item.url,image_urls:imageUrls,published_from_page:Boolean(pagePublished),published_date_status:pagePublished?'verified':'not-found',published_date_source:publishedDateSource,date_parser_version:2}
     };
   } catch { return item; }
 }
@@ -2432,7 +2439,7 @@ for (const org of plan.organizations) {
       try{
         const backlog=await callMonitor({mode:'social_enrich_backfill_targets',organization_id:org.id,social_limit:isPilotOrganization(org)?20:12},35000,1);
         const targets=Array.isArray(backlog?.targets)?backlog.targets:[];
-        let refreshed=0, shots=0;
+        let refreshed=0, accepted=0, rejected=0, dated=0, mediaReady=0, shots=0;
         const completed=[];
         // Sosial səhifələri bir-bir render etmək pilotu 6+ dəqiqəyə uzadırdı və vaxt
         // büdcəsi bitəndə 12 namizəddən cəmi 2-3-ü tamamlanırdı. Kiçik 4-lük paralel
@@ -2449,7 +2456,10 @@ for (const org of plan.organizations) {
           }));
           for(const row of groupResults.filter(Boolean)){
             if(row.result?.ok) refreshed++;
-            if(row.result?.accepted_after_enrich) completed.push(row);
+            if(row.result?.accepted_after_enrich){ accepted++; completed.push(row); }
+            else if(row.result?.ok && row.result?.accepted_after_enrich===false) rejected++;
+            if(row.result?.published_at) dated++;
+            if(Number(row.result?.media_count||0)>0) mediaReady++;
           }
         }
         // Screenshot yalnız həqiqətən məzmunu oxunub qəbul edilən postlara çəkilir.
@@ -2459,7 +2469,7 @@ for (const org of plan.organizations) {
           const saved=await saveScreenshotForTarget(org,{title:row.enriched.title||row.target.title||'',url:row.enriched.raw?.canonical_url||row.target.url,source_url:row.target.url,capture_url:row.enriched.raw?.canonical_url||row.target.url});
           if(saved?.saved || saved?.skipped==='already-exists') shots++;
         }
-        if(targets.length) console.log(`[${org.short_name}] 🌐 Sosial tamamlama: namizəd=${targets.length}, yeniləndi=${refreshed}, screenshot=${shots}`);
+        if(targets.length) console.log(`[${org.short_name}] 🌐 Sosial tamamlama: namizəd=${targets.length}, yoxlanıldı=${refreshed}, real_məzmun=${accepted}, gizlədildi=${rejected}, tarix=${dated}, media=${mediaReady}, screenshot=${shots}`);
       }catch(e){console.log(`[${org.short_name}] 🌐 Sosial tamamlama xətası: ${e?.message||e}`);}
     }
     const reasonSummary=Object.entries(orgSocialReasonCounts).sort((a,b)=>Number(b[1]||0)-Number(a[1]||0)).slice(0,6).map(([k,v])=>`${k}:${v}`).join(', ');
@@ -2627,7 +2637,7 @@ for (const org of plan.organizations) {
           mode:'news_enrich', organization_id:org.id, source_url:target.url,
           title:enriched.title||target.title||'', text:enriched.text||target.text||'',
           image_url:enriched.image||'', image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[], published_at:reliablePublishedAt(enriched,target),
-          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true, published_date_source:enriched.raw?.published_date_source||'', date_parser_version:Number(enriched.raw?.date_parser_version||0), article_parser_version:Number(enriched.raw?.article_parser_version||4)
+          author:enriched.author||null, canonical_url:enriched.raw?.canonical_url||target.url, page_enriched:enriched.raw?.enriched===true, published_date_source:enriched.raw?.published_date_source||'', date_parser_version:Number(enriched.raw?.date_parser_version||0), article_parser_version:Number(enriched.raw?.article_parser_version||5)
         });
         if(!refreshed?.ok) console.log(`[${org.short_name}] Tam mətn yenilənmədi: ${refreshed?.error||target.url}`);
       } catch(e) { console.log(`[${org.short_name}] Tam mətn yeniləmə xətası: ${e?.message||e}`); }
@@ -2655,7 +2665,7 @@ for (const org of plan.organizations) {
     try{
       const backlog=await callMonitor({mode:'social_enrich_backfill_targets',organization_id:org.id,social_limit:isPilotOrganization(org)?20:12},35000,1);
       const socialTargets=Array.isArray(backlog?.targets)?backlog.targets:[];
-      let socialRefreshed=0;
+      let socialRefreshed=0, socialAccepted=0, socialRejected=0, socialDated=0, socialMedia=0;
       for(const target of socialTargets){
         if(gatewayBudgetLow()) break;
         const p=normalizeSocialPlatform(target?.source_platform)||socialPlatformFromUrl(target?.url||'');
@@ -2670,12 +2680,18 @@ for (const org of plan.organizations) {
             page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',
             date_parser_version:Number(enriched.raw?.date_parser_version||0),like_count:enriched.raw?.like_count,comments_count:enriched.raw?.comments_count,raw_patch:enriched.raw||{}
           },35000,1);
-          if(refreshed?.ok){socialRefreshed++; if(refreshed?.accepted_after_enrich===false) console.log(`[${org.short_name}] Sosial false-positive gizlədildi: ${target.url}`);}
+          if(refreshed?.ok){
+            socialRefreshed++;
+            if(refreshed?.accepted_after_enrich===true) socialAccepted++;
+            if(refreshed?.accepted_after_enrich===false){socialRejected++; console.log(`[${org.short_name}] Sosial false-positive gizlədildi: ${target.url}`);}
+            if(refreshed?.published_at) socialDated++;
+            if(Number(refreshed?.media_count||0)>0) socialMedia++;
+          }
           const existingShot=screenshotQueue.some(x=>String(x?.url||x?.source_url||'')===String(target.url||''));
           if(!existingShot) screenshotQueue.push({title:enriched.title||target.title||'',url:target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});
         }catch(e){console.log(`[${org.short_name}] Sosial metadata yeniləmə xətası: ${e?.message||e}`);}
       }
-      if(socialTargets.length) console.log(`[${org.short_name}] Sosial tamamlama: namizəd=${socialTargets.length}, yeniləndi=${socialRefreshed}`);
+      if(socialTargets.length) console.log(`[${org.short_name}] Sosial tamamlama: namizəd=${socialTargets.length}, yoxlanıldı=${socialRefreshed}, real_məzmun=${socialAccepted}, gizlədildi=${socialRejected}, tarix=${socialDated}, media=${socialMedia}`);
     }catch(e){console.log(`[${org.short_name}] Sosial tamamlama növbəsi xətası: ${e?.message||e}`);}
   }
 
@@ -2696,7 +2712,7 @@ for (const org of plan.organizations) {
             title:enriched.title||target.title||'',text:enriched.text||target.text||'',
             image_url:enriched.image||'',image_urls:Array.isArray(enriched.raw?.image_urls)?enriched.raw.image_urls:[],
             published_at:reliablePublishedAt(enriched,target),author:enriched.author||null,
-            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0),article_parser_version:Number(enriched.raw?.article_parser_version||4)
+            canonical_url:enriched.raw?.canonical_url||target.url,page_enriched:enriched.raw?.enriched===true,published_date_source:enriched.raw?.published_date_source||'',date_parser_version:Number(enriched.raw?.date_parser_version||0),article_parser_version:Number(enriched.raw?.article_parser_version||5)
           });
           if(refreshed?.ok) refreshedCount++;
           if(!target.has_screenshot) screenshotQueue.push({title:enriched.title||target.title||'',url:target.url,source_url:target.url,capture_url:enriched.raw?.canonical_url||target.url});

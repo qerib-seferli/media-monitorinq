@@ -836,7 +836,7 @@ Deno.serve(async (req) => {
           const hasShot=media.some((m:any)=>String(m?.media_type||'').toLowerCase()==='screenshot' && Boolean(m?.url));
           const hasCover=media.some((m:any)=>['preview_external','preview'].includes(String(m?.media_type||'').toLowerCase()) && Boolean(m?.url));
           const dateNeedsCheck=webDateNeedsVerification(raw,row?.published_at,row?.detected_at);
-          const parserNeedsRefresh=Number(raw?.article_parser_version||0)<4;
+          const parserNeedsRefresh=Number(raw?.article_parser_version||0)<5;
           const textMissing=text.length<450 || raw?.enrichment_complete!==true;
           const needs=parserNeedsRefresh || textMissing || !row?.published_at || dateNeedsCheck || !row?.author_name || !hasShot || !hasCover;
           if(!needs) continue;
@@ -935,7 +935,7 @@ Deno.serve(async (req) => {
         };
         const match=evaluateMatch(org,candidate,positiveKeywords.map((x:string)=>x.toLocaleLowerCase('az-AZ')),villageNames);
         const socialContentUsable=hasUsableSocialContent(candidate,String(current.data.source_platform||options.source_platform||''));
-        const rawPatch:any={...((current.data.raw_payload||{}) as any),...((options.raw_patch||{}) as any),social_enriched:true,enrichment_checked_at:new Date().toISOString(),canonical_url:options.canonical_url||options.source_url};
+        const rawPatch:any={...((current.data.raw_payload||{}) as any),...((options.raw_patch||{}) as any),social_enriched:Boolean(options.page_enriched),enrichment_checked_at:new Date().toISOString(),canonical_url:options.canonical_url||options.source_url};
         if(options.like_count!==undefined&&options.like_count!==null) rawPatch.like_count=Number(options.like_count);
         if(options.comments_count!==undefined&&options.comments_count!==null) rawPatch.comments_count=Number(options.comments_count);
         const trustedDate=Boolean(options.published_at && Number(options.date_parser_version||0)>=3 && String(options.published_date_source||'').startsWith('social:'));
@@ -1012,7 +1012,7 @@ Deno.serve(async (req) => {
           if(mediaToInsert.length){const mediaInsert:any=await admin.from('mention_media').insert(mediaToInsert);if(mediaInsert?.error)console.error('social-enrich-media',mediaInsert.error);}
         }
         const acceptedAfterEnrich=Boolean(match.accepted && (!openDiscovery || socialContentUsable));
-        return json({ok:true,run_id:runId,mode:'social_enrich',updated:true,accepted_after_enrich:acceptedAfterEnrich,reason:acceptedAfterEnrich?match.reason:(rawPatch.enrichment_reject_reason||match.reason),mention_id:current.data.id,media_count:externalImages.length,published_at:trustedDate?options.published_at:null},200);
+        return json({ok:true,run_id:runId,mode:'social_enrich',updated:true,accepted_after_enrich:acceptedAfterEnrich,reason:acceptedAfterEnrich?match.reason:(rawPatch.enrichment_reject_reason||match.reason),mention_id:current.data.id,media_count:externalImages.length+externalVideos.length,published_at:trustedDate?options.published_at:null},200);
       } catch(e) {
         return json({ok:false,run_id:runId,mode:'social_enrich',updated:false,error:errorInfo(e).message},200);
       }
@@ -1082,7 +1082,7 @@ Deno.serve(async (req) => {
         const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,1);
         const trustedIncomingDate=Boolean(safeMetadata && newsPublishedAt && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading','url:embedded-published-at'].includes(options.published_date_source));
         if(!trustedIncomingDate && safeMetadata && oldDateSuspect) patch.published_at=null;
-        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(newsText).length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:trustedIncomingDate,published_date_status:safeMetadata?(trustedIncomingDate?'verified':'not-found'):'unverified',published_date_source:trustedIncomingDate?options.published_date_source:null,date_parser_version:trustedIncomingDate?options.date_parser_version:2,article_parser_version:Number(options.article_parser_version||4),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
+        patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(newsText).length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:trustedIncomingDate,published_date_status:safeMetadata?(trustedIncomingDate?'verified':'not-found'):'unverified',published_date_source:trustedIncomingDate?options.published_date_source:null,date_parser_version:trustedIncomingDate?options.date_parser_version:2,article_parser_version:Number(options.article_parser_version||5),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
         const updated:any = await admin.from('mentions').update(patch).eq('id',current.data.id);
         if (updated?.error) throw updated.error;
         if(safeMetadata && externalImages.length){

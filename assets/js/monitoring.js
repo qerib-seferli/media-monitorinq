@@ -52,16 +52,18 @@ function openSocialChip(m){
   return isOpenSocialDiscovery(m)?'<span class="open-social-chip" title="Platform API-sindən asılı olmayan açıq internet kəşfiyyatı">🌐 Açıq sosial şəbəkə</span>':'';
 }
 function isOpenSocialPlaceholder(m){
-  if(!isOpenSocialDiscovery(m))return false;
   const raw=m?.raw_payload||{};
   if(raw?.enrichment_rejected===true || raw?.content_unavailable_after_enrich===true || raw?.canonical_duplicate===true)return true;
   const p=canonicalPlatform(m?.source_platform);
+  if(!['Facebook','Instagram','TikTok','LinkedIn','X'].includes(p))return false;
   const title=String(m?.title||'').trim();
-  const text=cleanSocialDisplayText(m?.original_text||m?.summary||raw?.text||raw?.message||raw?.caption||raw?.description||'');
+  const text=cleanSocialDisplayText(m?.original_text||m?.summary||raw?.text_original||raw?.text||raw?.message||raw?.caption||raw?.description||'');
   const generic=/(?:facebook|instagram|tiktok|linkedin|x)?\s*(?:paylaşımı|açıq paylaşımı|paylaşım linki)$/i.test(title) || /—\s*(?:facebook|instagram|tiktok|linkedin|x)\s*(?:paylaşımı)?$/i.test(title);
-  // Axtarış indeksi yalnız URL/media tapıb real post mətnini oxuya bilməyibsə, onu
-  // istifadəçiyə nəticə kimi göstərmirik. Qeyd bazada qalır və worker növbəti dövrdə yenidən yoxlayır.
-  return ['Facebook','Instagram','TikTok','LinkedIn','X'].includes(p) && generic && text.length<18;
+  const knownProfilePost=String(raw?.kind||'').toLowerCase()==='known_social_profile_post';
+  // Açıq discovery və köhnə known-profile qeydlərində sadəcə URL/profil tapılıb,
+  // real post mətni oxunmayıbsa həmin sətri istifadəçiyə material kimi göstərmirik.
+  // Bu qayda rəsmi API-dən gələn normal postlara toxunmur: onlarda mətn/caption olur.
+  return generic && text.length<24 && (isOpenSocialDiscovery(m)||knownProfilePost||!String(raw?.provider||'').toLowerCase().includes('graph api'));
 }
 function applyPlatformFilter(q,value){
   const p=canonicalPlatform(value);
