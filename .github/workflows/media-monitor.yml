@@ -219,11 +219,11 @@ jobs:
           NEWS_SOURCE_SHARD_COUNT: '5'
           NEWS_SOURCE_SHARD_INDEX: ${{ matrix.shard }}
           NEWS_BROAD_QUERY_LIMIT: '0'
-          NEWS_OPEN_SOCIAL_QUERY_LIMIT: '10'
+          NEWS_OPEN_SOCIAL_QUERY_LIMIT: '14'
           NEWS_OPEN_SOCIAL_PAGE_LIMIT: '2'
           NEWS_OPEN_SOCIAL_TARGET_PER_PLATFORM: '50'
-          NEWS_MAX_INGEST_ITEMS: '100'
-          NEWS_MAX_ENRICH_ITEMS: '8'
+          NEWS_MAX_INGEST_ITEMS: '120'
+          NEWS_MAX_ENRICH_ITEMS: '12'
           NEWS_MAX_SCREENSHOTS: '0'
         run: node scripts/news-gateway.mjs
 
@@ -260,12 +260,12 @@ jobs:
           NEWS_GATEWAY_BUDGET_MS: '390000'
           NEWS_SOURCE_SHARD_COUNT: '1'
           NEWS_SOURCE_SHARD_INDEX: '0'
-          NEWS_OPEN_SOCIAL_QUERY_LIMIT: '20'
+          NEWS_OPEN_SOCIAL_QUERY_LIMIT: '24'
           NEWS_OPEN_SOCIAL_PAGE_LIMIT: '3'
           NEWS_OPEN_SOCIAL_TARGET_PER_PLATFORM: '50'
           NEWS_BROAD_QUERY_LIMIT: '0'
-          NEWS_MAX_INGEST_ITEMS: '140'
-          NEWS_MAX_ENRICH_ITEMS: '20'
+          NEWS_MAX_INGEST_ITEMS: '180'
+          NEWS_MAX_ENRICH_ITEMS: '28'
           NEWS_MAX_SCREENSHOTS: '0'
         run: node scripts/news-gateway.mjs
 
