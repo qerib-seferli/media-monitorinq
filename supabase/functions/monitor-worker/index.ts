@@ -1014,7 +1014,7 @@ Deno.serve(async (req) => {
         if (safeMetadata && newsPublishedAt && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading','url:embedded-published-at'].includes(options.published_date_source)) patch.published_at=newsPublishedAt;
         else if (safeMetadata && oldDateSuspect) patch.published_at=null;
         if (safeMetadata && newsAuthor) patch.author_name=newsAuthor.slice(0,300);
-        const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,12);
+        const externalImages=[...new Set([options.image_url,...options.image_urls].map(x=>String(x||'').trim()).filter(x=>/^https?:\/\//i.test(x)))].slice(0,1);
         const trustedIncomingDate=Boolean(safeMetadata && newsPublishedAt && options.date_parser_version>=2 && ['structured:datePublished','meta:article:published_time','visible:article-heading','url:embedded-published-at'].includes(options.published_date_source));
         if(!trustedIncomingDate && safeMetadata && oldDateSuspect) patch.published_at=null;
         patch.raw_payload={...(current.data.raw_payload||{}),enriched:safeMetadata,enrichment_complete:Boolean(safeMetadata && pageEnriched && clean(newsText).length>=80),enrichment_checked_at:new Date().toISOString(),page_enriched:Boolean(pageEnriched),published_from_page:trustedIncomingDate,published_date_status:safeMetadata?(trustedIncomingDate?'verified':'not-found'):'unverified',published_date_source:trustedIncomingDate?options.published_date_source:null,date_parser_version:trustedIncomingDate?options.date_parser_version:2,article_parser_version:Number(options.article_parser_version||4),canonical_url:options.canonical_url||options.source_url,image_url:externalImages[0]||undefined,image_urls:externalImages,enrichment_guard:safeMetadata?undefined:{blocked_at:new Date().toISOString(),title_consistent:titleConsistent,date_consistent:dateConsistent,content_relevant:contentRelevant}};
@@ -3925,6 +3925,21 @@ const AUTO_LEARN_EXCLUDE_PHRASES = [
   'okean səviyyəsi','çimərlik mövsümü','balıq ovu','ovçuluq mövsümü','meşə yanğını',
   'qızıl qiyməti','neft qiyməti','benzin qiyməti','dizel qiyməti','gömrük rüsumu','vergi xəbərləri',
   'hərrac elanı',
+  // Genişləndirilmiş təhlükəsiz səs-küy bankı — yalnız konkret əlaqəsiz frazalar
+  'telefon satışı','telefon qiyməti','mobil telefon satışı','kompüter satışı','noutbuk satışı','məişət texnikası satışı',
+  'onlayn mağaza','məhsul endirimi','endirim kuponu','market endirimi','supermarket kampaniyası','alış-veriş kampaniyası',
+  'daşınmaz əmlak elanı','yeni tikili mənzil','köhnə tikili mənzil','ipoteka krediti','avtomobil krediti','istehlak krediti',
+  'kripto bazarı','bitcoin xəbərləri','forex bazarı','səhm bazarı','birja xəbərləri','lotereya nəticələri',
+  'futbol xəbərləri','futbol transferi','oyunun nəticəsi','matçın nəticəsi','çempionlar liqası','premyer liqa','idman xəbərləri',
+  'mahnı təqdimatı','yeni mahnı','klip təqdimatı','musiqi klipi','konsert proqramı','toy mərasimi','nişan mərasimi','ad günü mərasimi',
+  'film nümayişi','serialın yeni bölümü','kino xəbərləri','şou biznes xəbərləri','məşhur müğənni','məşhur aktyor',
+  'oyun icmalı','kompüter oyunu','mobil oyun','oyun yeniləməsi','texnologiya icmalı','telefon icmalı','noutbuk icmalı',
+  'restoran menyusu','otel rezervasiyası','tur paketi','səyahət turu','turizm marşrutu','aviabilet satışı',
+  'resept hazırlanması','yemək resepti','mətbəx resepti','makiyaj dərsi','saç düzümü','moda kolleksiyası',
+  'işə qəbul elanı','vakansiya müsabiqəsi','təcrübə proqramı','kurs qeydiyyatı','imtahan cədvəli','qəbul imtahanı',
+  'polis saxladı','şəxs həbs edildi','məhkəmə hökmü','cinayət işi','prokurorluq məlumatı','narkotiklə tutuldu',
+  'qazın verilişi dayandırılacaq','elektrik kəsintisi','işıq kəsintisi','internet kəsintisi','mobil rabitə xidməti',
+  'qızılın qiyməti','neftin qiyməti','valyuta kursu','dolların məzənnəsi','avronun məzənnəsi','hava şəraiti',
 ];
 
 async function ensureBaselineKeywordBank(admin:any) {

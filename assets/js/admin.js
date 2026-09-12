@@ -488,11 +488,10 @@ function renderKeywords() {
   const summary=document.querySelector('#keyword-bank-summary');
   if(summary){
     summary.innerHTML=`<div class="keyword-bank-overview keyword-bank-overview-single">
-      <span><small>Ümumi söz bazası</small><b>${keywordBankTotals.records_total}</b></span>
+      <span><small>Ümumi aktiv söz bazası</small><b>${keywordBankTotals.total}</b></span>
       <span><small>Prioritet axtarılan</small><b>${keywordBankTotals.positive}</b></span>
       <span><small>Prioritet filtr</small><b>${keywordBankTotals.exclude}</b></span>
-      <span><small>Ehtiyat rotasiya bankı</small><b>${keywordBankTotals.inactive}</b></span>
-      <div class="keyword-bank-note"><b>${keywordBankTotals.positive}</b> aktiv mövzu frazası axtarış planına siqnal verir, <b>${keywordBankTotals.exclude}</b> aktiv filtr isə əlaqəsiz materialın saxlanmasının qarşısını alır. Təşkilatın adı/qısa adı/ad variantları və xidmət etdiyi rayon–yaşayış məntəqələri ayrıca identifikasiya qatıdır; onlar bu sayğaca süni şəkildə açar söz kimi doldurulmur. <b>${keywordBankTotals.inactive}</b> deaktiv qeyd axtarışda işləmir. <strong>Gemini AI</strong> yalnız aktivləşdirilmiş AI mərhələsində sərhəd halları analiz edib təhlükəsiz namizəd təklif edə bilər; qərar deterministik qaydalar və admin nəzarəti ilə təsdiqlənir.</div>
+      <div class="keyword-bank-note"><b>${keywordBankTotals.positive}</b> aktiv mövzu frazası axtarış planına siqnal verir, <b>${keywordBankTotals.exclude}</b> aktiv filtr isə əlaqəsiz materialın saxlanmasının qarşısını alır. Bu sayğaclar və aşağıdakı axtarış yalnız real olaraq işləyən aktiv qeydləri göstərir. Təşkilatın adı/qısa adı/ad variantları və xidmət etdiyi rayon–yaşayış məntəqələri ayrıca identifikasiya qatıdır; onlar bu sayğaca süni şəkildə açar söz kimi doldurulmur. <strong>Gemini AI</strong> yalnız aktivləşdirilmiş AI mərhələsində sərhəd halları analiz edib təhlükəsiz namizəd təklif edə bilər; qərar deterministik qaydalar və admin nəzarəti ilə təsdiqlənir.</div>
     </div>`;
   }
   const guide=document.querySelector('#keyword-engine-guide');

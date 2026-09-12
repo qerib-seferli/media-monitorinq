@@ -439,7 +439,9 @@ async function openDetail(id){
   const mediaRows=[...storedMedia,...rawImages,...rawVideos,...fallbackYoutube].filter((x,i,a)=>x?.url&&a.findIndex(y=>String(y?.url)===String(x.url))===i);
   const screenshotRow=mediaRows.find(x=>String(x?.media_type||'').toLowerCase()==='screenshot');
   const socialFirst=mediaRows.filter(x=>String(x?.media_type||'').toLowerCase()!=='screenshot');
-  const displayMedia=[...socialFirst,...mediaRows.filter(x=>String(x?.media_type||'').toLowerCase()==='screenshot')];
+  const displayMedia=platformLabel==='Web'
+    ? [...socialFirst.slice(0,1),...mediaRows.filter(x=>String(x?.media_type||'').toLowerCase()==='screenshot').slice(0,1)]
+    : [...socialFirst,...mediaRows.filter(x=>String(x?.media_type||'').toLowerCase()==='screenshot')];
   const hasScreenshot=Boolean(screenshotRow);
   const mediaItemHtml=(x,i)=>{
     const type=String(x?.media_type||'').toLowerCase();

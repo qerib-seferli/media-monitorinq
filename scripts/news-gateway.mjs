@@ -1231,7 +1231,7 @@ function extractArticleImages(html='', base='', primary=[], articleTitle='') {
     for(const m of raw.matchAll(/<meta[^>]+(?:property|name)=['\"](?:og:image(?::secure_url)?|twitter:image(?::src)?)['\"][^>]+content=['\"]([^'\"]+)['\"]/gi)) add(m[1],60,'meta');
   }
   candidates.sort((a,b)=>(b.score-a.score)||(a.order-b.order));
-  return candidates.slice(0,12).map(x=>x.url);
+  return candidates.slice(0,1).map(x=>x.url);
 }
 
 function jsonLdObjects(html='') {
@@ -1407,7 +1407,13 @@ async function enrichPage(item) {
     // sonra məqalə konteynerinin paraqrafları götürülür. Hər namizəd nav/footer/contact
     // tullantılarından təmizlənir. Beləliklə sayt menyusu və footer xəbərin mətninə qarışmır.
     const bodyCandidates=[anchoredBody,structuredBody,paragraphBody].filter(x=>String(x||'').length>=80);
-    const body = bodyCandidates[0] || cleanArticleBody(stripHtml(desc),effectiveTitle) || cleanArticleBody(item.text||'',effectiveTitle) || '';
+    // Başlığa bağlanan hissə əsas namizəddir, amma bəzi saytların DOM quruluşunda həmin
+    // hissə ilk 1-2 paraqrafda dayanır. Digər təmizlənmiş namizəd nəzərəçarpacaq dərəcədə
+    // daha doludursa onu seçirik; beləliklə xəbər yarıda kəsilmir, sidebar isə cleanArticleBody
+    // tərəfindən əvvəlcədən çıxarılmış olur.
+    let body=bodyCandidates[0]||'';
+    for(const candidate of bodyCandidates.slice(1)) if(candidate.length>Math.max(body.length*1.35,body.length+500)) body=candidate;
+    body = body || cleanArticleBody(stripHtml(desc),effectiveTitle) || cleanArticleBody(item.text||'',effectiveTitle) || '';
     const structuredImages=[];
     const imageNode=articleLd?.image;
     if(typeof imageNode==='string') structuredImages.push(imageNode);
